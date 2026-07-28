@@ -98,6 +98,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 
   async function bootstrap() {
     options.onStatusChange?.("connecting");
+    // Every browser that opens the app after this one already made changes
+    // needs to actually see them, not just have them sitting in
+    // localStorage unread — the initial render already happened, from
+    // whatever was on this device before this pull finished. So every key
+    // this device's copy was behind on is queued here and announced through
+    // onRemoteChange once the catch-up is done, exactly as if it had just
+    // arrived over the realtime channel.
+    const caughtUpKeys: SyncedKey[] = [];
     try {
       await ensureSession();
       await Promise.all(SYNCED_KEYS.map(async (key) => {
@@ -106,8 +114,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         const local = readLocal(key);
         if (hasContent(remote)) {
           const text = JSON.stringify(remote);
+          const before = localStorage.getItem(key);
           originalSetItem(key, text);
           lastKnown.set(key, text);
+          if (text !== before) caughtUpKeys.push(key);
         } else if (hasContent(local)) {
           // First device to sign in with real local data seeds the table.
           await pushKey(key);
@@ -115,6 +125,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       }));
       if (cancelled) return;
       options.onStatusChange?.("synced");
+      caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
     } catch {
       options.onStatusChange?.("offline");
       return;

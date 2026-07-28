@@ -363,6 +363,20 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
   assert.match(env, /NEXT_PUBLIC_SUPABASE_ANON_KEY/);
 });
 
+test("a browser that opens after a remote change actually shows it", () => {
+  // The bug this covers: a second browser correctly pulled another
+  // device's data into localStorage on load, but the screen had already
+  // rendered from the (empty or stale) state before that pull finished, and
+  // nothing told React to look again — so the data was there, just not on
+  // screen until a manual refresh. Confirmed live: two browsers signed into
+  // the same account showed different data. Fixed by treating the initial
+  // catch-up exactly like a live remote change once it completes.
+  const sync = readFileSync(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
+  assert.match(sync, /const caughtUpKeys: SyncedKey\[\] = \[\];/);
+  assert.match(sync, /if \(text !== before\) caughtUpKeys\.push\(key\);/);
+  assert.match(sync, /caughtUpKeys\.forEach\(\(key\) => options\.onRemoteChange\?\.\(key\)\);/);
+});
+
 test("the sync engine never pushes a write it just applied from Supabase", () => {
   const sync = readFileSync(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
   // Both the push side and the realtime side compare against the same
