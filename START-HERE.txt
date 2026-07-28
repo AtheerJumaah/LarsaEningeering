@@ -1,0 +1,78 @@
+LARSA CONTROL v9 - COMPLETE PROJECT
+===================================
+
+This folder IS the whole project. Nothing to copy, nothing to merge.
+Every file your app needs is already here, with version 9 applied.
+
+
+IF YOU ALREADY HAVE THE REPO ON GITHUB
+--------------------------------------
+1. Open your existing repo folder.
+2. Delete everything inside it EXCEPT the hidden ".git" folder.
+3. Copy everything from this folder into it.
+4. Open a terminal there and run:
+
+       npm run install:ci
+       npm test
+       git add -A
+       git commit -m "Larsa Control v9"
+       git push
+
+   Cloudflare builds and deploys the pushed commit by itself.
+
+
+IF YOU DO NOT HAVE IT LOCALLY YET
+---------------------------------
+Open a terminal, then:
+
+       git clone <your repo address>
+       cd <the folder it made>
+
+Then follow steps 2 to 4 above.
+
+
+IF YOU WANT TO JUST RUN IT ON YOUR OWN COMPUTER FIRST
+-----------------------------------------------------
+       npm run install:ci
+       npm run dev
+
+Then open the address it prints (usually http://localhost:5173).
+
+
+WHAT npm test SHOULD SAY
+------------------------
+       # pass 7
+       # fail 0
+
+Test 7 needs the build output, which "npm test" creates first - so it only
+passes once the build has run. If you see 6 passing and 1 failing before a
+build, that is normal.
+
+If any of the other 6 fail, stop and do not push.
+
+
+AFTER IT IS LIVE - CHECK THREE THINGS
+-------------------------------------
+1. Open the site and press Ctrl+F5 once. Browsers keep the old version
+   otherwise and you will think nothing changed.
+2. Press Sign In with both boxes empty. It must refuse you.
+3. Sign in and look at the top left. The Larsa logo should be there.
+
+
+IMPORTANT BEFORE YOU PUSH
+-------------------------
+Version 9 refuses to sign anyone in with a blank password or a blank PIN.
+That used to be a way into the system, so it is deliberate.
+If any real staff record has no PIN or no password, that person cannot sign
+in until you set one for them in Users & Access.
+
+
+WHAT IS IN HERE
+---------------
+app\            the application screens and styling
+public\engines\ the Timeclock, HR and Accounting modules (unchanged)
+public\icons\   logo, favicon and app icons
+tests\          the checks that run on npm test
+scripts\        build and install helpers
+worker\ db\     Cloudflare worker and database wiring
+package.json    the project definition and dependency list
