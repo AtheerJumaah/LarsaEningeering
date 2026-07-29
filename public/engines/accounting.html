@@ -4971,6 +4971,75 @@ v35AppendHTML("payroll", () => v35PayrollChartsBlock());
     }
   };
 })();
+
+/* V35C -- safety net for the three chart blocks above.
+   render() only ever dispatches to RENDERERS[activeSection]; it has no
+   "project detail" section of its own -- opening a project calls
+   xRenderProject() directly, outside render()'s dispatch entirely. But
+   plenty of ordinary actions taken *while inside* a project (saving an
+   edited record, for one -- see window.saveEditor's v3.12 wrapper) call
+   plain render() themselves, which re-dispatches on activeSection (still
+   "projects") and draws the PROJECT LIST over the detail view; those call
+   sites then restore the detail with their own follow-up call. If any path
+   into or out of a project ever calls render() without such a follow-up,
+   the chart block appended above -- and the whole detail view with it --
+   never comes back. This re-asserts all three chart blocks after every
+   render() call and shortly after opening/switching a project, using the
+   same "insert only if missing" guard v36AddRuntimeTools already relies on,
+   so nothing is ever duplicated and a stale project's block never lingers
+   after switching to another one. */
+function v35cInsertIfMissing(blockId, html) {
+  if (document.getElementById(blockId)) return;
+  const head = document.querySelector("#view .page-head");
+  if (head) head.insertAdjacentHTML("afterend", html);
+}
+function v35cEnsureCharts() {
+  try {
+    if (activeSection === "funding" && document.querySelector("#view .page-head")) {
+      v35cInsertIfMissing("v35-construction-charts", `<div id="v35-construction-charts">${v35FiveChartsBlock(
+        "construction",
+        (from, to) => v35ConstructionSeries(from, to),
+        T("Construction Financial Trend — All Projects", "الاتجاه المالي للتنفيذ — كل المشاريع"),
+      )}</div>`);
+    }
+    if (activeSection === "payroll" && document.querySelector("#view .page-head")) {
+      v35cInsertIfMissing("v35-payroll-charts", `<div id="v35-payroll-charts">${v35PayrollChartsBlock()}</div>`);
+    }
+    if (window.xProject) {
+      const p = (state.projects || []).find((x) => x.id === window.xProject);
+      const h1 = document.querySelector("#view .page-head h1");
+      const onSummary = !window.xTab || window.xTab === "summary";
+      if (p && h1 && onSummary && h1.textContent.trim() === String(p.name || "").trim()) {
+        document.querySelectorAll('[id^="v35-project-charts-"]').forEach((el) => {
+          if (el.id !== `v35-project-charts-${p.id}`) el.remove();
+        });
+        v35cInsertIfMissing(`v35-project-charts-${p.id}`, `<div id="v35-project-charts-${p.id}">${v35FiveChartsBlock(
+          `project:${p.id}`,
+          (from, to) => v35ProjectSeries(p.id, from, to),
+          T("Financial Trend", "الاتجاه المالي"),
+        )}</div>`);
+      }
+    }
+  } catch (e) { console.error("v35c chart safety net", e); }
+}
+(function () {
+  const prevRenderAll = render;
+  render = function () {
+    const out = prevRenderAll.apply(this, arguments);
+    try { v35cEnsureCharts(); } catch (e) { /* never block a normal render on this */ }
+    return out;
+  };
+  ["openProjectDetail", "projectTab310"].forEach((name) => {
+    const prev = window[name];
+    if (typeof prev === "function") {
+      window[name] = function () {
+        const out = prev.apply(this, arguments);
+        setTimeout(v35cEnsureCharts, 150);
+        return out;
+      };
+    }
+  });
+})();
 </script>
 
 </body>
