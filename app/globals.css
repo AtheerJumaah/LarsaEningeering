@@ -2123,7 +2123,17 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
    spreading out to fill it, so the extra height reads as trailing space, not
    as gaps between buttons. */
 .accounting-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; }
-.accounting-card { display: grid; grid-template-rows: auto 1fr; align-content: start; gap: 10px; cursor: default; padding-bottom: 14px; }
+/* .accounting-card carries the shared .module-bubble class, and a narrow-phone
+   rule below (max-width: 420px) turns .module-bubble into a 54px-icon-column
+   layout for the plain icon+title tiles elsewhere in the app. This card's
+   content is different -- a title button ABOVE a whole list of links, not a
+   single icon+text row -- so grid-template-columns and align-items must be
+   pinned here too, not just grid-template-rows, or that phone rule leaks
+   through: the title button gets squeezed into a 54px column and the link
+   list lands beside it in row 1 instead of below it, so they render on top
+   of each other. Setting all three explicitly, unconditionally, keeps this
+   card single-column at every width regardless of what .module-bubble does. */
+.accounting-card { display: grid; grid-template-columns: 1fr; grid-template-rows: auto 1fr; align-content: start; align-items: start; gap: 10px; cursor: default; padding-bottom: 14px; }
 .accounting-card-open {
   display: flex; align-items: center; gap: 12px; width: 100%;
   border: 0; background: none; cursor: pointer; text-align: start; padding: 0; min-width: 0;
