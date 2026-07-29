@@ -259,7 +259,17 @@ type ClockSession = {
   mode: string;
   clockIn: string;
   clockOut: string;
+  /* Three figures, because Larsa targets two different things:
+       hours         - net worked time, the clocked span minus breaks. Drives
+                       productivity, payroll and points-per-hour.
+       presenceHours - the full clocked span including breaks. Drives
+                       attendance and time-in-office targets; someone on a
+                       lunch break is still at work.
+       breakHours    - what was deducted, kept visible so the difference
+                       between the two is never a mystery. */
   hours: number;
+  presenceHours: number;
+  breakHours: number;
   open: boolean;
 };
 type DevelopmentStatus = "Assigned" | "In Progress" | "Submitted" | "Approved" | "Returned";
@@ -2136,24 +2146,63 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
   grouped.forEach((rows, uid) => {
     let open: ClockLog | null = null;
     rows.sort((left, right) =>
-      new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime())
-      .forEach((row) => {
+      new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+
+    /* Break spans for this person, merged so two overlapping breaks can never
+       be deducted twice. A break that was started but never ended is left open
+       and clamped to the session end below, so forgetting to end one costs the
+       rest of that shift rather than being ignored outright. */
+    const breaks: { start: number; end: number }[] = [];
+    let breakStart: number | null = null;
+    rows.forEach((row) => {
+      if (!row.time) return;
+      if (row.status === "Break Start") { breakStart ??= new Date(row.time).getTime(); return; }
+      if (row.status === "Break End" && breakStart !== null) {
+        breaks.push({ start: breakStart, end: new Date(row.time).getTime() });
+        breakStart = null;
+      }
+    });
+    if (breakStart !== null) breaks.push({ start: breakStart, end: Number.POSITIVE_INFINITY });
+    breaks.sort((left, right) => left.start - right.start);
+    const merged: { start: number; end: number }[] = [];
+    breaks.forEach((span) => {
+      const last = merged[merged.length - 1];
+      if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
+      else merged.push({ ...span });
+    });
+    /* Milliseconds of break that fall inside the given window. Clamping each
+       span to the window is what stops a lunch bleeding across a clock-out
+       into the next shift. */
+    const breakMsWithin = (from: number, to: number) => merged.reduce((total, span) => {
+      const overlap = Math.min(to, span.end) - Math.max(from, span.start);
+      return total + Math.max(0, overlap);
+    }, 0);
+
+    const record = (start: string, end: string, mode: string, isOpen: boolean) => {
+      const from = new Date(start).getTime();
+      const to = new Date(end).getTime();
+      const grossMs = Math.max(0, to - from);
+      const breakMs = Math.min(grossMs, breakMsWithin(from, to));
+      sessions.push({
+        uid,
+        employee: names.get(uid) || uid,
+        mode,
+        clockIn: start,
+        clockOut: end,
+        hours: Math.max(0, (grossMs - breakMs) / 3600000),
+        presenceHours: grossMs / 3600000,
+        breakHours: breakMs / 3600000,
+        open: isOpen,
+      });
+    };
+
+    rows.forEach((row) => {
         if (row.status === "In") {
           open = row;
           return;
         }
         if (row.status !== "Out" || !open?.time || !row.time) return;
-        const started = new Date(open.time);
-        const ended = new Date(row.time);
-        sessions.push({
-          uid,
-          employee: names.get(uid) || uid,
-          mode: open.type || row.type || "Unspecified",
-          clockIn: open.time,
-          clockOut: row.time,
-          hours: Math.max(0, (ended.getTime() - started.getTime()) / 3600000),
-          open: false,
-        });
+        record(open.time, row.time, open.type || row.type || "Unspecified", false);
         open = null;
       });
     /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
@@ -2161,15 +2210,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
        with type checking on then refuses the file. */
     const stillOpen = open as ClockLog | null;
     if (stillOpen?.time) {
-      sessions.push({
-        uid,
-        employee: names.get(uid) || uid,
-        mode: stillOpen.type || "Unspecified",
-        clockIn: stillOpen.time,
-        clockOut: new Date().toISOString(),
-        hours: Math.max(0, (Date.now() - new Date(stillOpen.time).getTime()) / 3600000),
-        open: true,
-      });
+      record(stillOpen.time, new Date().toISOString(), stillOpen.type || "Unspecified", true);
     }
   });
   return sessions;
@@ -6830,13 +6871,15 @@ function PerformanceHistory({
     // Time rows and output rows share one sheet but fill different columns, so
     // both must line up against the same header.
     downloadRows(`larsa-productivity-${from}-to-${to}.csv`, [
-      ["Record Type", "Date", "Employee", "Department", "Hours", "Job Number", "Submitted Points", "Approved Points", "Project / Mode", "Status"],
+      ["Record Type", "Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Job Number", "Submitted Points", "Approved Points", "Project / Mode", "Status"],
       ...filteredSessions.map((session) => [
         "Clock Session",
         session.clockIn.slice(0, 10),
         session.employee,
         users.find((user) => user.id === session.uid)?.department || "",
         session.hours.toFixed(2),
+        session.presenceHours.toFixed(2),
+        session.breakHours.toFixed(2),
         "",
         "",
         "",
@@ -6923,10 +6966,10 @@ function PerformanceHistory({
           <div className="section-head"><div><span className="eyebrow">Attendance detail</span><h3>Clock sessions</h3></div><span className="black-badge">{filteredSessions.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Hours</th></tr></thead>
+              <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Presence</th><th>Break</th><th>Worked</th></tr></thead>
               <tbody>
-                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.clockIn.slice(0, 10)}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.hours.toFixed(2)}</td></tr>)}
-                {!filteredSessions.length && <tr><td colSpan={6}><div className="empty compact">No clock sessions in this period.</div></td></tr>}
+                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.clockIn.slice(0, 10)}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td></tr>)}
+                {!filteredSessions.length && <tr><td colSpan={8}><div className="empty compact">No clock sessions in this period.</div></td></tr>}
               </tbody>
             </table>
           </div>
@@ -8287,7 +8330,8 @@ function LivePresence({
       tone: isIn ? modeTone(mode) : "off",
       mode: mode || "—",
       since: openSession?.clockIn || latest?.time || "",
-      hours: openSession?.hours || 0,
+      // Presence, not worked time -- someone on their lunch break is still here.
+      hours: openSession?.presenceHours || 0,
       planned,
     };
   });
@@ -9340,9 +9384,10 @@ function QuickClock({
   const open = summary.openClock;
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
-  const todayHours = mine
-    .filter((session) => session.clockIn.slice(0, 10) === todayKey)
-    .reduce((sum, session) => sum + session.hours, 0);
+  const todaySessions = mine.filter((session) => session.clockIn.slice(0, 10) === todayKey);
+  const todayHours = todaySessions.reduce((sum, session) => sum + session.hours, 0);
+  const todayPresence = todaySessions.reduce((sum, session) => sum + session.presenceHours, 0);
+  const todayBreak = todaySessions.reduce((sum, session) => sum + session.breakHours, 0);
   const weekHours = mine
     .filter((session) => isoWeekLabel(new Date(session.clockIn)) === isoWeekLabel())
     .reduce((sum, session) => sum + session.hours, 0);
@@ -9422,10 +9467,16 @@ function QuickClock({
           {open ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
-          <div><small>Today</small><b>{todayHours.toFixed(2)} h</b></div>
-          <div><small>This week</small><b>{weekHours.toFixed(2)} h</b></div>
+          <div><small>Today worked</small><b>{todayHours.toFixed(2)} h</b></div>
+          <div><small>Today in office</small><b>{todayPresence.toFixed(2)} h</b></div>
+          <div><small>This week worked</small><b>{weekHours.toFixed(2)} h</b></div>
           <div><small>Sessions</small><b>{mine.length}</b></div>
         </div>
+        {todayBreak > 0 && (
+          <p className="clock-break-note">
+            {todayBreak.toFixed(2)} h of break deducted today. In-office time counts it, worked hours do not.
+          </p>
+        )}
       </section>
 
       {/* Breaks belong inside a shift, so the option only appears once the

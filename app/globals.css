@@ -2687,3 +2687,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .correction-actions button { padding: 11px 20px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
 .correction-actions button:hover { background: #000; }
 .dark .correction-actions button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
+.clock-totals { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.clock-break-note { margin: 10px 0 0; width: min(100%, 460px); font-size: 12px; font-weight: 700; color: #7a8190; text-align: center; }
+.dark .clock-break-note { color: #8a919d; }
