@@ -82,6 +82,9 @@ input,select{font-family:inherit}
 .hint{font-size:11.5px;color:var(--muted2);margin-top:10px}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 @media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}
+@media(max-width:1280px){.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:760px){.grid-3{grid-template-columns:1fr}}
 
 /* KPIs */
 .kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px}
@@ -143,7 +146,7 @@ tr.row-flag{background:rgba(255,107,107,.06)}
 
 /* filter bars / segmented */
 .filter-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.filter-bar input[type=date]{background:var(--panel2);border:1px solid var(--line2);color:var(--txt);padding:7px 10px;border-radius:9px;font-size:12.5px}
+.filter-bar input[type=date],.filter-bar input[type=month]{background:var(--panel2);border:1px solid var(--line2);color:var(--txt);padding:7px 10px;border-radius:9px;font-size:12.5px}
 .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;overflow:hidden}
 .seg button{background:transparent;border:0;color:var(--muted);padding:7px 14px;font-size:12.5px;font-weight:600}
 .seg button.on{background:var(--white);color:#000}
@@ -4554,6 +4557,176 @@ document.addEventListener("DOMContentLoaded",boot);
     if(typeof _oldExportCurrent==="function") return _oldExportCurrent(kind);
   };
 })();
+</script>
+<script>
+/* ============================================================
+   V35 — Monthly Revenue / Costs / Net Profit bar charts
+   Requested for the Company dashboard and for the USA and Iraq
+   accounting sections specifically: three always-visible bar charts
+   (revenue, expenses & costs, net profit), one bar per month, default
+   to the last 12 months with a custom range available. Additive only
+   -- nothing existing is edited, everything here is appended on top
+   the same way every earlier vNN patch in this file works.
+   ============================================================ */
+
+// A month key ("YYYY-MM") for every month from `from` to `to` inclusive, so a
+// month with zero activity still draws its own empty bar. v33MonthlyItems
+// (used by the existing dashboard chart pair) only returns months that
+// already have a row in them, which silently compresses gaps -- fine for a
+// glance, wrong for "one bar per month" on a fixed range.
+function v35MonthKeys(from, to) {
+  const out = [];
+  const cur = new Date(`${from}-01T00:00:00`);
+  const end = new Date(`${to}-01T00:00:00`);
+  if (isNaN(cur.getTime()) || isNaN(end.getTime())) return out;
+  while (cur <= end && out.length < 240) {
+    out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`);
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out;
+}
+function v35MonthLabel(key) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(isAR() ? "ar" : "en", { month: "short", year: "2-digit" });
+}
+function v35Last12() {
+  const now = new Date();
+  const to = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const from = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
+  return { from, to };
+}
+
+/* Same operating-cost region convention already used by the USA/Iraq
+   operating-cost list pages ("Shared" overhead sits with Iraq, not split) --
+   matched here so this chart agrees with the ledger the user can already
+   open and count by hand. */
+function v35OperatingInScope(scope, region) {
+  if (scope === "all") return true;
+  if (scope === "USA") return region === "USA";
+  return region === "Iraq" || region === "Shared" || !region;
+}
+
+/* Scoped monthly Revenue / Costs / Net, mirroring totals()'s own definition
+   of Larsa's P&L (engineering revenue + consultancy fees, minus operating
+   costs, payroll company cost, and sales commissions) but split by month and
+   by region.
+
+   Revenue is scoped off the revenue row's own `stream` field rather than its
+   project link -- USA revenue rows no longer carry a project (job number
+   replaced it), so `stream` is the one field guaranteed present on every row,
+   old or new. Consultancy fees only ever apply to Iraq construction projects
+   (see xFunding), so they only ever belong in the Iraq or company total.
+   Commissions carry their own `region`, set once when the commission is
+   derived from its revenue row, so they need no lookup at all. Payroll whose
+   region is "International" belongs to neither USA nor Iraq, only company. */
+function v35Series(scope, from, to) {
+  const keys = v35MonthKeys(from, to);
+  const rev = Object.fromEntries(keys.map((k) => [k, 0]));
+  const cost = Object.fromEntries(keys.map((k) => [k, 0]));
+  const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in rev ? k : null; };
+  const matches = (region) => scope === "all" || region === scope;
+
+  (state.revenue || []).forEach((r) => {
+    const k = r.status === "Received" ? bucket(r.date) : null;
+    if (!k) return;
+    const region = (r.stream || "").indexOf("USA") >= 0 ? "USA" : "Iraq";
+    if (matches(region)) rev[k] += usd(r.amount, r.currency);
+  });
+  if (scope === "all" || scope === "Iraq") {
+    (state.funding || []).forEach((f) => {
+      const k = (!f.waived && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
+      if (k) rev[k] += usd(f.consultancyFee, f.currency);
+    });
+  }
+  const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
+  (state.operating || []).forEach((o) => {
+    const k = actual(o.status) ? bucket(o.date) : null;
+    if (k && v35OperatingInScope(scope, o.region)) cost[k] += usd(o.amount, o.currency);
+  });
+  (state.payroll || []).forEach((p) => {
+    const k = !["Void", "Rejected"].includes(p.status) ? bucket(p.payDate) : null;
+    if (k && matches(p.region)) cost[k] += usd(p.totalCompanyCost || p.grossPay || p.gross || 0, p.currency);
+  });
+  (state.commissions || []).forEach((c) => {
+    const k = !["Void", "Rejected"].includes(c.status) ? bucket(c.date) : null;
+    if (k && matches(c.region)) cost[k] += num(c.due);
+  });
+
+  return {
+    revenue: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k]) })),
+    costs: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(cost[k]) })),
+    net: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k] - cost[k]) })),
+  };
+}
+
+// Each scope (company / USA / Iraq) remembers its own range choice, the same
+// way the existing dashboard and P&L period pickers persist theirs.
+function v35RangeState(scope) {
+  state.settings.finCharts = state.settings.finCharts || {};
+  if (!state.settings.finCharts[scope]) {
+    const d = v35Last12();
+    state.settings.finCharts[scope] = { preset: "last12", from: d.from, to: d.to };
+  }
+  return state.settings.finCharts[scope];
+}
+function v35SetRange(scope, field, value) {
+  const cur = v35RangeState(scope);
+  if (field === "preset") {
+    cur.preset = value;
+    if (value === "last12") { const d = v35Last12(); cur.from = d.from; cur.to = d.to; }
+  } else {
+    cur.preset = "custom";
+    cur[field] = value;
+  }
+  save(); render();
+}
+
+function v35ChartsBlock(scope, title) {
+  const cur = v35RangeState(scope);
+  const { revenue, costs, net } = v35Series(scope, cur.from, cur.to);
+  const controls = `<div class="filter-bar inline">
+    <div class="seg">
+      <button class="${cur.preset !== "custom" ? "on" : ""}" onclick="v35SetRange('${scope}','preset','last12')">${T("Last 12 Months", "آخر 12 شهر")}</button>
+      <button class="${cur.preset === "custom" ? "on" : ""}" onclick="v35SetRange('${scope}','preset','custom')">${T("Custom", "مخصص")}</button>
+    </div>
+    ${cur.preset === "custom" ? `<input type="month" value="${cur.from}" onchange="v35SetRange('${scope}','from',this.value)"> <span class="muted">${T("to", "إلى")}</span> <input type="month" value="${cur.to}" onchange="v35SetRange('${scope}','to',this.value)">` : `<span class="muted small">${cur.from} — ${cur.to}</span>`}
+  </div>`;
+  return `<div class="page-head"><h2>${esc(title)}</h2></div>${controls}
+    <div class="grid-3">
+      ${card(T("Monthly Revenue", "الإيراد الشهري"), chBars(revenue, { color: C.rev }))}
+      ${card(T("Monthly Expenses & Costs", "المصاريف والتكاليف الشهرية"), chBars(costs, { color: C.exp }))}
+      ${card(T("Monthly Net Profit", "صافي الربح الشهري"), chBars(net, { signed: true }))}
+    </div>`;
+}
+
+// Non-destructive: each wrapped renderer still runs exactly as it did, this
+// only appends the chart block(s) right after its page heading -- the same
+// insertAdjacentHTML pattern renderDashboardEnterprise already uses above to
+// layer a KPI row onto the base dashboard without touching its template.
+function v35AppendAll(rendererName, blocks) {
+  const prev = RENDERERS[rendererName];
+  RENDERERS[rendererName] = function () {
+    prev();
+    const head = document.querySelector("#view .page-head");
+    if (head) head.insertAdjacentHTML("afterend", blocks.map((b) => v35ChartsBlock(b.scope, b.title)).join(""));
+  };
+}
+const V35_TITLES = {
+  all: T("Company Financial Trend", "الاتجاه المالي للشركة"),
+  USA: T("USA Financial Trend", "الاتجاه المالي — أمريكا"),
+  Iraq: T("Iraq Financial Trend", "الاتجاه المالي — العراق"),
+};
+v35AppendAll("dashboard", [{ scope: "all", title: V35_TITLES.all }]);
+v35AppendAll("usRevenue", [{ scope: "USA", title: V35_TITLES.USA }]);
+v35AppendAll("iqRevenue", [{ scope: "Iraq", title: V35_TITLES.Iraq }]);
+// The Profit & Loss page is the "whole picture" view -- company, USA and Iraq
+// all together, so nothing has to be pieced together across three screens.
+v35AppendAll("master", [
+  { scope: "all", title: V35_TITLES.all },
+  { scope: "USA", title: V35_TITLES.USA },
+  { scope: "Iraq", title: V35_TITLES.Iraq },
+]);
 </script>
 
 </body>

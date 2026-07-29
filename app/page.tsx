@@ -14,6 +14,8 @@ import {
   BriefcaseBusiness,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
   ClipboardList,
@@ -2050,6 +2052,16 @@ function weekBounds(week: string) {
   const sunday = new Date(monday);
   sunday.setUTCDate(monday.getUTCDate() + 6);
   return { from: monday.toISOString().slice(0, 10), to: sunday.toISOString().slice(0, 10) };
+}
+
+/* Moves a week label forward or backward by whole weeks, via its Monday --
+   the only way to walk weeks that is immune to month and year-end drift. */
+function shiftWeek(week: string, byWeeks: number) {
+  const bounds = weekBounds(week);
+  if (!bounds.from) return isoWeekLabel();
+  const monday = new Date(`${bounds.from}T12:00:00`);
+  monday.setDate(monday.getDate() + byWeeks * 7);
+  return isoWeekLabel(monday);
 }
 
 function finiteNumber(value: unknown) {
@@ -5225,12 +5237,15 @@ export default function Home() {
       notify("The protected Super Admin account already controls full access.");
       return false;
     }
-    // A changed (or brand-new) email address always needs its own fresh
-    // verification — carrying the old "verified" flag forward would let
-    // someone silently redirect an account's sign-in email unverified.
-    const previousEmail = existingRecord?.email?.trim().toLowerCase() || "";
+    /* This function is only reachable at all with "add"/"edit" on Users &
+       Access, i.e. by an admin or someone explicitly authorised to manage
+       staff -- an ordinary employee has no path here for anyone but
+       themselves. That standing authority already vouches for the address,
+       whether it is a brand-new account or an existing one getting a new
+       email, so the email-code step (which exists to stop a self-service
+       change nobody vetted) does not apply to it: the account is created, or
+       the address updated, already verified. */
     const nextEmail = nextUser.email?.trim().toLowerCase() || "";
-    const emailChanged = nextEmail !== previousEmail;
     const prepared: StaffUser = {
       ...nextUser,
       username: nextUser.username || nextUser.email?.split("@")[0] || "",
@@ -5239,7 +5254,7 @@ export default function Home() {
         : nextUser.projectAccessMode || projectAccessForPreset(nextUser.access || "Engineer"),
       projectIds: nextUser.access === "Super Admin" ? [] : nextUser.projectIds || [],
       permissions: staffPermissionsForUser(nextUser),
-      emailVerified: nextEmail ? (emailChanged ? false : existingRecord?.emailVerified) : undefined,
+      emailVerified: nextEmail ? true : undefined,
     };
     const existingIndex = store.users.findIndex((row: StaffUser) => row.id === prepared.id);
     if (isNew) {
@@ -6690,18 +6705,35 @@ function PerformanceCenter({
         </div>
       </section>
 
-      <section className="filter-toolbar">
-        {/* Until there is more than one week on record this is a statement,
-            not a choice, so it is shown as one. */}
-        {weeks.length > 1 ? (
-          <label>
-            <span>Performance week</span>
-            <select value={week} onChange={(event) => setWeek(event.target.value)}>
+      {/* Weeks with entries used to be the only ones reachable, because the
+          picker was built from performance rows -- so a week nobody had
+          submitted to yet, which is exactly the kind of week someone wants to
+          pre-lock, could never be selected at all. This now walks any week,
+          forward or backward, and jumps straight to one by date. */}
+      <section className="filter-toolbar week-nav">
+        <div className="week-nav-controls">
+          <button type="button" aria-label="Previous week" onClick={() => setWeek(shiftWeek(week, -1))}><ChevronLeft size={16} /></button>
+          <div className="week-nav-current">
+            <b>{week}</b>
+            <small>{weekBounds(week).from} → {weekBounds(week).to}</small>
+          </div>
+          <button type="button" aria-label="Next week" onClick={() => setWeek(shiftWeek(week, 1))}><ChevronRight size={16} /></button>
+        </div>
+        {week !== isoWeekLabel() && (
+          <button type="button" className="secondary" onClick={() => setWeek(isoWeekLabel())}>This week</button>
+        )}
+        <label className="week-nav-jump">
+          <span>Jump to date</span>
+          <input type="date" value={weekBounds(week).from} onChange={(event) => { if (event.target.value) setWeek(weekOfDate(event.target.value)); }} />
+        </label>
+        {weeks.length > 1 && (
+          <label className="week-nav-jump">
+            <span>Weeks with entries</span>
+            <select value={weeks.includes(week) ? week : ""} onChange={(event) => { if (event.target.value) setWeek(event.target.value); }}>
+              <option value="">Choose…</option>
               {weeks.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-        ) : (
-          <span className="filter-static"><b>Performance week</b>{week || weeks[0]}</span>
         )}
         <span className={lock ? "filter-summary locked" : "filter-summary"}>
           {lock ? <><Lock size={14} /> Closed</> : <><LockOpen size={14} /> Open for entry</>}
@@ -9083,14 +9115,21 @@ function MySettings({
      address itself -- is held here until a code sent to the address on file
      is entered. Someone who walks up to an unlocked screen can then still
      not lock the real owner out of their own account. The code always goes
-     to the CURRENT address, never the new one. */
+     to the CURRENT address, never the new one.
+
+     This only protects a person changing their OWN sign-in details. Someone
+     with Users & Access management already has the standing authority to set
+     anyone's password, PIN, or email from that screen with no code at all --
+     gating their own account the same way would just be a second click on the
+     same authority, not an extra check on it. */
+  const mayManageAccess = Boolean(user && (isAdmin(user) || hasItemPermission(user, ACCESS_ITEM, "manage")));
   const [pending, setPending] = useState<{ patch: Partial<StaffUser>; label: string } | null>(null);
   const [guardCode, setGuardCode] = useState("");
   const [guardBusy, setGuardBusy] = useState(false);
 
   const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => {
     const address = user?.email?.trim();
-    if (!supabaseConfigured() || !address) {
+    if (!supabaseConfigured() || !address || mayManageAccess) {
       if (saveProfile(patch)) { setMessage(`${label} updated.`); done(); }
       return;
     }

@@ -2842,3 +2842,20 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .request-entry small { font-size: 11.5px; font-weight: 650; color: var(--muted); }
 .request-entry span { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .request-entry em { font-size: 12px; font-weight: 650; font-style: italic; color: var(--ink); }
+
+/* --- Week navigator (Points & Weekly Targets) ------------------------------
+   The old picker only listed weeks that already had a performance row in
+   them, so a week nobody had submitted to yet -- exactly the kind of week
+   someone wants to pre-lock -- could never be reached. This walks any week. */
+.week-nav { align-items: center; }
+.week-nav-controls { display: flex; align-items: center; gap: 10px; }
+.week-nav-controls button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+.week-nav-controls button:hover { border-color: var(--ink); }
+.week-nav-current { display: grid; gap: 2px; min-width: 130px; text-align: center; }
+.week-nav-current b { font-size: 14px; font-weight: 850; color: var(--ink); }
+.week-nav-current small { font-size: 11px; font-weight: 650; color: var(--muted); }
+.week-nav-jump { display: grid; gap: 6px; min-width: 150px; }
+.week-nav-jump span { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.week-nav-jump input, .week-nav-jump select { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; }
