@@ -4268,6 +4268,86 @@ export default function Home() {
     return true;
   }, [notify, raiseNotification, refreshStaffEngine]);
 
+  /* Trimming a session an authorized person can already see. Deliberately
+     one-way: the new clock-out may only move EARLIER, so this can reduce
+     recorded time but never manufacture it. Adding hours stays behind the
+     correction request and its approval chain, which is the whole point --
+     nobody can quietly inflate their own attendance. */
+  const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string) => {
+    const actor = sessionUserRef.current;
+    const clockItem = ITEMS.find((item) => item.id === "staff-clock");
+    if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
+      notify("Your account cannot adjust attendance records.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
+    const logs = store.logs as ClockLog[];
+    const startedAt = new Date(clockIn).getTime();
+    const nextOut = new Date(newClockOut).getTime();
+    if (!Number.isFinite(nextOut)) { notify("Enter a valid clock-out time."); return false; }
+    if (nextOut <= startedAt) { notify("Clock-out has to be after clock-in."); return false; }
+    if (nextOut > Date.now()) { notify("Clock-out cannot be in the future."); return false; }
+
+    // The matching Out is the first one after this In for the same person.
+    const ordered = logs
+      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
+      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+    const existingOut = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
+    if (existingOut && new Date(existingOut.time || 0).getTime() < nextOut) {
+      notify("You can only bring a clock-out earlier, not later. Use a correction request to add hours.");
+      return false;
+    }
+    const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString()}`;
+    if (existingOut) {
+      existingOut.time = new Date(nextOut).toISOString();
+      existingOut.lastSeen = existingOut.time;
+      existingOut.note = existingOut.note ? `${existingOut.note} · ${stamp}` : stamp;
+    } else {
+      // An open session: closing it counts as trimming to the chosen time.
+      const source = logs.find((log) => log.uid === uid && log.time === clockIn && log.status === "In");
+      logs.push({
+        id: `l${Date.now()}`, uid, type: source?.type || "Office", status: "Out",
+        time: new Date(nextOut).toISOString(), active: false,
+        lastSeen: new Date(nextOut).toISOString(), note: stamp, clockedBy: actor.name,
+      });
+      if (source) source.active = false;
+    }
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Attendance record adjusted.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
+  /* Removes a session outright -- the clock-in and its matching clock-out.
+     For a punch that should never have existed at all. */
+  const resetSession = useCallback((uid: string, clockIn: string) => {
+    const actor = sessionUserRef.current;
+    const clockItem = ITEMS.find((item) => item.id === "staff-clock");
+    if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
+      notify("Your account cannot reset attendance records.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
+    const logs = store.logs as ClockLog[];
+    const startedAt = new Date(clockIn).getTime();
+    const ordered = logs
+      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
+      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
+    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
+    const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
+    if (!drop.size) { notify("That session could not be found."); return false; }
+    store.logs = logs.filter((log) => !drop.has(log));
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Session removed.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
   const saveSchedule = useCallback((userId: string, day: string, entries: { start?: string; end?: string; code?: string; name?: string }[]) => {
     const actor = sessionUserRef.current;
     const scheduleItem = ITEMS.find((item) => item.id === "staff-schedule");
@@ -5784,6 +5864,8 @@ export default function Home() {
               sessions={clockSessions}
               targets={growthStore.pointTargets}
               openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
+              trimSession={trimSession}
+              resetSession={resetSession}
             />
           </div>
           <div className={active.native === "salesCommissions" ? "native active" : "native"}>
@@ -6794,6 +6876,8 @@ function PerformanceHistory({
   sessions,
   targets,
   openAdvanced,
+  trimSession,
+  resetSession,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
@@ -6801,7 +6885,21 @@ function PerformanceHistory({
   sessions: ClockSession[];
   targets: Record<string, number>;
   openAdvanced: () => void;
+  trimSession: (uid: string, clockIn: string, newClockOut: string) => boolean;
+  resetSession: (uid: string, clockIn: string) => boolean;
 }) {
+  const [editing, setEditing] = useState<{ uid: string; clockIn: string } | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const mayAdjust = Boolean(viewer && (() => {
+    const item = ITEMS.find((row) => row.id === "staff-clock");
+    return item ? hasItemPermission(viewer, item, "manage") : false;
+  })());
+  /* datetime-local wants local wall time with no zone, so the ISO stamp has to
+     be shifted by the offset first or the field shows the wrong hour. */
+  const toLocalInput = (iso: string) => {
+    const at = new Date(iso);
+    return new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
   const today = dateInputValue(new Date());
   const prior = new Date();
   prior.setDate(prior.getDate() - 29);
@@ -6966,10 +7064,30 @@ function PerformanceHistory({
           <div className="section-head"><div><span className="eyebrow">Attendance detail</span><h3>Clock sessions</h3></div><span className="black-badge">{filteredSessions.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Presence</th><th>Break</th><th>Worked</th></tr></thead>
+              <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Presence</th><th>Break</th><th>Worked</th>{mayAdjust && <th>Adjust</th>}</tr></thead>
               <tbody>
-                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.clockIn.slice(0, 10)}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td></tr>)}
-                {!filteredSessions.length && <tr><td colSpan={8}><div className="empty compact">No clock sessions in this period.</div></td></tr>}
+                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.clockIn.slice(0, 10)}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td>{mayAdjust && <td>
+                  {editing && editing.uid === session.uid && editing.clockIn === session.clockIn ? (
+                    <div className="session-edit">
+                      <input type="datetime-local" value={editValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setEditValue(event.target.value)} aria-label="New clock-out time" />
+                      <button type="button" className="primary" onClick={() => {
+                        if (trimSession(session.uid, session.clockIn, new Date(editValue).toISOString())) setEditing(null);
+                      }}>Save</button>
+                      <button type="button" onClick={() => setEditing(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div className="session-edit">
+                      <button type="button" onClick={() => {
+                        setEditing({ uid: session.uid, clockIn: session.clockIn });
+                        setEditValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
+                      }}>Trim</button>
+                      <button type="button" className="danger" onClick={() => {
+                        if (window.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                      }}>Reset</button>
+                    </div>
+                  )}
+                </td>}</tr>)}
+                {!filteredSessions.length && <tr><td colSpan={mayAdjust ? 9 : 8}><div className="empty compact">No clock sessions in this period.</div></td></tr>}
               </tbody>
             </table>
           </div>
