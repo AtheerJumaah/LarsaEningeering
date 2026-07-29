@@ -274,6 +274,14 @@ body.light th{color:#4d525e;background:#eceef2}
 body.light .notice{color:#215495;background:#eaf2ff;border-color:#aecbfa}
 body.light .warn{color:#9d241d;background:#fff0ef;border-color:#efb2ae}
 body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
+
+/* Salesmen and their commissions: a repeating pair of rows, because one
+   revenue can be split between several people on different rates. */
+.sales-team{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}
+.sales-row{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:8px;align-items:center}
+.sales-row .sales-rate{text-align:right}
+.sales-row .sales-pct{font-size:12px;font-weight:700;color:var(--muted,#7a8190)}
+@media(max-width:620px){.sales-row{grid-template-columns:minmax(0,1fr) 72px auto auto}}
 </style>
 
 <link rel="manifest" href="manifest.json">
@@ -935,13 +943,16 @@ const SCHEMA={
   revenue:[
     {k:"date",label:t("date"),type:"date"},
     {k:"stream",label:t("type"),type:"select",opts:["USA Engineering Revenue","Iraq Engineering Revenue"]},
-    {k:"projectId",label:t("project"),type:"projectSelect"},
+    /* USA work is tracked by job number, not by a construction project record,
+       so the project picker is hidden on that stream and a job number asked
+       for instead. Iraq revenue still belongs to a project. */
+    {k:"jobNumber",label:T("Job Number","رقم العمل"),type:"jobText",when:r=>String(r.stream||"").indexOf("USA")>=0},
+    {k:"projectId",label:t("project"),type:"projectSelect",when:r=>String(r.stream||"").indexOf("USA")<0},
     {k:"amount",label:t("amount"),type:"number"},
     curField(),
     {k:"method",label:t("method"),type:"select",opts:METHODS},
     {k:"status",label:t("status"),type:"select",opts:["Received","Expected"]},
-    {k:"salesman",label:t("salesman"),type:"text"},
-    {k:"commissionRate",label:T("Commission %","نسبة العمولة %"),type:"percent"},
+    {k:"salesTeam",label:T("Salesmen & commission","المندوبون والعمولة"),type:"salesTeam",wide:1},
     {k:"description",label:t("description"),type:"text",wide:1},
     {k:"receipt",label:t("receipt"),type:"receipt"},
   ],
@@ -1035,12 +1046,26 @@ function deriveRecord(coll,r){
     r.net=r.gross-num(r.deductions);
   }
   if(coll==="commissions"){ r.due=num(r.base)*num(r.rate); }
-  if(coll==="revenue" && num(r.commissionRate)>0 && r.salesman && r.status==="Received"){
-    const exists=state.commissions.find(c=>c.sourceId===r.id);
+  if(coll==="revenue"){
+    /* A revenue can be split between several salesmen on different rates, so
+       each one gets its own commission row keyed by sourceId + person. Rows
+       for people since removed from the record are dropped, but anything
+       already marked paid is left alone rather than silently deleted. */
+    const team=Array.isArray(r.salesTeam)&&r.salesTeam.length
+      ? r.salesTeam
+      : (r.salesman?[{person:r.salesman,rate:num(r.commissionRate)}]:[]);
     const region=(r.stream||"").indexOf("USA")>=0?"USA":"Iraq";
-    const base=usd(r.amount,r.currency), due=base*num(r.commissionRate);
-    if(exists){ Object.assign(exists,{date:r.date,person:r.salesman,region,base,rate:num(r.commissionRate),due,description:r.description}); }
-    else state.commissions.unshift({id:uid("com"),date:r.date,sourceId:r.id,person:r.salesman,region,description:r.description,base,rate:num(r.commissionRate),due,paid:0,status:"Pending"});
+    const base=usd(r.amount,r.currency);
+    const live=r.status==="Received"?team.filter(s=>s.person&&num(s.rate)>0):[];
+    const keep=new Set(live.map(s=>s.person));
+    state.commissions=state.commissions.filter(c=>
+      c.sourceId!==r.id || keep.has(c.person) || num(c.paid)>0);
+    live.forEach(s=>{
+      const due=base*num(s.rate);
+      const exists=state.commissions.find(c=>c.sourceId===r.id&&c.person===s.person);
+      if(exists) Object.assign(exists,{date:r.date,region,base,rate:num(s.rate),due,description:r.description});
+      else state.commissions.unshift({id:uid("com"),date:r.date,sourceId:r.id,person:s.person,region,description:r.description,base,rate:num(s.rate),due,paid:0,status:"Pending"});
+    });
   }
 }
 
@@ -1061,6 +1086,24 @@ function fieldInput(f,rec){
   else if(f.type==="select") inner=`<select id="${id}">${f.opts.map(o=>`<option value="${esc(o)}" ${o===v?"selected":""}>${esc(dv(o))}</option>`).join("")}</select>`;
   else if(f.type==="projectSelect"){ const ps=state.projects.filter(p=>!f.filter||f.filter(p)); inner=`<select id="${id}">${ps.map(p=>`<option value="${p.id}" ${p.id===v?"selected":""}>${esc(dv(p.name))} · ${esc(p.code)}</option>`).join("")}</select>`; }
   else if(f.type==="empSelect") inner=`<select id="${id}" onchange="edEmpFill()">${state.employees.map(e=>`<option value="${e.id}" ${e.id===v?"selected":""}>${esc(dv(e.name))}</option>`).join("")}</select>`;
+  else if(f.type==="jobText"){
+    /* Free text plus a datalist of every job number already used, so a number
+       can be typed once and picked from the list every time after. */
+    const seen=[...new Set((state.revenue||[]).map(r=>r.jobNumber).filter(Boolean))].sort();
+    inner=`<input id="${id}" list="${id}_list" value="${esc(v||"")}" placeholder="e.g. 26-104" autocomplete="off">
+      <datalist id="${id}_list">${seen.map(j=>`<option value="${esc(j)}"></option>`).join("")}</datalist>`;
+  }
+  else if(f.type==="salesTeam"){
+    /* One revenue can be shared by several salesmen on different rates, so
+       this is a repeating pair of rows rather than a single name and percent.
+       Older records carry a lone salesman/commissionRate; they are folded in
+       here so nothing already entered is lost. */
+    let rows=Array.isArray(rec.salesTeam)?rec.salesTeam.slice():[];
+    if(!rows.length && rec.salesman) rows=[{person:rec.salesman,rate:num(rec.commissionRate)}];
+    if(!rows.length) rows=[{person:"",rate:0}];
+    inner=`<div id="${id}" class="sales-team">${rows.map((r,i)=>edSalesRow(r,i)).join("")}</div>
+      <button type="button" class="mini" onclick="edAddSales()">+ ${T("Add salesman","إضافة مندوب")}</button>`;
+  }
   else if(f.type==="receipt"){ const has=rec.receipt&&(rec.receipt.ref||rec.receipt.data);
     inner=`<div class="rec-field"><input id="${id}" type="file" accept="image/*,application/pdf" onchange="edPickReceipt(event)">
       <span id="ed_recstate" class="muted small">${has?esc(rec.receipt.name||t("receipt")):t("rec_none")}</span>
@@ -1068,12 +1111,49 @@ function fieldInput(f,rec){
   const live=(coll0==="funding"&&(f.k==="amount"||f.k==="waived"||f.k==="projectId"||f.k==="currency"))?` oninput="edFundPreview()" onchange="edFundPreview()"`:"";
   return `<div class="field ${wide}"><label>${f.label}</label><div class="inwrap"${live}>${inner}</div></div>`;
 }
-function openEditor(coll,id){
+function edSalesPeople(){
+  const names=new Set();
+  (state.employees||[]).forEach(e=>{ if(e.name) names.add(e.name); });
+  (state.revenue||[]).forEach(r=>{
+    if(r.salesman) names.add(r.salesman);
+    (r.salesTeam||[]).forEach(s=>{ if(s.person) names.add(s.person); });
+  });
+  return [...names].sort();
+}
+function edSalesRow(row,i){
+  const people=edSalesPeople();
+  const chosen=row.person||"";
+  const opts=[""].concat(people.includes(chosen)||!chosen?people:[chosen].concat(people));
+  return `<div class="sales-row" data-i="${i}">
+    <select class="sales-person">${opts.map(n=>`<option value="${esc(n)}" ${n===chosen?"selected":""}>${n?esc(dv(n)):"—"}</option>`).join("")}</select>
+    <input class="sales-rate" type="number" step="0.5" min="0" value="${row.rate!=null?(num(row.rate)*100):0}" aria-label="Commission %">
+    <span class="sales-pct">%</span>
+    <button type="button" class="mini" onclick="edRemoveSales(this)">✕</button>
+  </div>`;
+}
+function edAddSales(){
+  const wrap=$("ed_salesTeam"); if(!wrap) return;
+  wrap.insertAdjacentHTML("beforeend", edSalesRow({person:"",rate:0}, wrap.children.length));
+}
+function edRemoveSales(btn){
+  const wrap=$("ed_salesTeam"); if(!wrap) return;
+  const row=btn.closest(".sales-row");
+  if(wrap.children.length<=1){ row.querySelector(".sales-person").value=""; row.querySelector(".sales-rate").value=0; return; }
+  row.remove();
+}
+function edReadSalesTeam(){
+  const wrap=$("ed_salesTeam"); if(!wrap) return [];
+  return [...wrap.querySelectorAll(".sales-row")].map(r=>({
+    person:r.querySelector(".sales-person").value.trim(),
+    rate:num(r.querySelector(".sales-rate").value)/100,
+  })).filter(s=>s.person);
+}
+function openEditor(coll,id,seed){
   coll0=coll; id0=id||null; edReceiptPending=null;
-  const rec=id? JSON.parse(JSON.stringify((state[coll]||[]).find(x=>x.id===id)||{})) : {};
+  const rec=id? JSON.parse(JSON.stringify((state[coll]||[]).find(x=>x.id===id)||{})) : Object.assign({},seed||{});
   const sch=SCHEMA[coll]; if(!sch) return;
   const title=(id?t("ed_edit"):t("ed_add"))+" — "+t(TITLEKEY[coll]||"");
-  const fields=sch.map(f=>fieldInput(f,rec)).join("");
+  const fields=sch.filter(f=>!f.when||f.when(rec)).map(f=>fieldInput(f,rec)).join("");
   const live=coll==="funding"?`<div id="ed_fundprev" class="preview"></div>`:"";
   setHTML("modalRoot",`<div class="modal-back" onclick="if(event.target===this)closeEditor()">
     <div class="modal"><div class="modal-head"><h3>${title}</h3><button class="mini" onclick="closeEditor()">✕</button></div>
@@ -1101,6 +1181,14 @@ async function saveEditor(){
     if(f.type==="receipt"){
       if(edReceiptPending==="REMOVE"){ if(rec.receipt&&rec.receipt.ref) await idbDel(rec.receipt.ref); rec.receipt=null; }
       else if(edReceiptPending){ const refId=uid("rcp"); await idbPut(refId,{name:edReceiptPending.name,data:edReceiptPending.data}); rec.receipt={name:edReceiptPending.name,ref:refId}; }
+      continue;
+    }
+    if(f.type==="salesTeam"){
+      rec.salesTeam=edReadSalesTeam();
+      // Keep the single-name fields in step so older screens and reports that
+      // still read them show the lead salesman rather than nothing.
+      rec.salesman=rec.salesTeam.length?rec.salesTeam[0].person:"";
+      rec.commissionRate=rec.salesTeam.length?rec.salesTeam[0].rate:0;
       continue;
     }
     const el=$("ed_"+f.k); if(!el) continue;
@@ -1282,9 +1370,18 @@ function revenueTable(streamName){
   const list=state.revenue.filter(r=>r.stream===streamName).sort((a,b)=>String(b.date).localeCompare(a.date));
   return ledgerTable("revenue",[
     {label:t("date"),get:r=>r.date},
-    {label:t("project"),get:r=>esc(dv(project(r.projectId)?.name||"—"))},
+    {label:streamName.indexOf("USA")>=0?T("Job Number","رقم العمل"):t("project"),
+      get:r=>streamName.indexOf("USA")>=0
+        ? esc(dv(r.jobNumber||"—"))
+        : esc(dv(project(r.projectId)?.name||"—"))},
     {label:t("description"),get:r=>esc(dv(r.description))},
-    {label:t("salesman"),get:r=>esc(dv(r.salesman||"—"))},
+    {label:t("salesman"),get:r=>{
+      const team=Array.isArray(r.salesTeam)&&r.salesTeam.length
+        ? r.salesTeam
+        : (r.salesman?[{person:r.salesman,rate:num(r.commissionRate)}]:[]);
+      if(!team.length) return "—";
+      return team.map(s=>`${esc(dv(s.person))} <span class="muted">${(num(s.rate)*100).toFixed(1)}%</span>`).join("<br>");
+    }},
     {label:t("amount"),r:1,get:r=>fmt(r.amount,r.currency)},
     {label:t("baseUsd"),r:1,cls:()=>'pos',get:r=>money(usd(r.amount,r.currency))},
     {label:t("status"),get:r=>`<span class="pill">${dv(r.status)}</span>`},
@@ -1292,7 +1389,11 @@ function revenueTable(streamName){
 }
 function renderUSRevenue(){ setHTML("view",`<div class="page-head"><h1>${t("nav_us_rev")}</h1><button class="btn" onclick="openRevenue('USA Engineering Revenue')">+ ${t("ed_add")}</button></div>${card("",revenueTable("USA Engineering Revenue"))}`); }
 function renderIQRevenue(){ setHTML("view",`<div class="page-head"><h1>${t("nav_iq_rev")}</h1><button class="btn" onclick="openRevenue('Iraq Engineering Revenue')">+ ${t("ed_add")}</button></div>${card("",revenueTable("Iraq Engineering Revenue"))}`); }
-function openRevenue(stream){ openEditor("revenue",null); setTimeout(()=>{ if($("ed_stream"))$("ed_stream").value=stream; if($("ed_currency"))$("ed_currency").value=stream.indexOf("USA")>=0?"USD":"IQD"; },0); }
+function openRevenue(stream){
+  /* Seeded before the form renders so the stream-dependent fields resolve on
+     the first paint rather than after a tick. */
+  openEditor("revenue",null,{stream,currency:stream.indexOf("USA")>=0?"USD":"IQD"});
+}
 
 /* ============================================================
    OPERATING — USA + IRAQ (separate)
