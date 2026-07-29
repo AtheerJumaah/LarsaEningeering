@@ -3761,7 +3761,15 @@ export default function Home() {
     const client = getSupabaseClient();
     if (!client) return "Verification is unavailable right now.";
     const { error } = await client.auth.signInWithOtp({ email });
-    return error ? `Could not send a verification code: ${error.message}` : "";
+    if (!error) return "";
+    /* The default Supabase sender allows only a couple of emails an hour and
+       the ceiling cannot be raised -- it lifts once a real SMTP provider is
+       configured. Saying "rate limit exceeded" reads like a fault in the app,
+       so name the cause and the wait instead. */
+    if (/rate limit/i.test(error.message)) {
+      return "Too many codes requested. The email service allows only a few per hour — wait about an hour, or ask an administrator to finish the mail setup to remove this limit.";
+    }
+    return `Could not send a verification code: ${error.message}`;
   }, []);
 
   /* Checks a code without touching the sign-in flow's state, so the same
