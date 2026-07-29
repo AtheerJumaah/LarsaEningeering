@@ -2606,15 +2606,17 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .report-panel, .focus-card, .home-board, .overview-hero { min-width: 0; }
 .report-panel > *, .focus-card > * { min-width: 0; max-width: 100%; }
 
-/* --- Clock: note, break, clocking others, and attendance corrections ------
-   These sit under the main punch button on the clock screen. The correction
-   block stays collapsed by default because it is the exception, not the
-   everyday action. */
+/* --- Clock: note, break, past-hours correction, clocking others -----------
+   Every rule below has a .dark counterpart. The first version of this block
+   hardcoded light-mode greys and white input backgrounds, which made the
+   whole thing close to invisible against the dark theme. */
 .clock-note { display: flex; flex-direction: column; gap: 6px; width: min(100%, 460px); }
 .clock-note span { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; }
 .clock-note em { font-style: normal; font-weight: 700; text-transform: none; letter-spacing: normal; color: #9aa1ad; }
 .clock-note input { width: 100%; padding: 11px 13px; border-radius: 14px; border: 1px solid #e3e6ea; background: #fff; font: inherit; font-size: 14px; color: #17181b; }
 .clock-note input:focus { outline: none; border-color: #17181b; }
+.dark .clock-note input { border-color: #2f343d; background: #191c22; color: #f3f4f6; }
+.dark .clock-note input:focus { border-color: #f3f4f6; }
 
 .break-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   margin-top: 14px; padding: 12px 16px; border-radius: 16px; border: 1px solid #e3e6ea; background: #f6f7f9; }
@@ -2623,6 +2625,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .break-banner button:hover { background: #000; }
 .break-banner.on { background: #fff7ed; border-color: #fed7aa; }
 .break-banner.on span { color: #9a3412; }
+.dark .break-banner { border-color: #2f343d; background: #191c22; }
+.dark .break-banner span { color: #b1b7c2; }
+.dark .break-banner button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
+.dark .break-banner.on { background: #2a1f12; border-color: #5c3d1a; }
+.dark .break-banner.on span { color: #fdba74; }
 
 .clock-others { margin-top: 16px; }
 .clock-others-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) auto; gap: 10px; align-items: end; }
@@ -2631,18 +2638,36 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .clock-others-row button { padding: 11px 18px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
 .clock-others-row button:disabled { opacity: .45; cursor: not-allowed; }
 .clock-others-hint { margin: 10px 0 0; font-size: 12px; font-weight: 600; color: #7a8190; }
+.dark .clock-others-row select { border-color: #2f343d; background: #191c22; color: #f3f4f6; }
+.dark .clock-others-row button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
 @media (max-width: 700px) { .clock-others-row { grid-template-columns: 1fr; } }
 
-.correction-block { margin-top: 16px; }
-.correction-open { width: 100%; padding: 12px 16px; border-radius: 14px; border: 1px dashed #d5d9df; background: transparent;
-  font: inherit; font-size: 13px; font-weight: 800; color: #7a8190; cursor: pointer; text-align: left; }
-.correction-open:hover { color: #17181b; border-color: #17181b; }
+/* A real, findable button. It was a faint dashed link before and people
+   simply could not see it, which made the whole feature unusable. */
+.correction-block { margin-top: 14px; }
+.correction-open { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 14px 16px; border-radius: 16px; border: 1px solid #d5d9df; background: #fff;
+  font: inherit; color: #17181b; cursor: pointer; }
+.correction-open:hover { border-color: #17181b; background: #f6f7f9; }
+.correction-open svg { flex: none; color: #3c4452; }
+.correction-open span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.correction-open b { font-size: 14px; font-weight: 800; }
+.correction-open small { font-size: 12px; font-weight: 600; color: #7a8190; }
+.dark .correction-open { border-color: #2f343d; background: #191c22; color: #f3f4f6; }
+.dark .correction-open:hover { border-color: #f3f4f6; background: #20242c; }
+.dark .correction-open svg { color: #b1b7c2; }
+.dark .correction-open small { color: #8a919d; }
+
 .correction-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .correction-types button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 14px; border-radius: 14px;
   border: 1px solid #e3e6ea; background: #fff; font: inherit; cursor: pointer; min-width: 0; }
 .correction-types button b { font-size: 13px; font-weight: 800; color: #17181b; }
 .correction-types button small { font-size: 11px; font-weight: 600; color: #7a8190; }
 .correction-types button.on { border-color: #17181b; background: #f6f7f9; }
+.dark .correction-types button { border-color: #2f343d; background: #191c22; }
+.dark .correction-types button b { color: #f3f4f6; }
+.dark .correction-types button small { color: #8a919d; }
+.dark .correction-types button.on { border-color: #f3f4f6; background: #20242c; }
 @media (max-width: 700px) { .correction-types { grid-template-columns: 1fr; } }
 
 .correction-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
@@ -2653,7 +2678,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
   font: inherit; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: normal; color: #17181b; }
 .correction-fields textarea { min-height: 78px; resize: vertical; }
 .correction-fields input:focus, .correction-fields select:focus, .correction-fields textarea:focus { outline: none; border-color: #17181b; }
+.dark .correction-fields input, .dark .correction-fields select, .dark .correction-fields textarea {
+  border-color: #2f343d; background: #191c22; color: #f3f4f6; }
+.dark .correction-fields input:focus, .dark .correction-fields select:focus, .dark .correction-fields textarea:focus { border-color: #f3f4f6; }
+
 .correction-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
 .correction-actions span { font-size: 12px; font-weight: 700; color: #7a8190; }
 .correction-actions button { padding: 11px 20px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
 .correction-actions button:hover { background: #000; }
+.dark .correction-actions button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }

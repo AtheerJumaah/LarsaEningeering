@@ -4162,6 +4162,19 @@ export default function Home() {
       .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
     const ending = latestBreak?.status === "Break Start";
+    /* A break only makes sense inside a shift. Starting one while clocked out
+       would leave an open break dangling into the next day and read as if the
+       person were on a break they never took. Ending one is always allowed, so
+       nobody can get stuck on break by clocking out first. */
+    if (!ending) {
+      const latestPunch = (store.logs as ClockLog[])
+        .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
+        .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+      if (latestPunch?.status !== "In") {
+        notify("Clock in first — a break has to sit inside a shift.");
+        return false;
+      }
+    }
     const now = new Date().toISOString();
     store.logs.push({
       id: `l${Date.now()}`, uid: user.id, type: "Break",
@@ -9415,6 +9428,9 @@ function QuickClock({
         </div>
       </section>
 
+      {/* Breaks belong inside a shift, so the option only appears once the
+          person is actually clocked in. An open break still shows its End
+          button even if the shift somehow closed, so nobody gets stuck. */}
       {onBreak ? (
         <section className="break-banner on">
           <span>
@@ -9424,12 +9440,12 @@ function QuickClock({
           </span>
           <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>End Break</button>
         </section>
-      ) : (
+      ) : open ? (
         <section className="break-banner">
           <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
           <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>Start Break</button>
         </section>
-      )}
+      ) : null}
 
       {mayClockOthers && (
         <section className="report-panel clock-others">
@@ -9466,7 +9482,11 @@ function QuickClock({
       <section className="correction-block">
         {!showCorrection ? (
           <button type="button" className="correction-open" onClick={() => setShowCorrection(true)}>
-            Forgot to clock in or out, missed a break, or need to add hours? Submit a correction
+            <ClipboardCheck size={18} />
+            <span>
+              <b>Add or fix past hours</b>
+              <small>Forgot to clock in yesterday, missed a break, or worked hours the clock never caught</small>
+            </span>
           </button>
         ) : (
           <div className="report-panel">
