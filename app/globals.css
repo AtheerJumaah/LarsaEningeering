@@ -118,7 +118,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .nav-item b { font-size: 13px; line-height: 1.25; }
 .nav-item small { margin-top: 2px; opacity: 0.62; font-size: 10px; line-height: 1.2; }
 .sidebar-account {
-  min-height: 58px;
+  min-height: 64px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
@@ -128,11 +128,11 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border-top: 1px solid #252525;
   color: #aeb4bf;
 }
-.sidebar-account .account-open > span { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; background: #fff; color: #000; font-size: 11px; font-weight: 950; }
+.sidebar-account .account-open > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; background: #fff; color: #000; font-size: 13px; font-weight: 950; }
 .sidebar-account div { min-width: 0; }
 .sidebar-account b, .sidebar-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-account b { color: #fff; font-size: 11px; }
-.sidebar-account small { margin-top: 2px; color: #858b96; font-size: 10px; font-weight: 750; }
+.sidebar-account b { color: #fff; font-size: 13px; font-weight: 800; }
+.sidebar-account small { margin-top: 2px; color: #9aa1ad; font-size: 11px; font-weight: 700; }
 .sidebar-account button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #303030; border-radius: 11px; background: #151515; color: #cfd3da; }
 
 .main-shell { min-width: 0; height: 100dvh; overflow: hidden; }
@@ -2076,7 +2076,8 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
    ================================================================ */
 /* sidebar account becomes a link to settings */
 .sidebar-account .account-open {
-  flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
+  display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 10px;
+  width: 100%; min-width: 0;
   padding: 0; border: 0; background: none; cursor: pointer; text-align: start; position: relative;
 }
 .sidebar-account .account-open:hover b { color: #fff; }
@@ -2138,9 +2139,9 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .unified-app.dark .settings-panel { background: #16181d; border-color: #272b33; }
 .settings-note { padding: 11px 15px; border-radius: 13px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12.5px; font-weight: 800; }
 .settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 13px; }
-.settings-fields label { display: grid; gap: 6px; font-size: 10.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+.settings-fields label { display: grid; gap: 6px; align-content: start; min-width: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
 .settings-fields input {
-  min-height: 44px; padding: 0 13px; border: 1px solid #dfe2e8; border-radius: 12px;
+  height: 44px; width: 100%; min-width: 0; padding: 0 13px; border: 1px solid #dfe2e8; border-radius: 12px;
   background: #fff; font-size: 14px; font-weight: 700; color: #17181b; text-transform: none; letter-spacing: normal;
 }
 .settings-fields input:disabled { background: #f4f6f9; color: #7a8190; }
@@ -2734,3 +2735,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .session-edit button:hover { border-color: #f3f4f6; color: #f3f4f6; }
 .dark .session-edit button.primary { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
 .dark .session-edit button.danger { border-color: #5c2020; background: #2a1414; color: #fca5a5; }
+
+/* Verification gate shown before a password, PIN, or email change lands. */
+.guard-box { width: 100%; margin-top: 12px; padding: 14px 16px; border: 1px solid #dfe2e8; border-radius: 14px; background: #f9fafb; }
+.guard-box label { display: grid; gap: 6px; font-size: 10.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+.guard-box input { height: 44px; padding: 0 13px; border: 1px solid #dfe2e8; border-radius: 12px; background: #fff; font: inherit; font-size: 16px; font-weight: 800; letter-spacing: .18em; color: #17181b; text-transform: none; }
+.guard-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.guard-actions button { padding: 10px 18px; border-radius: 12px; border: 1px solid #d5d9df; background: #fff; font: inherit; font-size: 13px; font-weight: 800; color: #3c4452; cursor: pointer; }
+.guard-actions button.primary { border-color: #17181b; background: #17181b; color: #fff; }
+.guard-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.unified-app.dark .guard-box { border-color: #2b303a; background: #1b1e24; }
+.unified-app.dark .guard-box input { border-color: #2b303a; background: #22262e; color: #f4f5f7; }
+.unified-app.dark .guard-actions button { border-color: #2f343d; background: #191c22; color: #b1b7c2; }
+.unified-app.dark .guard-actions button.primary { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }

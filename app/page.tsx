@@ -3763,6 +3763,16 @@ export default function Home() {
     return error ? `Could not send a verification code: ${error.message}` : "";
   }, []);
 
+  /* Checks a code without touching the sign-in flow's state, so the same
+     Supabase OTP can also guard sensitive changes made while already
+     signed in -- a new password, a new PIN, or a new email address. */
+  const checkEmailCode = useCallback(async (email: string, code: string) => {
+    const client = getSupabaseClient();
+    if (!client) return "Verification is unavailable right now.";
+    const { error } = await client.auth.verifyOtp({ email, token: code.trim(), type: "email" });
+    return error ? "That code was not accepted. Check it and try again." : "";
+  }, []);
+
   const confirmVerifyCode = async () => {
     if (!verifyStage) return;
     const code = verifyCode.trim();
@@ -5805,6 +5815,8 @@ export default function Home() {
               savePrefs={saveNotifyPrefs}
               markRead={markNotificationRead}
               clearRead={clearReadNotifications}
+              sendCode={sendVerificationCode}
+              checkCode={checkEmailCode}
             />
           </div>
           <div className={active.native === "accountingHub" ? "native active" : "native"}>
@@ -8730,6 +8742,7 @@ function RequestsCentre({
 
 function MySettings({
   user, notifications, dark, setDark, saveProfile, savePrefs, markRead, clearRead,
+  sendCode, checkCode,
 }: {
   user: StaffUser | null;
   notifications: AppNotification[];
@@ -8739,7 +8752,47 @@ function MySettings({
   savePrefs: (prefs: NotifyPrefs) => boolean;
   markRead: (id: string) => void;
   clearRead: () => void;
+  sendCode: (email: string) => Promise<string>;
+  checkCode: (email: string, code: string) => Promise<string>;
 }) {
+  /* Anything that changes how you get in -- password, PIN, or the email
+     address itself -- is held here until a code sent to the address on file
+     is entered. Someone who walks up to an unlocked screen can then still
+     not lock the real owner out of their own account. The code always goes
+     to the CURRENT address, never the new one. */
+  const [pending, setPending] = useState<{ patch: Partial<StaffUser>; label: string } | null>(null);
+  const [guardCode, setGuardCode] = useState("");
+  const [guardBusy, setGuardBusy] = useState(false);
+
+  const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => {
+    const address = user?.email?.trim();
+    if (!supabaseConfigured() || !address) {
+      if (saveProfile(patch)) { setMessage(`${label} updated.`); done(); }
+      return;
+    }
+    setGuardBusy(true);
+    setMessage(`Sending a verification code to ${address}…`);
+    const problem = await sendCode(address);
+    setGuardBusy(false);
+    if (problem) { setMessage(problem); return; }
+    setPending({ patch, label });
+    setGuardCode("");
+    setMessage(`Enter the code sent to ${address} to confirm this change.`);
+  };
+
+  const confirmGuard = async () => {
+    if (!pending || !user?.email) return;
+    setGuardBusy(true);
+    const problem = await checkCode(user.email, guardCode);
+    setGuardBusy(false);
+    if (problem) { setMessage(problem); return; }
+    if (saveProfile(pending.patch)) {
+      setMessage(`${pending.label} updated.`);
+      if (pending.patch.password || pending.patch.pin) setSecret({ password: "", confirm: "", pin: "" });
+    }
+    setPending(null);
+    setGuardCode("");
+  };
   const [tab, setTab] = useState<"profile" | "security" | "notifications" | "inbox">("profile");
   const [profile, setProfile] = useState({
     email: user?.email || "", phone: user?.phone || "",
@@ -8823,11 +8876,25 @@ function MySettings({
           </div>
           <p className="builder-note">The theme applies to every area, including the embedded Timeclock, HR, and Accounting modules.</p>
           <div className="form-actions">
-            <button type="button" className="primary" onClick={() => {
-              if (saveProfile({ email: profile.email.trim(), phone: profile.phone.trim(), location: profile.location.trim() })) {
-                setMessage("Profile saved.");
+            <button type="button" className="primary" disabled={guardBusy} onClick={() => {
+              const patch = { email: profile.email.trim(), phone: profile.phone.trim(), location: profile.location.trim() };
+              // Only the email address is sensitive here -- phone and location
+              // cannot be used to take an account over, so they save directly.
+              if (patch.email.toLowerCase() !== (user?.email || "").trim().toLowerCase()) {
+                guardedSave(patch, "Profile", () => {});
+                return;
               }
+              if (saveProfile(patch)) setMessage("Profile saved.");
             }}><Save size={15} /> Save profile</button>
+            {pending && (
+              <div className="guard-box">
+                <label>Verification code<input inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={guardCode} onChange={(event) => setGuardCode(event.target.value.replace(/\s/g, ""))} placeholder="123456" autoFocus /></label>
+                <div className="guard-actions">
+                  <button type="button" className="primary" disabled={guardBusy} onClick={confirmGuard}>{guardBusy ? "Checking…" : "Confirm change"}</button>
+                  <button type="button" onClick={() => { setPending(null); setGuardCode(""); setMessage(""); }}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -8853,9 +8920,18 @@ function MySettings({
                 patch.pin = secret.pin;
               }
               if (!Object.keys(patch).length) { setMessage("Nothing to change."); return; }
-              if (saveProfile(patch)) { setMessage("Sign-in details updated."); setSecret({ password: "", confirm: "", pin: "" }); }
-            }}><Save size={15} /> Update sign-in</button>
+              guardedSave(patch, "Sign-in details", () => setSecret({ password: "", confirm: "", pin: "" }));
+            }} disabled={guardBusy}><Save size={15} /> Update sign-in</button>
           </div>
+          {pending && (
+            <div className="guard-box">
+              <label>Verification code<input inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={guardCode} onChange={(event) => setGuardCode(event.target.value.replace(/\s/g, ""))} placeholder="123456" autoFocus /></label>
+              <div className="guard-actions">
+                <button type="button" className="primary" disabled={guardBusy} onClick={confirmGuard}>{guardBusy ? "Checking…" : "Confirm change"}</button>
+                <button type="button" onClick={() => { setPending(null); setGuardCode(""); setMessage(""); }}>Cancel</button>
+              </div>
+            </div>
+          )}
           <p className="builder-note">
             Credentials are stored on this device with the rest of the application data. Treat exported backups as confidential.
           </p>
