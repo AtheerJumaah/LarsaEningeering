@@ -223,12 +223,10 @@ type PerformanceDraft = {
   lateReason: string;
   jobNumber: string;
   clientCode: string;
-  project: string;
   workCategory: string;
   discipline: string;
-  deliverable: string;
   hoursSpent: string;
-  estimatedPoints: string;
+  assignedPoints: string;
   submittedPoints: string;
   notes: string;
 };
@@ -244,6 +242,9 @@ type PerformanceRow = {
   uid?: string;
   "Submitted Points"?: number | string;
   "Approved Points"?: number | string;
+  "Assigned Points"?: number | string;
+  // Written by older entries, before the job number replaced the project name
+  // and points were reduced to assigned and total. Still read so history shows.
   "Estimated Points"?: number | string;
   "Hours Spent"?: number | string;
   [key: string]: unknown;
@@ -2021,6 +2022,8 @@ function weekLockFor(
 function entryLine(entry: PerformanceRow | undefined) {
   if (!entry) return "";
   return [
+    // Project and Deliverable are only present on entries made before the form
+    // was cut back to the job number.
     entry["Job Number"] || entry.Project,
     entry["Work Category"],
     entry.Deliverable,
@@ -4232,15 +4235,16 @@ export default function Home() {
       Department: user.department || "",
       "Job Number": draft.jobNumber.trim(),
       "Client Code": draft.clientCode.trim(),
-      Project: draft.project.trim(),
       "Work Category": draft.workCategory,
       Discipline: draft.discipline.trim(),
-      Deliverable: draft.deliverable.trim(),
       "Assigned By": "",
       Reviewer: "",
       // Only a review carries hours; everything else is scored on points alone.
       "Hours Spent": draft.workCategory === "Review" ? Number(draft.hoursSpent) || 0 : 0,
-      "Estimated Points": Number(draft.estimatedPoints) || 0,
+      "Assigned Points": Number(draft.assignedPoints) || 0,
+      /* Stored under its original key. Every target, summary, report and export
+         reads "Submitted Points", so renaming the key would orphan all of them
+         and every entry already on record. The label is what changed. */
       "Submitted Points": Number(draft.submittedPoints) || 0,
       "Approved Points": 0,
       Status: "Draft",
@@ -4289,7 +4293,7 @@ export default function Home() {
       raiseNotification({
         event: "points.unlock",
         title: `${user.name} wants to add points to closed week ${week}`,
-        body: `${row.Project || row["Job Number"] || "Entry"} · ${row["Work Category"]} · ${row["Submitted Points"]} points · ${draft.lateReason.trim()}`,
+        body: `${row["Job Number"] || "Entry"} · ${row["Work Category"]} · ${row["Submitted Points"]} points · ${draft.lateReason.trim()}`,
         itemId: "my-requests", fromName: user.name,
         recipients: (store.users as StaffUser[]).filter((entry) => flow.includes(entry.id)),
       });
@@ -4884,7 +4888,7 @@ export default function Home() {
           : `${record.type} request ${status.toLowerCase()}`,
         body: isUnlock
           ? (status === "Approved"
-            ? `${actor.name} let your ${record.entry?.Project || record.entry?.["Job Number"] || "entry"} into closed week ${record.week}. It now waits for the normal points review.${note ? ` · ${note}` : ""}`
+            ? `${actor.name} let your ${record.entry?.["Job Number"] || record.entry?.Project || "entry"} into closed week ${record.week}. It now waits for the normal points review.${note ? ` · ${note}` : ""}`
             : `${actor.name} did not accept your late entry for week ${record.week}.${note ? ` · ${note}` : ""}`)
           : `${actor.name} ${status.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
         itemId: isUnlock && status === "Approved" ? "my-points" : "my-requests",
@@ -4976,7 +4980,7 @@ export default function Home() {
       raiseNotification({
         event: "points.reviewed",
         title: status === "Approved" ? "Points approved" : "Points returned",
-        body: `${actor.name} ${status === "Approved" ? "approved" : "returned"} your entry for ${row.Project || "a project"}`,
+        body: `${actor.name} ${status === "Approved" ? "approved" : "returned"} your entry for ${row["Job Number"] || row.Project || "a job"}`,
         itemId: "performance-center", fromName: actor.name, recipients: [employee],
       });
     }
@@ -6797,7 +6801,7 @@ function PerformanceCenter({
               <tr>
                 <th>Employee</th>
                 <th>Weekly Target</th>
-                <th>Submitted</th>
+                <th>Total</th>
                 <th>Approved</th>
                 <th>Progress</th>
                 <th>Entries</th>
@@ -6863,7 +6867,7 @@ function PerformanceCenter({
         <div className="data-table-wrap">
           <table className="data-table points-review-table">
             <thead>
-              <tr><th>Date</th><th>Employee</th><th>Project / Deliverable</th><th>Hours</th><th>Submitted</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
+              <tr><th>Date</th><th>Employee</th><th>Job</th><th>Hours</th><th>Assigned</th><th>Total</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
             </thead>
             <tbody>
               {weekRows.map((row) => {
@@ -6874,8 +6878,9 @@ function PerformanceCenter({
                   <tr key={row.id}>
                     <td>{rowDate(row) || "—"}</td>
                     <td><b>{row.Engineer || "Unknown"}</b><small>{row.Department || ""}</small></td>
-                    <td><b>{row.Project || "General"}</b><small>{row.Deliverable || "No deliverable noted"}</small></td>
+                    <td><b>{String(row["Job Number"] || row.Project || "General")}</b><small>{String(row["Work Category"] || "")}</small></td>
                     <td>{hours ? `${hours} h` : "—"}</td>
+                    <td>{finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]) || "—"}</td>
                     <td>{submitted}</td>
                     <td>{finiteNumber(row["Approved Points"])}</td>
                     <td><span className={`record-status ${status.toLowerCase().replace(/\s+/g, "-")}`}>{status}</span></td>
@@ -7283,7 +7288,7 @@ function PerformanceHistory({
     // Time rows and output rows share one sheet but fill different columns, so
     // both must line up against the same header.
     downloadRows(`larsa-productivity-${from}-to-${to}.csv`, [
-      ["Record Type", "Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Job Number", "Submitted Points", "Approved Points", "Project / Mode", "Status"],
+      ["Record Type", "Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Job Number", "Assigned Points", "Total Points", "Approved Points", "Mode", "Status"],
       ...filteredSessions.map((session) => [
         "Clock Session",
         session.clockIn.slice(0, 10),
@@ -7292,9 +7297,7 @@ function PerformanceHistory({
         session.hours.toFixed(2),
         session.presenceHours.toFixed(2),
         session.breakHours.toFixed(2),
-        "",
-        "",
-        "",
+        "", "", "", "",
         session.mode,
         session.open ? "Open" : "Closed",
       ]),
@@ -7307,10 +7310,14 @@ function PerformanceHistory({
         // used to be blank for point rows, which made it impossible to compare
         // effort with output in the exported sheet.
         finiteNumber(row["Hours Spent"]) || "",
-        row["Job Number"] || "",
+        // A point row has no clocked span, so the presence and break columns
+        // stay empty rather than shifting every column after them.
+        "", "",
+        row["Job Number"] || row.Project || "",
+        finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]),
         finiteNumber(row["Submitted Points"]),
         finiteNumber(row["Approved Points"]),
-        row.Project || "",
+        "",
         row.Status || "",
       ]),
     ]);
@@ -7361,7 +7368,7 @@ function PerformanceHistory({
         <div className="section-head"><div><span className="eyebrow">Period summary</span><h3>All selected employees together</h3></div><span className="black-badge">{from} to {to}</span></div>
         <div className="data-table-wrap">
           <table className="data-table">
-            <thead><tr><th>Employee</th><th>Department</th><th>Hours</th><th>Jobs</th><th>Submitted</th><th>Approved</th><th>Period Target</th><th>Completion</th></tr></thead>
+            <thead><tr><th>Employee</th><th>Department</th><th>Hours</th><th>Jobs</th><th>Total</th><th>Approved</th><th>Period Target</th><th>Completion</th></tr></thead>
             <tbody>
               {summaries.map((row) => {
                 const completion = row.target ? Math.round((row.approved / row.target) * 100) : 0;
@@ -7410,9 +7417,9 @@ function PerformanceHistory({
           <div className="section-head"><div><span className="eyebrow">Performance detail</span><h3>Point records</h3></div><span className="black-badge">{filteredRows.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Project</th><th>Hours</th><th>Submitted</th><th>Approved</th><th>Status</th></tr></thead>
+              <thead><tr><th>Date</th><th>Employee</th><th>Job</th><th>Hours</th><th>Total</th><th>Approved</th><th>Status</th></tr></thead>
               <tbody>
-                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{row.Project || "General"}</td><td>{finiteNumber(row["Hours Spent"]) ? `${finiteNumber(row["Hours Spent"])} h` : "—"}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
+                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{String(row["Job Number"] || row.Project || "General")}</td><td>{finiteNumber(row["Hours Spent"]) ? `${finiteNumber(row["Hours Spent"])} h` : "—"}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
                 {!filteredRows.length && <tr><td colSpan={7}><div className="empty compact">No point records in this period.</div></td></tr>}
               </tbody>
             </table>
@@ -8895,7 +8902,7 @@ function RequestsCentre({
         <b>{entryLine(row.entry)}</b>
         {/* PerformanceRow carries an index signature, so anything not named in
             the type is `unknown` and cannot be rendered directly. */}
-        {Boolean(row.entry.Notes || row.entry.Deliverable) && <small>{String(row.entry.Notes || row.entry.Deliverable || "")}</small>}
+        {Boolean(row.entry.Notes) && <small>{String(row.entry.Notes || "")}</small>}
         <span>Worked {row.entry.Date} · week {row.week}</span>
         <em>{row.reason}</em>
       </div>
@@ -10342,12 +10349,10 @@ function MyPoints({
     lateReason: "",
     jobNumber: "",
     clientCode: "",
-    project: "",
     workCategory: "Design",
     discipline: user?.department || "",
-    deliverable: "",
     hoursSpent: "",
-    estimatedPoints: "",
+    assignedPoints: "",
     submittedPoints: "",
     notes: "",
   };
@@ -10421,9 +10426,10 @@ function MyPoints({
               the common case one field shorter, while still letting somebody log
               Friday's work on Monday -- into Friday's week, not Monday's. */}
           <label>Work Date<input required type="date" max={today} value={draft.workDate} onChange={(event) => update("workDate", event.target.value)} /></label>
-          <label>Job Number<input value={draft.jobNumber} onChange={(event) => update("jobNumber", event.target.value)} placeholder="Example: 26-104" /></label>
+          {/* The job number identifies the work now that the project name is
+              gone, so it carries the requirement the project name used to. */}
+          <label>Job Number<input required value={draft.jobNumber} onChange={(event) => update("jobNumber", event.target.value)} placeholder="Example: 26-104" /></label>
           <label>Client Code<input value={draft.clientCode} onChange={(event) => update("clientCode", event.target.value)} placeholder="Optional" /></label>
-          <label className="wide">Project<input required value={draft.project} onChange={(event) => update("project", event.target.value)} placeholder="Project name" /></label>
           <label>
             Work Category
             {/* Switching away from Review drops any hours already typed, so a
@@ -10450,15 +10456,14 @@ function MyPoints({
             </select>
           </label>
           <label>Discipline<input value={draft.discipline} onChange={(event) => update("discipline", event.target.value)} placeholder="Structural, Architecture…" /></label>
-          <label className="wide">Deliverable<input value={draft.deliverable} onChange={(event) => update("deliverable", event.target.value)} placeholder="Drawing, calculation, review, meeting…" /></label>
           {/* Hours are only asked for on a review. Reviewing someone else's job
               is charged by time spent, not by the points the work is worth --
               design and drawing work is measured by points alone. */}
           {draft.workCategory === "Review" && (
             <label>Hours Spent<input required type="number" min="0.25" step="0.25" inputMode="decimal" value={draft.hoursSpent} onChange={(event) => update("hoursSpent", event.target.value)} placeholder="e.g. 3.5" /></label>
           )}
-          <label>Estimated Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.estimatedPoints} onChange={(event) => update("estimatedPoints", event.target.value)} placeholder="0" /></label>
-          <label>Submitted Points<input required type="number" min="0.5" step="0.5" inputMode="decimal" value={draft.submittedPoints} onChange={(event) => update("submittedPoints", event.target.value)} placeholder="0" /></label>
+          <label>Assigned Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.assignedPoints} onChange={(event) => update("assignedPoints", event.target.value)} placeholder="0" /></label>
+          <label>Total Points<input required type="number" min="0.5" step="0.5" inputMode="decimal" value={draft.submittedPoints} onChange={(event) => update("submittedPoints", event.target.value)} placeholder="0" /></label>
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Add a short description of the completed work." /></label>
           {/* Asked for only on a closed week. This is the one thing the approver
               cannot read off the entry itself: why it missed the week. */}
