@@ -33,6 +33,10 @@
   "exclude": [
     "node_modules",
     "db/**",
-    "worker/**"
+    "db/**/*",
+    "worker/**",
+    "worker/**/*",
+    "examples/**",
+    "examples/**/*"
   ]
 }

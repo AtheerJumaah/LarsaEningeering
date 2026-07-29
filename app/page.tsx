@@ -37,7 +37,9 @@ import {
   Landmark,
   LayoutDashboard,
   ListChecks,
+  Lock,
   LockKeyhole,
+  LockOpen,
   LogOut,
   MessagesSquare,
   Moon,
@@ -216,6 +218,7 @@ type InstallEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 type PerformanceDraft = {
+  workDate: string;
   jobNumber: string;
   clientCode: string;
   project: string;
@@ -381,6 +384,9 @@ const NOTIFY_EVENTS: { id: string; label: string; description: string; audience:
   { id: "points.reviewed", label: "Points reviewed", description: "Your points are approved or returned", audience: "Employee" },
   { id: "leave.requested", label: "Leave requested", description: "A leave or schedule request needs a decision", audience: "Approver" },
   { id: "leave.decided", label: "Leave decided", description: "Your request is approved or rejected", audience: "Employee" },
+  { id: "clock.correction", label: "Attendance correction", description: "Someone asks to fix a missed clock, break, or hours", audience: "Approver" },
+  { id: "points.week", label: "Performance week closed", description: "A week is locked or reopened for adding points", audience: "Employee" },
+  { id: "points.unlock", label: "Locked week access asked", description: "Someone needs to add points to a week you closed", audience: "Approver" },
   { id: "schedule.changed", label: "Schedule changed", description: "Your shifts are edited or the week is rebuilt", audience: "Employee" },
   { id: "accounting.entry", label: "Accounting activity", description: "Funding, expenses, payroll, or invoices are recorded", audience: "Finance" },
   { id: "accounting.flag", label: "Accounting review flag", description: "An entry is flagged for review", audience: "Finance" },
@@ -1593,6 +1599,8 @@ type LeaveRequest = {
   date?: string;
   from?: string;
   to?: string;
+  // Only set on a "Points Unlock" request: which locked week is being asked for.
+  week?: string;
   reason?: string;
   status: string;
   flow?: string[];
@@ -1974,6 +1982,68 @@ function isoWeekLabel(date = new Date()) {
   const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((target.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/* Performance weeks are closed by hand -- somebody with the right permission
+   locks a week once the work in it is final. A locked week stops the people who
+   report their own points from adding more to it; it deliberately does NOT stop
+   review, because closing the week is exactly when approvals happen.
+
+   `exceptions` is the way back in. An employee who genuinely missed something
+   raises an unlock request, and an approval writes their id here. Locking the
+   week again wipes the list -- a grant covers one closing, not every future
+   one. */
+type WeekLockException = {
+  uid: string;
+  name: string;
+  grantedBy: string;
+  grantedAt: string;
+  requestId?: string;
+};
+type WeekLock = {
+  week: string;
+  lockedBy: string;
+  lockedAt: string;
+  note?: string;
+  exceptions?: WeekLockException[];
+};
+
+function weekLocks(store: Record<string, unknown> | null | undefined): Record<string, WeekLock> {
+  const locks = store?.weekLocks;
+  return locks && typeof locks === "object" ? locks as Record<string, WeekLock> : {};
+}
+
+/* The one question every caller actually asks: is this person blocked from
+   writing to this week? Returns the lock that blocks them, or null. */
+function weekLockFor(
+  store: Record<string, unknown> | null | undefined,
+  week: string,
+  uid: string,
+): WeekLock | null {
+  const lock = weekLocks(store)[week];
+  if (!lock) return null;
+  if ((lock.exceptions || []).some((row) => row.uid === uid)) return null;
+  return lock;
+}
+
+function weekOfDate(value: string) {
+  if (!value) return isoWeekLabel();
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? isoWeekLabel() : isoWeekLabel(date);
+}
+
+/* Monday and Sunday of an ISO week label, so an unlock request can be stored
+   and displayed with real dates like every other request. ISO week 1 is the one
+   containing 4 January, which is what makes this arithmetic work at year ends. */
+function weekBounds(week: string) {
+  const match = /^(\d{4})-W(\d{1,2})$/.exec(week || "");
+  if (!match) return { from: "", to: "" };
+  const jan4 = new Date(Date.UTC(Number(match[1]), 0, 4));
+  const monday = new Date(jan4);
+  monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() || 7) - 1) + (Number(match[2]) - 1) * 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  return { from: monday.toISOString().slice(0, 10), to: sunday.toISOString().slice(0, 10) };
 }
 
 function finiteNumber(value: unknown) {
@@ -4128,10 +4198,23 @@ export default function Home() {
       notify("The performance area is still loading. Please try again.");
       return false;
     }
+    /* Points belong to the week the work was done in, not the week it happens to
+       be typed in -- otherwise a Monday morning catch-up lands in the wrong
+       week and the lock means nothing. */
+    const workDate = draft.workDate || new Date().toISOString().slice(0, 10);
+    const week = weekOfDate(workDate);
+    /* Checked here and not only in the form: the form's copy of the store can be
+       a render behind, and a week can be locked while somebody has the page
+       open. This is the check that actually decides. */
+    const lock = weekLockFor(parseStore("larsaStaffV8"), week, user.id);
+    if (lock) {
+      notify(`Week ${week} was locked by ${lock.lockedBy}. Request access to it before adding points.`);
+      return false;
+    }
     const row = {
       id: `p${Date.now()}${Math.random()}`,
-      Week: isoWeekLabel(),
-      Date: new Date().toISOString().slice(0, 10),
+      Week: week,
+      Date: workDate,
       Engineer: user.name,
       Department: user.department || "",
       "Job Number": draft.jobNumber.trim(),
@@ -4154,6 +4237,12 @@ export default function Home() {
     try {
       win.eval(`
         (function(){
+          /* Both this page and the engine own larsaStaffV8, and the engine
+             persists its whole in-memory state on save. Adding a row to a copy
+             loaded ten minutes ago would write that stale copy back over
+             everything saved since -- including the week lock that was just
+             checked. So re-read first, then add. */
+          try{ state=JSON.parse(localStorage.getItem("larsaStaffV8"))||state; }catch(e){ /* keep the loaded state */ }
           var row=${JSON.stringify(row)};
           if(!Array.isArray(state.performance))state.performance=[];
           state.performance.unshift(row);
@@ -4285,7 +4374,8 @@ export default function Home() {
     });
     notify(`${target.name} ${status === "In" ? "clocked in" : "clocked out"}.`);
     return true;
-  }, [notify, raiseNotification, refreshStaffEngine]);
+  // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
 
   /* Trimming a session an authorized person can already see. Deliberately
      one-way: the new clock-out may only move EARLIER, so this can reduce
@@ -4616,10 +4706,142 @@ export default function Home() {
       body: `${draft.date} · ${draft.from}–${draft.to} · ${draft.reason.trim()}`,
       itemId: "my-requests", fromName: actor.name, recipients: approvers,
     });
+    refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Correction request submitted for approval.");
     return true;
-  }, [notify, raiseNotification]);
+  // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
+
+  /* Closing a performance week. Same permission as setting weekly targets --
+     whoever owns the numbers owns when they stop moving. Locking is a manual
+     act every Saturday, never a scheduled one, so this is only ever reached
+     from a button somebody pressed. */
+  const setWeekLock = useCallback((week: string, locked: boolean, note = "") => {
+    const actor = sessionUserRef.current;
+    const mayManage = Boolean(
+      actor
+      && (
+        hasItemPermission(actor, PERFORMANCE_TARGETS_ITEM, "manage")
+        || hasItemPermission(actor, PERFORMANCE_CENTER_ITEM, "manage")
+      ),
+    );
+    if (!actor || !mayManage) {
+      notify("Your account cannot lock or unlock a performance week.");
+      return false;
+    }
+    if (!week) { notify("Choose a week first."); return false; }
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Performance records are still loading. Please try again."); return false; }
+    const locks = weekLocks(store);
+    if (locked) {
+      /* Re-locking clears the exception list on purpose. An approved unlock was
+         permission to finish one week's entry, not a standing key. */
+      locks[week] = {
+        week, lockedBy: actor.name, lockedAt: new Date().toISOString(),
+        note: note.trim(), exceptions: [],
+      };
+    } else {
+      delete locks[week];
+    }
+    store.weekLocks = locks;
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    const people = (store.users as StaffUser[] || []).filter((row) => row.enabled !== false && row.id !== actor.id);
+    raiseNotification({
+      event: "points.week",
+      title: locked ? `Performance week ${week} is closed` : `Performance week ${week} reopened`,
+      body: locked
+        ? `${actor.name} locked ${week}. Ask for approval if you still need to add points to it.${note.trim() ? ` · ${note.trim()}` : ""}`
+        : `${actor.name} reopened ${week}. You can add points to it again.`,
+      itemId: "my-points", fromName: actor.name, recipients: people,
+    });
+    setStorageTick((value) => value + 1);
+    notify(locked
+      ? `Week ${week} is locked. Points can no longer be added to it without approval.`
+      : `Week ${week} is open again.`);
+    return true;
+  // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
+
+  /* Withdrawing one person's exception without reopening the week for everyone. */
+  const revokeWeekException = useCallback((week: string, uid: string) => {
+    const actor = sessionUserRef.current;
+    const mayManage = Boolean(
+      actor
+      && (
+        hasItemPermission(actor, PERFORMANCE_TARGETS_ITEM, "manage")
+        || hasItemPermission(actor, PERFORMANCE_CENTER_ITEM, "manage")
+      ),
+    );
+    if (!actor || !mayManage) { notify("Your account cannot change a week lock."); return false; }
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Performance records are still loading."); return false; }
+    const locks = weekLocks(store);
+    const lock = locks[week];
+    if (!lock) { notify("That week is not locked."); return false; }
+    lock.exceptions = (lock.exceptions || []).filter((row) => row.uid !== uid);
+    store.weekLocks = locks;
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Access to that week was withdrawn.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
+  /* The employee's way past a lock. Like an attendance correction this writes
+     nothing itself -- it raises a request on the person's normal approval chain,
+     and only an approval opens the week for them. */
+  const requestWeekUnlock = useCallback((draft: { week: string; reason: string }) => {
+    const actor = sessionUserRef.current;
+    if (!actor) return false;
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Requests are still loading. Please try again."); return false; }
+    if (!draft.week) { notify("Choose which week you need to add points to."); return false; }
+    if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
+    const existing = (store.approvals as LeaveRequest[] || []).find(
+      (row) => row.type === "Points Unlock" && row.uid === actor.id
+        && row.week === draft.week && row.status === "Pending",
+    );
+    if (existing) { notify(`You already have a pending request for ${draft.week}.`); return false; }
+    if (!Array.isArray(store.approvals)) store.approvals = [];
+    const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
+    const configured = flowConfig[actor.id]?.Leave;
+    const managerId = (store.users as StaffUser[])
+      .find((row) => row.name && actor.manager && row.name.toLowerCase() === actor.manager.toLowerCase())?.id;
+    const flow = configured?.length ? configured : [managerId || "u1"];
+    const bounds = weekBounds(draft.week);
+    const record: LeaveRequest = {
+      id: `r${Date.now()}`,
+      type: "Points Unlock",
+      uid: actor.id,
+      requestType: draft.week,
+      week: draft.week,
+      date: bounds.from,
+      from: bounds.from,
+      to: bounds.to,
+      reason: draft.reason.trim(),
+      status: "Pending",
+      flow,
+      step: 0,
+      history: [],
+      createdAt: new Date().toISOString(),
+    };
+    store.approvals.unshift(record);
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    const approvers = (store.users as StaffUser[]).filter((row) => flow.includes(row.id));
+    raiseNotification({
+      event: "points.unlock",
+      title: `${actor.name} needs to add points to locked week ${draft.week}`,
+      body: draft.reason.trim(),
+      itemId: "my-requests", fromName: actor.name, recipients: approvers,
+    });
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify(`Request sent. You can add points to ${draft.week} once it is approved.`);
+    return true;
+  // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
 
   const decideRequest = useCallback((requestId: string, status: "Approved" | "Rejected", note = "") => {
     const actor = sessionUserRef.current;
@@ -4662,21 +4884,50 @@ export default function Home() {
       updated.materialised = true;
     }
 
+    /* Approving an unlock request is what actually lets the person back into the
+       week. If the week has since been reopened for everyone there is nothing to
+       write, and that is fine -- they can already add. */
+    if (status === "Approved" && record.type === "Points Unlock" && !updated.materialised) {
+      const locks = weekLocks(store);
+      const lock = locks[String(record.week || record.requestType || "")];
+      if (lock) {
+        const person = (store.users as StaffUser[]).find((row) => row.id === record.uid);
+        lock.exceptions = [
+          ...(lock.exceptions || []).filter((row) => row.uid !== record.uid),
+          {
+            uid: record.uid, name: person?.name || "", grantedBy: actor.name,
+            grantedAt: new Date().toISOString(), requestId: record.id,
+          },
+        ];
+        store.weekLocks = locks;
+      }
+      updated.materialised = true;
+    }
+
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     const employee = (store.users as StaffUser[]).find((row) => row.id === record.uid);
     if (employee) {
+      const isUnlock = record.type === "Points Unlock";
       raiseNotification({
         event: "leave.decided",
-        title: `${record.type} request ${status.toLowerCase()}`,
-        body: `${actor.name} ${status.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
-        itemId: "my-requests", fromName: actor.name, recipients: [employee],
+        title: isUnlock
+          ? `Locked week ${record.week} ${status.toLowerCase()}`
+          : `${record.type} request ${status.toLowerCase()}`,
+        body: isUnlock
+          ? (status === "Approved"
+            ? `${actor.name} opened week ${record.week} for you. Add your points now — it closes again when the week is re-locked.${note ? ` · ${note}` : ""}`
+            : `${actor.name} did not open week ${record.week}.${note ? ` · ${note}` : ""}`)
+          : `${actor.name} ${status.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
+        itemId: isUnlock && status === "Approved" ? "my-points" : "my-requests",
+        fromName: actor.name, recipients: [employee],
       });
     }
     setStorageTick((value) => value + 1);
     notify(`Request ${status.toLowerCase()}.`);
     return true;
-  }, [notify, raiseNotification, refreshStaffEngine]);
+  // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
 
   const saveGrowthStore = useCallback((next: GrowthStore) => {
     localStorage.setItem(GROWTH_STORE_KEY, JSON.stringify(next));
@@ -5855,7 +6106,7 @@ export default function Home() {
             />
           </div>
           <div className={active.native === "myPoints" ? "native active" : "native"}>
-            <MyPoints user={sessionUser} save={saveMyPoints} />
+            <MyPoints user={sessionUser} save={saveMyPoints} store={staffStore} requestUnlock={requestWeekUnlock} />
           </div>
           <div className={active.native === "performance" ? "native active" : "native"}>
             <PerformanceCenter
@@ -5865,6 +6116,9 @@ export default function Home() {
               targets={growthStore.pointTargets}
               saveTarget={saveWeeklyTarget}
               reviewRow={reviewPerformanceRow}
+              store={staffStore}
+              setLock={setWeekLock}
+              revokeException={revokeWeekException}
               openWorkboard={() => choose(ITEMS.find((item) => item.id === "staff-performance")!, "performance")}
             />
           </div>
@@ -6362,6 +6616,9 @@ function PerformanceCenter({
   saveTarget,
   reviewRow,
   openWorkboard,
+  store,
+  setLock,
+  revokeException,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
@@ -6370,9 +6627,13 @@ function PerformanceCenter({
   saveTarget: (userId: string, target: number) => boolean;
   reviewRow: (rowId: string, status: "Approved" | "Returned", approvedPoints?: number) => boolean;
   openWorkboard: () => void;
+  store: Record<string, unknown> | null;
+  setLock: (week: string, locked: boolean, note?: string) => boolean;
+  revokeException: (week: string, uid: string) => boolean;
 }) {
   const [week, setWeek] = useState(isoWeekLabel());
   const [approvalDrafts, setApprovalDrafts] = useState<Record<string, string>>({});
+  const [lockNote, setLockNote] = useState("");
   const visibleUsers = scopedUsers(viewer, users);
   const visibleIds = new Set(visibleUsers.map((user) => user.id));
   const weeks = [...new Set([
@@ -6417,6 +6678,10 @@ function PerformanceCenter({
   );
   const canApprove = Boolean(viewer && hasItemPermission(viewer, PERFORMANCE_REVIEW_ITEM, "approve"));
   const canExport = Boolean(viewer && hasItemPermission(viewer, PERFORMANCE_CENTER_ITEM, "export"));
+  /* Locking rides on the same permission as setting targets: whoever owns the
+     weekly numbers decides when they stop moving. */
+  const lock = weekLocks(store)[week] || null;
+  const exceptions = lock?.exceptions || [];
   const canOpenWorkboard = Boolean(
     viewer && canOpen(viewer, ITEMS.find((item) => item.id === "staff-performance")!),
   );
@@ -6463,8 +6728,63 @@ function PerformanceCenter({
         ) : (
           <span className="filter-static"><b>Performance week</b>{week || weeks[0]}</span>
         )}
+        <span className={lock ? "filter-summary locked" : "filter-summary"}>
+          {lock ? <><Lock size={14} /> Closed</> : <><LockOpen size={14} /> Open for entry</>}
+        </span>
         <span className="filter-summary">{visibleUsers.length} employee{visibleUsers.length === 1 ? "" : "s"} in this view</span>
       </section>
+
+      {/* Closing the week is a deliberate weekly act, not a schedule -- so it is
+          a button somebody presses, and it says plainly what it stops. Review is
+          untouched by it: approving points is exactly what a closed week is for. */}
+      {canManageTargets && (
+        <section className={lock ? "week-lock closed" : "week-lock"}>
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Week {week}</span>
+              <h3>{lock ? "Entry is closed" : "Entry is open"}</h3>
+            </div>
+            <span className="black-badge">{lock ? <Lock size={14} /> : <LockOpen size={14} />}</span>
+          </div>
+          <p className="week-lock-note">
+            {lock
+              ? `Locked by ${lock.lockedBy} on ${(lock.lockedAt || "").slice(0, 10)}. Employees cannot add points to this week unless you approve their request. Reviewing and approving what is already in it still works normally.`
+              : "Employees can add and submit points for this week. Lock it once the week's work is final — usually Saturday."}
+          </p>
+          {lock?.note && <p className="week-lock-note quoted">“{lock.note}”</p>}
+          {!lock && (
+            <label className="week-lock-field">
+              Note for the team <small>Optional — shown with the lock</small>
+              <input value={lockNote} onChange={(event) => setLockNote(event.target.value)} placeholder="Example: week closed, payroll cut-off" />
+            </label>
+          )}
+          <div className="form-actions">
+            {lock ? (
+              <button type="button" onClick={() => setLock(week, false)}><LockOpen size={15} /> Reopen week {week}</button>
+            ) : (
+              <button type="button" className="primary" onClick={() => { if (setLock(week, true, lockNote)) setLockNote(""); }}>
+                <Lock size={15} /> Lock week {week}
+              </button>
+            )}
+          </div>
+          {Boolean(exceptions.length) && (
+            <div className="lock-exceptions">
+              <span className="eyebrow">Allowed past this lock</span>
+              <ul>
+                {exceptions.map((row) => (
+                  <li key={row.uid}>
+                    <div>
+                      <b>{row.name || users.find((user) => user.id === row.uid)?.name || row.uid}</b>
+                      <small>approved by {row.grantedBy} on {(row.grantedAt || "").slice(0, 10)}</small>
+                    </div>
+                    <button type="button" onClick={() => revokeException(week, row.uid)}>Withdraw</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="focus-grid">
         <article className="focus-card">
@@ -10024,11 +10344,17 @@ function QuickClock({
 function MyPoints({
   user,
   save,
+  store,
+  requestUnlock,
 }: {
   user: StaffUser | null;
   save: (draft: PerformanceDraft, submit: boolean) => boolean;
+  store: Record<string, unknown> | null;
+  requestUnlock: (draft: { week: string; reason: string }) => boolean;
 }) {
+  const today = new Date().toISOString().slice(0, 10);
   const emptyDraft: PerformanceDraft = {
+    workDate: today,
     jobNumber: "",
     clientCode: "",
     project: "",
@@ -10041,12 +10367,24 @@ function MyPoints({
     notes: "",
   };
   const [draft, setDraft] = useState<PerformanceDraft>(emptyDraft);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askReason, setAskReason] = useState("");
   const update = (field: keyof PerformanceDraft, value: string) =>
     setDraft((current) => ({ ...current, [field]: value }));
   const submit = (event: { preventDefault: () => void }, sendForApproval: boolean) => {
     event.preventDefault();
-    if (save(draft, sendForApproval)) setDraft({ ...emptyDraft, discipline: user?.department || "" });
+    if (save(draft, sendForApproval)) setDraft({ ...emptyDraft, workDate: draft.workDate, discipline: user?.department || "" });
   };
+
+  /* Which week this entry lands in, and whether it is closed to this person.
+     Both follow the work date, so changing the date changes the answer -- that
+     is the whole point of asking for a date rather than assuming today. */
+  const week = weekOfDate(draft.workDate || today);
+  const lock = user ? weekLockFor(store, week, user.id) : null;
+  const locked = Boolean(lock);
+  const granted = user ? (weekLocks(store)[week]?.exceptions || []).find((row) => row.uid === user.id) : undefined;
+  const pendingAsk = (Array.isArray(store?.approvals) ? store.approvals as LeaveRequest[] : [])
+    .some((row) => row.type === "Points Unlock" && row.uid === user?.id && row.week === week && row.status === "Pending");
 
   return (
     <div className="native-scroll points-scroll">
@@ -10062,12 +10400,70 @@ function MyPoints({
           <ShieldCheck size={18} />
         </div>
       </section>
+      {/* A closed week is the normal state for anything older than the last
+          Saturday, so this explains itself rather than just refusing. */}
+      {locked && (
+        <section className="lock-banner">
+          <div className="lock-banner-head">
+            <Lock size={18} />
+            <div>
+              <b>Week {week} is closed</b>
+              <small>
+                Locked by {lock?.lockedBy} on {(lock?.lockedAt || "").slice(0, 10)}
+                {lock?.note ? ` · ${lock.note}` : ""}
+              </small>
+            </div>
+          </div>
+          <p>
+            Pick a date in an open week, or ask your approver to let you add to this one.
+          </p>
+          {pendingAsk ? (
+            <span className="lock-pending"><Timer size={15} /> Your request for {week} is waiting for a decision.</span>
+          ) : !askOpen ? (
+            <button type="button" className="secondary" onClick={() => setAskOpen(true)}>
+              <LockOpen size={15} /> Request access to week {week}
+            </button>
+          ) : (
+            <div className="lock-ask">
+              <label>Why do you need to add to this week?
+                <textarea
+                  value={askReason}
+                  onChange={(event) => setAskReason(event.target.value)}
+                  placeholder="Example: finished the 26-104 review on Friday but did not get to log it."
+                />
+              </label>
+              <div className="lock-ask-actions">
+                <button type="button" onClick={() => { setAskOpen(false); setAskReason(""); }}>Cancel</button>
+                <button type="button" className="primary" onClick={() => {
+                  if (requestUnlock({ week, reason: askReason })) { setAskOpen(false); setAskReason(""); }
+                }}>Send request</button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+      {!locked && granted && (
+        <section className="lock-banner open">
+          <div className="lock-banner-head">
+            <LockOpen size={18} />
+            <div>
+              <b>Week {week} was opened for you</b>
+              <small>{granted.grantedBy} approved this on {(granted.grantedAt || "").slice(0, 10)}. It closes again when the week is re-locked.</small>
+            </div>
+          </div>
+        </section>
+      )}
+
       <form className="points-form" onSubmit={(event) => submit(event, true)}>
         <div className="points-section-head">
           <div><span className="eyebrow">Work details</span><h3>What did you work on?</h3></div>
-          <span className="kept">Only your record</span>
+          <span className={locked ? "kept locked" : "kept"}>{locked ? `Week ${week} closed` : `Week ${week}`}</span>
         </div>
         <div className="points-fields">
+          {/* Points belong to the day the work happened. Defaulting to today keeps
+              the common case one field shorter, while still letting somebody log
+              Friday's work on Monday -- into Friday's week, not Monday's. */}
+          <label>Work Date<input required type="date" max={today} value={draft.workDate} onChange={(event) => update("workDate", event.target.value)} /></label>
           <label>Job Number<input value={draft.jobNumber} onChange={(event) => update("jobNumber", event.target.value)} placeholder="Example: 26-104" /></label>
           <label>Client Code<input value={draft.clientCode} onChange={(event) => update("clientCode", event.target.value)} placeholder="Optional" /></label>
           <label className="wide">Project<input required value={draft.project} onChange={(event) => update("project", event.target.value)} placeholder="Project name" /></label>
@@ -10109,8 +10505,8 @@ function MyPoints({
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Add a short description of the completed work." /></label>
         </div>
         <div className="points-actions">
-          <button type="button" className="secondary" onClick={(event) => submit(event, false)}>Save Draft</button>
-          <button type="submit" className="primary">Submit for Approval</button>
+          <button type="button" className="secondary" disabled={locked} onClick={(event) => submit(event, false)}>Save Draft</button>
+          <button type="submit" className="primary" disabled={locked}>Submit for Approval</button>
         </div>
       </form>
     </div>
