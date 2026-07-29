@@ -1,0 +1,1 @@
+# Redeploy trigger: force a fresh build so newly-added env vars are actually read (Vercel's Redeploy button reuses the original deployment's variable snapshot, not the current one) — 2026-07-29T00:32:51Z
