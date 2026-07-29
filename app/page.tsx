@@ -4082,7 +4082,8 @@ export default function Home() {
       Deliverable: draft.deliverable.trim(),
       "Assigned By": "",
       Reviewer: "",
-      "Hours Spent": Number(draft.hoursSpent) || 0,
+      // Only a review carries hours; everything else is scored on points alone.
+      "Hours Spent": draft.workCategory === "Review" ? Number(draft.hoursSpent) || 0 : 0,
       "Estimated Points": Number(draft.estimatedPoints) || 0,
       "Submitted Points": Number(draft.submittedPoints) || 0,
       "Approved Points": 0,
@@ -9716,7 +9717,19 @@ function MyPoints({
           <label className="wide">Project<input required value={draft.project} onChange={(event) => update("project", event.target.value)} placeholder="Project name" /></label>
           <label>
             Work Category
-            <select value={draft.workCategory} onChange={(event) => update("workCategory", event.target.value)}>
+            {/* Switching away from Review drops any hours already typed, so a
+                stale figure can never ride along on a non-review entry. */}
+            <select
+              value={draft.workCategory}
+              onChange={(event) => {
+                const next = event.target.value;
+                setDraft((current) => ({
+                  ...current,
+                  workCategory: next,
+                  hoursSpent: next === "Review" ? current.hoursSpent : "",
+                }));
+              }}
+            >
               <option>Design</option>
               <option>Analysis</option>
               <option>Structural Drawing</option>
@@ -9729,7 +9742,12 @@ function MyPoints({
           </label>
           <label>Discipline<input value={draft.discipline} onChange={(event) => update("discipline", event.target.value)} placeholder="Structural, Architecture…" /></label>
           <label className="wide">Deliverable<input value={draft.deliverable} onChange={(event) => update("deliverable", event.target.value)} placeholder="Drawing, calculation, review, meeting…" /></label>
-          <label>Hours Spent<input required type="number" min="0.25" step="0.25" inputMode="decimal" value={draft.hoursSpent} onChange={(event) => update("hoursSpent", event.target.value)} placeholder="e.g. 3.5" /></label>
+          {/* Hours are only asked for on a review. Reviewing someone else's job
+              is charged by time spent, not by the points the work is worth --
+              design and drawing work is measured by points alone. */}
+          {draft.workCategory === "Review" && (
+            <label>Hours Spent<input required type="number" min="0.25" step="0.25" inputMode="decimal" value={draft.hoursSpent} onChange={(event) => update("hoursSpent", event.target.value)} placeholder="e.g. 3.5" /></label>
+          )}
           <label>Estimated Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.estimatedPoints} onChange={(event) => update("estimatedPoints", event.target.value)} placeholder="0" /></label>
           <label>Submitted Points<input required type="number" min="0.5" step="0.5" inputMode="decimal" value={draft.submittedPoints} onChange={(event) => update("submittedPoints", event.target.value)} placeholder="0" /></label>
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Add a short description of the completed work." /></label>
