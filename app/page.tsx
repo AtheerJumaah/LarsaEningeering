@@ -18,6 +18,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   Coffee,
+  Scissors,
   Database,
   Eye,
   EyeOff,
@@ -5786,6 +5787,8 @@ export default function Home() {
               punchOther={punchOther}
               submitCorrection={submitCorrection}
               users={accessUsers}
+              trimSession={trimSession}
+              resetSession={resetSession}
               go={goToItem}
               method={sessionMethod}
               week={myWeek}
@@ -9514,7 +9517,7 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak, punchOther, submitCorrection, users,
+  punchBreak, punchOther, submitCorrection, users, trimSession, resetSession,
 }: {
   user: StaffUser | null;
   sessions: ClockSession[];
@@ -9527,6 +9530,8 @@ function QuickClock({
     date: string; from: string; to: string; reason: string; mode: string;
   }) => boolean;
   users: StaffUser[];
+  trimSession: (uid: string, clockIn: string, newClockOut: string) => boolean;
+  resetSession: (uid: string, clockIn: string) => boolean;
   go: (id: string) => void;
   method: SignInMethod | null;
   week: { day: string; codes: string[]; entries: { start?: string; end?: string; code?: string; name?: string }[] }[];
@@ -9544,6 +9549,15 @@ function QuickClock({
   });
   const [otherId, setOtherId] = useState("");
   const [otherMode, setOtherMode] = useState("Office");
+  const [showTrim, setShowTrim] = useState(false);
+  const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
+  const [trimValue, setTrimValue] = useState("");
+  /* datetime-local reads local wall time with no zone, so the stored ISO stamp
+     has to be shifted by the offset or the field shows the wrong hour. */
+  const toLocalInput = (iso: string) => {
+    const at = new Date(iso);
+    return new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
 
   // Break state is read from the same log stream, so it survives a reload and
   // is identical whichever device the person is on.
@@ -9564,6 +9578,11 @@ function QuickClock({
     return item ? hasItemPermission(user, item, "manage") : false;
   })());
   const others = users.filter((row) => row.id !== user?.id && row.enabled !== false);
+  /* Newest first, across the whole team, so a manager can close someone's
+     forgotten clock-out without hunting through the reports. */
+  const recentAll = [...sessions]
+    .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime())
+    .slice(0, 12);
   const [now, setNow] = useState<Date | null>(null);
   const [period, setPeriod] = useState("week");
   const monthStart = new Date(); monthStart.setDate(1);
@@ -9725,7 +9744,7 @@ function QuickClock({
       )}
 
       <section className="correction-block">
-        {!showCorrection ? (
+        {!showCorrection && (
           <button type="button" className="correction-open" onClick={() => setShowCorrection(true)}>
             <ClipboardCheck size={18} />
             <span>
@@ -9733,7 +9752,71 @@ function QuickClock({
               <small>Forgot to clock in yesterday, missed a break, or worked hours the clock never caught</small>
             </span>
           </button>
-        ) : (
+        )}
+
+        {/* Sits beside the request button on purpose: same place, opposite
+            rule. Adding time needs approval; taking it away does not, because
+            nobody can inflate their own attendance by removing hours. */}
+        {mayClockOthers && !showCorrection && (
+          <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
+            <Scissors size={18} />
+            <span>
+              <b>Trim or remove recorded hours</b>
+              <small>Close a forgotten clock-out or delete a session — applies straight away, no approval</small>
+            </span>
+          </button>
+        )}
+
+        {mayClockOthers && showTrim && !showCorrection && (
+          <div className="report-panel trim-panel">
+            <div className="section-head">
+              <div><span className="eyebrow">Direct change · no approval</span><h3>Recent sessions</h3></div>
+              <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); }}>Close</button>
+            </div>
+            {!recentAll.length && <div className="empty compact">No sessions recorded yet.</div>}
+            {recentAll.map((session) => {
+              const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
+              return (
+                <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
+                  <div className="trim-who">
+                    <b>{session.employee}</b>
+                    <small>
+                      {new Date(session.clockIn).toLocaleDateString()} ·{" "}
+                      {new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {" – "}
+                      {session.open ? "still open" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {" · "}{session.hours.toFixed(2)} h worked
+                    </small>
+                  </div>
+                  {active ? (
+                    <div className="session-edit">
+                      <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
+                      <button type="button" className="primary" onClick={() => {
+                        if (trimSession(session.uid, session.clockIn, new Date(trimValue).toISOString())) setTrimming(null);
+                      }}>Save</button>
+                      <button type="button" onClick={() => setTrimming(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div className="session-edit">
+                      <button type="button" onClick={() => {
+                        setTrimming({ uid: session.uid, clockIn: session.clockIn });
+                        setTrimValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
+                      }}>Trim</button>
+                      <button type="button" className="danger" onClick={() => {
+                        if (window.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                      }}>Reset</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <p className="clock-others-hint">
+              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval.
+            </p>
+          </div>
+        )}
+
+        {showCorrection && (
           <div className="report-panel">
             <div className="section-head">
               <div><span className="eyebrow">Needs approval</span><h3>Attendance correction</h3></div>
