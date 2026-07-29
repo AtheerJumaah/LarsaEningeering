@@ -220,6 +220,7 @@ type PerformanceDraft = {
   workCategory: string;
   discipline: string;
   deliverable: string;
+  hoursSpent: string;
   estimatedPoints: string;
   submittedPoints: string;
   notes: string;
@@ -237,6 +238,7 @@ type PerformanceRow = {
   "Submitted Points"?: number | string;
   "Approved Points"?: number | string;
   "Estimated Points"?: number | string;
+  "Hours Spent"?: number | string;
   [key: string]: unknown;
 };
 type ClockLog = {
@@ -4075,6 +4077,7 @@ export default function Home() {
       Deliverable: draft.deliverable.trim(),
       "Assigned By": "",
       Reviewer: "",
+      "Hours Spent": Number(draft.hoursSpent) || 0,
       "Estimated Points": Number(draft.estimatedPoints) || 0,
       "Submitted Points": Number(draft.submittedPoints) || 0,
       "Approved Points": 0,
@@ -6253,17 +6256,19 @@ function PerformanceCenter({
         <div className="data-table-wrap">
           <table className="data-table points-review-table">
             <thead>
-              <tr><th>Date</th><th>Employee</th><th>Project / Deliverable</th><th>Submitted</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
+              <tr><th>Date</th><th>Employee</th><th>Project / Deliverable</th><th>Hours</th><th>Submitted</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
             </thead>
             <tbody>
               {weekRows.map((row) => {
                 const submitted = finiteNumber(row["Submitted Points"]);
+                const hours = finiteNumber(row["Hours Spent"]);
                 const status = String(row.Status || "Draft");
                 return (
                   <tr key={row.id}>
                     <td>{rowDate(row) || "—"}</td>
                     <td><b>{row.Engineer || "Unknown"}</b><small>{row.Department || ""}</small></td>
                     <td><b>{row.Project || "General"}</b><small>{row.Deliverable || "No deliverable noted"}</small></td>
+                    <td>{hours ? `${hours} h` : "—"}</td>
                     <td>{submitted}</td>
                     <td>{finiteNumber(row["Approved Points"])}</td>
                     <td><span className={`record-status ${status.toLowerCase().replace(/\s+/g, "-")}`}>{status}</span></td>
@@ -6291,7 +6296,7 @@ function PerformanceCenter({
                   </tr>
                 );
               })}
-              {!weekRows.length && <tr><td colSpan={canApprove ? 7 : 6}><div className="empty compact">No point entries were recorded for this week.</div></td></tr>}
+              {!weekRows.length && <tr><td colSpan={canApprove ? 8 : 7}><div className="empty compact">No point entries were recorded for this week.</div></td></tr>}
             </tbody>
           </table>
         </div>
@@ -6673,7 +6678,10 @@ function PerformanceHistory({
         rowDate(row),
         row.Engineer || "",
         row.Department || "",
-        "",
+        // Hours the engineer recorded against this specific job -- this column
+        // used to be blank for point rows, which made it impossible to compare
+        // effort with output in the exported sheet.
+        finiteNumber(row["Hours Spent"]) || "",
         row["Job Number"] || "",
         finiteNumber(row["Submitted Points"]),
         finiteNumber(row["Approved Points"]),
@@ -6757,10 +6765,10 @@ function PerformanceHistory({
           <div className="section-head"><div><span className="eyebrow">Performance detail</span><h3>Point records</h3></div><span className="black-badge">{filteredRows.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Project</th><th>Submitted</th><th>Approved</th><th>Status</th></tr></thead>
+              <thead><tr><th>Date</th><th>Employee</th><th>Project</th><th>Hours</th><th>Submitted</th><th>Approved</th><th>Status</th></tr></thead>
               <tbody>
-                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{row.Project || "General"}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
-                {!filteredRows.length && <tr><td colSpan={6}><div className="empty compact">No point records in this period.</div></td></tr>}
+                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{row.Project || "General"}</td><td>{finiteNumber(row["Hours Spent"]) ? `${finiteNumber(row["Hours Spent"])} h` : "—"}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
+                {!filteredRows.length && <tr><td colSpan={7}><div className="empty compact">No point records in this period.</div></td></tr>}
               </tbody>
             </table>
           </div>
@@ -9366,6 +9374,7 @@ function MyPoints({
     workCategory: "Design",
     discipline: user?.department || "",
     deliverable: "",
+    hoursSpent: "",
     estimatedPoints: "",
     submittedPoints: "",
     notes: "",
@@ -9416,6 +9425,7 @@ function MyPoints({
           </label>
           <label>Discipline<input value={draft.discipline} onChange={(event) => update("discipline", event.target.value)} placeholder="Structural, Architecture…" /></label>
           <label className="wide">Deliverable<input value={draft.deliverable} onChange={(event) => update("deliverable", event.target.value)} placeholder="Drawing, calculation, review, meeting…" /></label>
+          <label>Hours Spent<input required type="number" min="0.25" step="0.25" inputMode="decimal" value={draft.hoursSpent} onChange={(event) => update("hoursSpent", event.target.value)} placeholder="e.g. 3.5" /></label>
           <label>Estimated Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.estimatedPoints} onChange={(event) => update("estimatedPoints", event.target.value)} placeholder="0" /></label>
           <label>Submitted Points<input required type="number" min="0.5" step="0.5" inputMode="decimal" value={draft.submittedPoints} onChange={(event) => update("submittedPoints", event.target.value)} placeholder="0" /></label>
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Add a short description of the completed work." /></label>
