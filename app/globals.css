@@ -1699,7 +1699,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .clock-punch.in { background: #17181b; }
 .clock-punch.out { background: #b4341f; }
 
-.clock-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: min(100%, 460px); }
+.clock-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: min(100%, 460px); }
 .clock-totals div { padding: 12px 10px; border-radius: 16px; background: #f6f7f9; }
 .unified-app.dark .clock-totals div { background: #21252d; }
 .clock-totals small { display: block; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; }
@@ -2218,7 +2218,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .filter-toolbar { flex-wrap: wrap; gap: 10px; }
   .filter-toolbar label { flex: 1 1 160px; }
   .week-strip, .my-week-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .clock-totals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .builder-palette { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
   .rules-grid { grid-template-columns: 1fr; }
   .rule-check { grid-column: span 1; }
@@ -2671,7 +2670,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .correction-types button.on { border-color: #f3f4f6; background: #20242c; }
 @media (max-width: 700px) { .correction-types { grid-template-columns: 1fr; } }
 
-.correction-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.correction-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 760px) { .correction-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .correction-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; min-width: 0; }
 .correction-fields label.wide { grid-column: 1 / -1; }
 .correction-fields input, .correction-fields select, .correction-fields textarea {
@@ -2688,7 +2688,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .correction-actions button { padding: 11px 20px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
 .correction-actions button:hover { background: #000; }
 .dark .correction-actions button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
-.clock-totals { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+/* Four cards in a 460px container cannot sit on one row -- 4x110px plus
+   three gaps overflows it, which orphaned the last card. Two columns give a
+   symmetric 2x2 instead, at every width. */
+.clock-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 900px) { .clock-totals { width: min(100%, 620px); grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .clock-break-note { margin: 10px 0 0; width: min(100%, 460px); font-size: 12px; font-weight: 700; color: #7a8190; text-align: center; }
 .dark .clock-break-note { color: #8a919d; }
 
