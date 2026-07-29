@@ -1,4 +1,8 @@
-const CACHE_NAME = "larsa-control-v10";
+// Bump this on every release that changes anything in CORE_FILES. The activate
+// handler deletes every cache whose name doesn't match, so changing the name is
+// what actually evicts stale copies. Forgetting to bump it is why a shipped fix
+// to /engines/timeclock.html kept serving the old broken file to everyone.
+const CACHE_NAME = "larsa-control-v11";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -56,7 +60,27 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Stale-while-revalidate: the embedded engines still load instantly offline,
+  // The engine files are the part of this app that changes most often, and they
+  // load inside iframes -- so a stale copy survives even a hard refresh of the
+  // parent page, because the iframe request still gets answered from cache.
+  // Network-first means a deploy always wins; the cache is only a fallback for
+  // genuinely being offline.
+  if (url.pathname.startsWith("/engines/")) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request)),
+    );
+    return;
+  }
+
+  // Stale-while-revalidate: everything else still loads instantly offline,
   // but a newer copy is fetched in the background for the next visit.
   event.respondWith(
     caches.match(request).then((cached) => {
