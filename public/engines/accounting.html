@@ -277,11 +277,15 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
 
 /* Salesmen and their commissions: a repeating pair of rows, because one
    revenue can be split between several people on different rates. */
-.sales-team{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}
-.sales-row{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:8px;align-items:center}
+.sales-wrap{display:block;width:100%}
+.sales-team{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.sales-row{display:grid;grid-template-columns:minmax(0,1fr) 96px 18px 34px;gap:8px;align-items:center}
+.sales-row select,.sales-row input{width:100%;min-width:0}
 .sales-row .sales-rate{text-align:right}
-.sales-row .sales-pct{font-size:12px;font-weight:700;color:var(--muted,#7a8190)}
-@media(max-width:620px){.sales-row{grid-template-columns:minmax(0,1fr) 72px auto auto}}
+.sales-row .sales-pct{font-size:12px;font-weight:700;color:#7a8190;text-align:center}
+.sales-row .mini{width:34px;height:34px;line-height:1;padding:0}
+.sales-add{width:auto}
+@media(max-width:620px){.sales-row{grid-template-columns:minmax(0,1fr) 76px 16px 32px}}
 </style>
 
 <link rel="manifest" href="manifest.json">
@@ -1101,8 +1105,8 @@ function fieldInput(f,rec){
     let rows=Array.isArray(rec.salesTeam)?rec.salesTeam.slice():[];
     if(!rows.length && rec.salesman) rows=[{person:rec.salesman,rate:num(rec.commissionRate)}];
     if(!rows.length) rows=[{person:"",rate:0}];
-    inner=`<div id="${id}" class="sales-team">${rows.map((r,i)=>edSalesRow(r,i)).join("")}</div>
-      <button type="button" class="mini" onclick="edAddSales()">+ ${T("Add salesman","إضافة مندوب")}</button>`;
+    inner=`<div class="sales-wrap"><div id="${id}" class="sales-team">${rows.map((r,i)=>edSalesRow(r,i)).join("")}</div>
+      <button type="button" class="mini sales-add" onclick="edAddSales()">+ ${T("Add salesman","إضافة مندوب")}</button></div>`;
   }
   else if(f.type==="receipt"){ const has=rec.receipt&&(rec.receipt.ref||rec.receipt.data);
     inner=`<div class="rec-field"><input id="${id}" type="file" accept="image/*,application/pdf" onchange="edPickReceipt(event)">
@@ -1113,6 +1117,10 @@ function fieldInput(f,rec){
 }
 function edSalesPeople(){
   const names=new Set();
+  try{
+    const staff=JSON.parse(localStorage.getItem("larsaStaffV8")||"{}");
+    (staff.users||[]).forEach(u=>{ if(u&&u.name&&u.enabled!==false) names.add(u.name); });
+  }catch(e){ /* store not written yet on this device */ }
   (state.employees||[]).forEach(e=>{ if(e.name) names.add(e.name); });
   (state.revenue||[]).forEach(r=>{
     if(r.salesman) names.add(r.salesman);
@@ -1902,7 +1910,7 @@ log=function(action,details,collection,recordId,projectId){if(!state?.audit)retu
 buildNav=function(){const n=state.reviewQueue.filter(f=>!f.resolved).length;setHTML("nav",NAV.map(g=>{const a=g.items.filter(([id])=>can("view",XSM[id]||id));return a.length?`<div class="nav-group"><div class="nav-group-title">${t(g.grp)}</div>${a.map(([id,k])=>`<button class="nav-item ${id===activeSection?"active":""}" data-sec="${id}"><span>${k.startsWith("x_")?k.slice(2):t(k)}</span>${id==="review"&&n?`<span class="badge">${n}</span>`:""}</button>`).join("")}</div>`:""}).join(""));document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>showSection(b.dataset.sec))};
 const xOldShow=showSection;showSection=function(id){if(!can("view",XSM[id]||id)){xDenied();return}xOldShow(id)};
 function xModule(c){return XCM[c]||XSM[activeSection]||c}
-const xOldOpen=openEditor;openEditor=function(c,id){if(!can(id?"edit":"create",xModule(c))){xDenied();return}xOldOpen(c,id)};
+const xOldOpen=openEditor;openEditor=function(c,id,seed){if(!can(id?"edit":"create",xModule(c))){xDenied();return}xOldOpen(c,id,seed)};
 const xOldDel=delRec;delRec=function(c,id){if(!can("delete",xModule(c))){xDenied();return}xOldDel(c,id)};
 rowActions=function(c,id,r){let b=`${recBadge(c,id,r)} ${can("create","review")?flagBtn(c,id):""}`;if(XAPP.includes(c)&&["Draft","Pending","Pending Approval"].includes(r.status)&&can("approve",xModule(c)))b+=` <button class="mini approve" onclick="event.stopPropagation();xApprove('${c}','${id}')">${T("Approve","اعتماد")}</button>`;if(can("edit",xModule(c)))b+=` <button class="mini" onclick="event.stopPropagation();openEditor('${c}','${id}')">✎</button>`;if(can("delete",xModule(c)))b+=` <button class="mini danger" onclick="event.stopPropagation();delRec('${c}','${id}')">×</button>`;return`<td class="right nowrap act">${b}</td>`};
 function xApprove(c,id){if(!can("approve",xModule(c))){xDenied();return}const r=state[c].find(x=>x.id===id);if(!r)return;r.status=c==="funding"?"Received":"Approved";r.approvedBy=currentUser?.name||currentUser?.email;r.approvedAt=new Date().toISOString();log("Approved",`${c} ${id}`,c,id,r.projectId);save();render()}
@@ -2063,10 +2071,10 @@ deriveRecord=function(c,r){
   }
 };
 const v32OldOpenEditor=openEditor;
-openEditor=function(c,id){
+openEditor=function(c,id,seed){
   const r=id?(state[c]||[]).find(x=>x.id===id):null;
   if(currentUser?.role==="Engineer"&&r&&["Approved","Paid","Received"].includes(r.status)){alert(v32Text("Approved records can only be changed by accounting.","السجل المعتمد لا يعدله إلا قسم المحاسبة."));return}
-  v32OldOpenEditor(c,id);
+  v32OldOpenEditor(c,id,seed);
 };
 
 function v32NavLabel(id,key){
