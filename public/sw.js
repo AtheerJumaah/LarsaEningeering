@@ -1,4 +1,4 @@
-const CACHE_NAME = "larsa-control-v9";
+const CACHE_NAME = "larsa-control-v10";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -70,6 +70,34 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(() => cached);
       return cached || network;
+    }),
+  );
+});
+
+// Real background push: arrives even when no tab is open, which is the whole
+// point of "phone" notifications on an installed PWA. The payload is the same
+// { title, body, url } shape the send-push Edge Function sends.
+self.addEventListener("push", (event) => {
+  let payload = { title: "Larsa Control", body: "" };
+  try { if (event.data) payload = { ...payload, ...event.data.json() }; } catch { /* plain-text payload, keep defaults */ }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: { url: payload.url || "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((client) => client.url.includes(self.location.origin));
+      if (existing) return existing.focus();
+      return self.clients.openWindow(url);
     }),
   );
 });

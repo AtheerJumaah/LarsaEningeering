@@ -2,6 +2,8 @@
 
 import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
+import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
+import { subscribeToPush, sendPush } from "../lib/supabase/push";
 import {
   ArrowLeft,
   ArrowRight,
@@ -195,6 +197,7 @@ type StaffUser = {
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
   phoneAlt?: string;
+  emailVerified?: boolean;
 };
 type Item = {
   id: string;
@@ -2231,6 +2234,11 @@ function raiseNotification(input: {
     }
     if (prefs.push && typeof Notification !== "undefined" && Notification.permission === "granted") {
       try { new Notification(input.title, { body: input.body, icon: "/icons/icon-192.png" }); } catch { /* blocked */ }
+      // Foreground Notification above covers this tab; sendPush additionally
+      // reaches every other device/browser this person subscribed on, even
+      // fully closed — the "phone" half of push that new Notification() alone
+      // never could.
+      sendPush(person.id, input.title, input.body);
     }
   });
   localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({ version: 1, items: items.slice(0, 400) }));
@@ -2476,6 +2484,14 @@ export default function Home() {
   const [loginPass, setLoginPass] = useState("");
   const [loginPin, setLoginPin] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  // Email verification gate: only engaged when Supabase is configured (it's
+  // what actually sends the code) and the account hasn't verified its email
+  // yet. Without Supabase this stays entirely out of the way, same as sync.
+  const [verifyStage, setVerifyStage] = useState<{ user: StaffUser; email: string } | null>(null);
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyError, setVerifyError] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyInfo, setVerifyInfo] = useState("");
   // "Keep me signed in" survives a browser restart; without it the session ends
   // with the tab, which is what made sign-in feel like it "stopped working".
   const [rememberMe, setRememberMe] = useState(false);
@@ -3646,6 +3662,102 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [completeSignIn, readStaffUsers]);
 
+  // Every account that already had a working email + password before this
+  // feature shipped is grandfathered in as verified the first time anyone
+  // signs in after the update — otherwise the whole staff list would be
+  // locked out at once over an address nobody was ever asked to confirm.
+  // Runs once; a flag on the store itself (not per-user) prevents repeats.
+  const migrateEmailVerification = useCallback(() => {
+    try {
+      const store = parseStore("larsaStaffV8") as { users?: StaffUser[]; emailVerifyMigratedV1?: boolean } | null;
+      if (!store || !Array.isArray(store.users) || store.emailVerifyMigratedV1) return;
+      store.users = store.users.map((row) => (
+        row.email && row.password && row.emailVerified === undefined
+          ? { ...row, emailVerified: true }
+          : row
+      ));
+      store.emailVerifyMigratedV1 = true;
+      localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    } catch {
+      // Nothing to migrate yet if the store isn't there — a brand-new
+      // account will simply verify normally on its first sign-in.
+    }
+  }, []);
+
+  const persistEmailVerified = useCallback((userId: string, verified: boolean) => {
+    try {
+      const store = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null;
+      if (!store || !Array.isArray(store.users)) return;
+      const index = store.users.findIndex((row) => row.id === userId);
+      if (index < 0) return;
+      store.users[index] = { ...store.users[index], emailVerified: verified };
+      localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+      (Object.keys(refs) as Engine[]).forEach((engine) => {
+        try {
+          refs[engine].current?.contentWindow?.eval(`
+            state=JSON.parse(localStorage.getItem("larsaStaffV8"));
+            if(currentUser)currentUser=state.users.find(function(user){return user.id===currentUser.id})||currentUser;
+            if(typeof render==="function"&&currentUser)render();
+          `);
+        } catch {
+          // The embedded module will pick up the change on its next render.
+        }
+      });
+    } catch {
+      // A failed write here just means the account re-verifies next sign-in.
+    }
+  }, [refs]);
+
+  const sendVerificationCode = useCallback(async (email: string) => {
+    const client = getSupabaseClient();
+    if (!client) return "Verification is unavailable right now.";
+    const { error } = await client.auth.signInWithOtp({ email });
+    return error ? `Could not send a verification code: ${error.message}` : "";
+  }, []);
+
+  const confirmVerifyCode = async () => {
+    if (!verifyStage) return;
+    const code = verifyCode.trim();
+    if (!code) { setVerifyError("Enter the 6-digit code from your email."); return; }
+    setVerifyBusy(true);
+    setVerifyError("");
+    const client = getSupabaseClient();
+    if (!client) { setVerifyBusy(false); setVerifyError("Verification is unavailable right now."); return; }
+    const { error } = await client.auth.verifyOtp({ email: verifyStage.email, token: code, type: "email" });
+    setVerifyBusy(false);
+    if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
+    persistEmailVerified(verifyStage.user.id, true);
+    const verifiedUser = { ...verifyStage.user, emailVerified: true };
+    const rememberedEmail = verifyStage.email;
+    setVerifyStage(null);
+    setVerifyCode("");
+    setVerifyInfo("");
+    try {
+      if (rememberMe) localStorage.setItem(REMEMBER_EMAIL_KEY, rememberedEmail);
+      else localStorage.removeItem(REMEMBER_EMAIL_KEY);
+    } catch {
+      // Remembering the address is a convenience, never a sign-in requirement.
+    }
+    completeSignIn(verifiedUser, "email");
+  };
+
+  const resendVerifyCode = async () => {
+    if (!verifyStage) return;
+    setVerifyBusy(true);
+    setVerifyError("");
+    const problem = await sendVerificationCode(verifyStage.email);
+    setVerifyBusy(false);
+    if (problem) setVerifyError(problem);
+    else setVerifyInfo(`We sent a new code to ${verifyStage.email}.`);
+  };
+
+  const cancelVerify = () => {
+    setVerifyStage(null);
+    setVerifyCode("");
+    setVerifyError("");
+    setVerifyInfo("");
+  };
+
   const signIn = (event: FormEvent) => {
     event.preventDefault();
     const users = readStaffUsers();
@@ -3690,6 +3802,22 @@ export default function Home() {
           ? "That password does not match this account."
           : "No account found for that email address.");
       return;
+    }
+    if (loginMode === "email") {
+      migrateEmailVerification();
+      const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
+      if (supabaseConfigured() && refreshed.email && refreshed.emailVerified !== true) {
+        setVerifyError("");
+        setVerifyInfo("Sending your verification code…");
+        setVerifyBusy(true);
+        sendVerificationCode(refreshed.email).then((problem) => {
+          setVerifyBusy(false);
+          if (problem) { setVerifyInfo(""); setLoginError(problem); return; }
+          setVerifyStage({ user: refreshed, email: refreshed.email as string });
+          setVerifyInfo(`We sent a 6-digit code to ${refreshed.email}. Enter it below to finish signing in.`);
+        });
+        return;
+      }
     }
     try {
       if (rememberMe && loginMode === "email") localStorage.setItem(REMEMBER_EMAIL_KEY, enteredEmail);
@@ -4565,6 +4693,12 @@ export default function Home() {
       notify("The protected Super Admin account already controls full access.");
       return false;
     }
+    // A changed (or brand-new) email address always needs its own fresh
+    // verification — carrying the old "verified" flag forward would let
+    // someone silently redirect an account's sign-in email unverified.
+    const previousEmail = existingRecord?.email?.trim().toLowerCase() || "";
+    const nextEmail = nextUser.email?.trim().toLowerCase() || "";
+    const emailChanged = nextEmail !== previousEmail;
     const prepared: StaffUser = {
       ...nextUser,
       username: nextUser.username || nextUser.email?.split("@")[0] || "",
@@ -4573,6 +4707,7 @@ export default function Home() {
         : nextUser.projectAccessMode || projectAccessForPreset(nextUser.access || "Engineer"),
       projectIds: nextUser.access === "Super Admin" ? [] : nextUser.projectIds || [],
       permissions: staffPermissionsForUser(nextUser),
+      emailVerified: nextEmail ? (emailChanged ? false : existingRecord?.emailVerified) : undefined,
     };
     const existingIndex = store.users.findIndex((row: StaffUser) => row.id === prepared.id);
     if (isNew) {
@@ -5496,7 +5631,31 @@ export default function Home() {
           </section>
         </div>
       )}
-      {!sessionUser && (
+      {!sessionUser && verifyStage && (
+        <div className="auth-layer">
+          <section className="auth-card" aria-labelledby="verify-title">
+            <div className="auth-brand">
+              <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={210} height={82} priority />
+              <span><ShieldCheck size={18} /> Secure staff access</span>
+            </div>
+            <div className="auth-copy">
+              <span className="eyebrow">One more step</span>
+              <h1 id="verify-title">Verify your email</h1>
+              <p>{verifyInfo || `Enter the 6-digit code sent to ${verifyStage.email}.`}</p>
+            </div>
+            <form onSubmit={(event) => { event.preventDefault(); confirmVerifyCode(); }}>
+              <label>Verification Code<input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={verifyCode} onChange={(event) => setVerifyCode(event.target.value.replace(/\s/g, ""))} placeholder="123456" autoFocus /></label>
+              <div className="auth-error" role="alert">{verifyError}</div>
+              <button type="submit" className="auth-submit" disabled={verifyBusy}>{verifyBusy ? "Checking…" : "Verify & Sign In"}</button>
+              <div className="rowActions" style={{ justifyContent: "center", marginTop: 10 }}>
+                <button type="button" className="btn small" onClick={resendVerifyCode} disabled={verifyBusy}>Resend Code</button>
+                <button type="button" className="btn small" onClick={cancelVerify}>Cancel</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {!sessionUser && !verifyStage && (
         <div className="auth-layer">
           <section className="auth-card" aria-labelledby="sign-in-title">
             <div className="auth-brand">
@@ -8264,9 +8423,14 @@ function MySettings({
 
   const askPush = async () => {
     if (typeof Notification === "undefined") { setMessage("This browser does not support push notifications."); return; }
-    const result = await Notification.requestPermission();
-    setPushState(result);
-    setMessage(result === "granted" ? "Push notifications are enabled on this device." : "Push notifications were not allowed.");
+    if (!user?.id) { setMessage("Sign in again before enabling push notifications."); return; }
+    // subscribeToPush both asks permission and registers this device with
+    // Supabase, so a notification can actually reach it later even fully
+    // closed — plain Notification.requestPermission() alone only covers
+    // this tab while it's open.
+    const outcome = await subscribeToPush(user.id);
+    if (typeof Notification !== "undefined") setPushState(Notification.permission);
+    setMessage(outcome);
   };
   const toggle = (eventId: string, channel: NotifyChannel, value: boolean) => {
     savePrefs({ ...prefs, [eventId]: { ...prefs[eventId], [channel]: value } });

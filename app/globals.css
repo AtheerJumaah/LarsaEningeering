@@ -479,7 +479,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .password-field button:hover { background: #f0f0ee; color: #17181b; }
 .auth-hint { margin: -2px 2px 0; color: #6b7280; font-size: 12px; font-weight: 650; line-height: 1.45; text-align: center; }
-.auth-remember { display: flex; flex-direction: row; align-items: center; gap: 9px; margin: 2px 2px 0; font-size: 13px; font-weight: 700; color: #3c4452; cursor: pointer; text-transform: none; letter-spacing: normal; }
+/* Specificity note: ".auth-card label" (0,1,1) otherwise beats ".auth-remember"
+   (0,1,0) alone and silently wins the display/text-transform/font tug-of-war,
+   which is what stacked the checkbox above the label instead of beside it. */
+.auth-card label.auth-remember { display: flex; flex-direction: row; align-items: center; gap: 9px; margin: 2px 2px 0; font-size: 13px; font-weight: 700; color: #3c4452; cursor: pointer; text-transform: none; letter-spacing: normal; }
 .auth-remember input { width: 17px; height: 17px; min-height: 0; flex: none; margin: 0; accent-color: #17181b; cursor: pointer; }
 .auth-remember span { user-select: none; }
 .auth-error { min-height: 18px; color: #b91c1c; font-size: 12px; font-weight: 750; text-align: center; }
@@ -1053,7 +1056,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-weight: 900;
 }
 .review-actions button.approve,
-.development-actions button.approve { border-color: #bbf7d0; background: #ecfdf3; color: #166534; }
+.development-actions button.approve { border-color: #111827; background: #111827; color: #fff; }
+.review-actions button.approve:hover,
+.development-actions button.approve:hover { background: #000; border-color: #000; }
 .review-complete { display: inline-flex; align-items: center; gap: 5px; color: #16803d; font-size: 9px; font-weight: 900; }
 
 .form-grid,
@@ -1265,6 +1270,16 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .auth-brand { min-height: 86px; padding: 12px 14px; }
   .auth-brand span { font-size: 9px; }
   .auth-copy { padding-top: 20px; }
+}
+
+@media (max-width: 480px) {
+  /* Below this width the logo plus the full "Secure staff access" badge no
+     longer both fit on one row inside .auth-brand's rounded corners — the
+     badge text was overlapping the curve and reading as visually clipped.
+     Stacking them keeps the full label readable and centered instead. */
+  .auth-brand { flex-direction: column; justify-content: center; gap: 8px; padding: 16px 14px; text-align: center; }
+  .auth-brand img { max-width: 68%; }
+  .auth-brand span { white-space: normal; }
   .home-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-insights button { grid-column: 1 / -1; }
   .home-quick-actions { padding: 16px; }
