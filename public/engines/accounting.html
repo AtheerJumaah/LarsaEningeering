@@ -2348,7 +2348,16 @@ function renderMasterV33(){
 }
 
 /* ---------- Notifications ---------- */
-function x33Notify(n){state.notifications=state.notifications||[];const r=Object.assign({id:uid("not"),date:today(),recipientType:"User",recipientId:"",recipientName:"",recipientEmail:"",recipientPhone:"",channel:"In-App",subject:"",message:"",relatedProjectId:"",relatedPayrollId:"",relatedFundingId:"",status:"Draft",createdBy:currentUser?.email||"",createdAt:new Date().toISOString(),read:false},n||{});state.notifications.unshift(r);try{if(typeof notifyMe==="function")notifyMe(r.subject,r.message)}catch(e){}return r}
+function x33Notify(n){state.notifications=state.notifications||[];const r=Object.assign({id:uid("not"),date:today(),recipientType:"User",recipientId:"",recipientName:"",recipientEmail:"",recipientPhone:"",channel:"In-App",subject:"",message:"",relatedProjectId:"",relatedPayrollId:"",relatedFundingId:"",status:"Draft",createdBy:currentUser?.email||"",createdAt:new Date().toISOString(),read:false},n||{});state.notifications.unshift(r);
+  /* Only the "Browser Notification" channel should pop a real desktop
+     notification -- it used to fire for every channel including plain
+     In-App and Email Draft, which made the channel picker meaningless
+     (choosing "In-App" still popped a banner). This app has no push
+     server for other people's devices, so this only ever notifies the
+     browser creating the record; it's a live confirmation, not delivery
+     to the recipient. */
+  if(r.channel==="Browser Notification"){ try{if(typeof notifyMe==="function")notifyMe(r.subject||T("Notification","إشعار"),r.message)}catch(e){} }
+  return r}
 function x33Mailto(id){const n=state.notifications.find(x=>x.id===id);if(!n)return;location.href=`mailto:${encodeURIComponent(n.recipientEmail||"")}?subject=${encodeURIComponent(n.subject||"")}&body=${encodeURIComponent(n.message||"")}`;n.status="Sent Manually";save();render()}
 function x33CopyNotif(id){const n=state.notifications.find(x=>x.id===id);if(!n)return;navigator.clipboard?.writeText((n.subject||"")+"\n\n"+(n.message||""));n.status="Ready";save();render()}
 function x33ReadNotif(id){const n=state.notifications.find(x=>x.id===id);if(n){n.read=true;n.status=n.status==="Draft"?"Read":n.status;save();render()}}
@@ -2957,15 +2966,72 @@ document.addEventListener("DOMContentLoaded",boot);
   window.v35OpenProjectPublisher=function(){ const rows=(state.projects||[]).map(p=>`<label><input type="checkbox" value="${p.id}" ${p.isPublic?'checked':''}> ${H(p.code||'')} — ${H(p.name||'')} <span class="muted">${H(p.clientName||'')}</span></label>`).join(''); setHTML('modalRoot',`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${L('Public Projects','المشاريع العامة')}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><div class="v34-check-list" id="pub_pick">${rows||L('No projects yet.','لا توجد مشاريع بعد.')}</div></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${L('Cancel','إلغاء')}</button><button class="btn" onclick="v35SavePublicProjects()">${L('Save','حفظ')}</button></div></div></div>`);document.body.classList.add('modal-open');};
   window.v35SavePublicProjects=function(){const ids=[...document.querySelectorAll('#pub_pick input:checked')].map(x=>x.value);(state.projects||[]).forEach(p=>p.isPublic=ids.includes(p.id));save();closeEditor();render();};
 
-  // Targeted notifications and emails
+  // Targeted notifications and emails.
+  //
+  // state.users is NOT the real login roster -- blankState() always sets it
+  // to [] (see v33OldBlank above) and nothing in this engine ever fills it
+  // back in; only the person currently signed in gets mapped onto
+  // `currentUser` for the session (see the host page's `mappedUser`). So
+  // every group here ("Managers", "Accountants", ...) was matching against
+  // an array that is always empty, and the "Selected Users" checklist had
+  // nobody to list either -- hence "No recipients selected" on every send.
+  // The real people live in the shared Larsa staff directory, the same
+  // localStorage store edSalesPeople() already reads for the salesman /
+  // engineer dropdowns. v35StaffRoster() reads that store instead, and
+  // v35AccountingRole() mirrors accountingRole() from the host app (see
+  // app/page.tsx) so "Managers" / "Accountants" / "Employees" match the same
+  // access levels the rest of the system already uses.
+  function v35AccountingRole(access){
+    if(access==="Super Admin") return "Owner / Super Admin";
+    if(access==="Manager") return "Management";
+    if(access==="Accountant") return "Accountant";
+    if(access==="Admin HR") return "Payroll Accountant";
+    if(access==="Team Leader") return "Project Manager";
+    if(access==="Construction Engineer") return "Construction Engineer";
+    if(access==="Client") return "Client Viewer";
+    if(access==="Viewer") return "Viewer";
+    return "Engineer";
+  }
+  function v35StaffRoster(){
+    const out=[];
+    try{
+      const staff=JSON.parse(localStorage.getItem("larsaStaffV8")||"{}");
+      (staff.users||[]).forEach(u=>{
+        if(!u||!u.name||u.enabled===false) return;
+        const access=u.access||"Engineer";
+        out.push({ id:u.id||("staff_"+u.name), name:u.name, email:u.email||"", access, role:v35AccountingRole(access) });
+      });
+    }catch(e){ /* staff store not written yet on this device */ }
+    return out;
+  }
   window.v35OpenTargetNotification=function(){
-    const users=(state.users||[]).filter(u=>u.active!==false); const clients=(state.clientAccounts||[]).filter(c=>c.active!==false);
-    const userChecks=users.map(u=>`<label><input type="checkbox" value="user:${u.id}"> ${H(u.name||u.email)} <span class="muted">${H(u.role||'')}</span></label>`).join('');
+    const staff=v35StaffRoster(); const clients=(state.clientAccounts||[]).filter(c=>c.active!==false);
+    const userChecks=staff.map(u=>`<label><input type="checkbox" value="user:${u.id}"> ${H(u.name)} <span class="muted">${H(u.role)}</span></label>`).join('');
     const clientChecks=clients.map(c=>`<label><input type="checkbox" value="client:${c.id}"> ${H(c.clientName||c.username)} <span class="muted">${H(c.username||'')}</span></label>`).join('');
-    setHTML('modalRoot',`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${L('Send Targeted Notification','إرسال إشعار محدد')}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><div class="form-grid tight"><div class="field"><label>${L('Target Group','الفئة')}</label><select id="nt_group" onchange="v35ToggleTargetList()"><option value="selected">${L('Selected Users / Clients','مستخدمون / زبائن محددون')}</option><option value="allUsers">${L('All Users','كل المستخدمين')}</option><option value="clients">${L('All Clients','كل الزبائن')}</option><option value="accountants">${L('Accountants','المحاسبون')}</option><option value="managers">${L('Managers','الإدارة')}</option><option value="employees">${L('Employees','الموظفون')}</option></select></div><div class="field"><label>${L('Channel','القناة')}</label><select id="nt_channel"><option>In-App</option><option>Email Draft</option><option>Browser Notification</option></select></div><div class="field wide"><label>${L('Subject','الموضوع')}</label><input id="nt_subject"></div><div class="field wide"><label>${L('Message','الرسالة')}</label><textarea id="nt_msg" rows="4"></textarea></div></div><div id="nt_selected"><h3>${L('Users','المستخدمون')}</h3><div class="v34-check-list">${userChecks||'—'}</div><h3>${L('Clients','الزبائن')}</h3><div class="v34-check-list">${clientChecks||'—'}</div></div></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${L('Cancel','إلغاء')}</button><button class="btn" onclick="v35SendTargetNotification()">${L('Send / Create','إرسال / إنشاء')}</button></div></div></div>`);document.body.classList.add('modal-open');
+    setHTML('modalRoot',`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${L('Send Targeted Notification','إرسال إشعار محدد')}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><div class="form-grid tight"><div class="field"><label>${L('Target Group','الفئة')}</label><select id="nt_group" onchange="v35ToggleTargetList()"><option value="selected">${L('Selected Users / Clients','مستخدمون / زبائن محددون')}</option><option value="allUsers">${L('All Users','كل المستخدمين')}</option><option value="clients">${L('All Clients','كل الزبائن')}</option><option value="accountants">${L('Accountants','المحاسبون')}</option><option value="managers">${L('Managers','الإدارة')}</option><option value="employees">${L('Employees','الموظفون')}</option></select></div><div class="field"><label>${L('Channel','القناة')}</label><select id="nt_channel"><option>In-App</option><option>Email Draft</option><option>Browser Notification</option></select></div><div class="field wide"><label>${L('Subject','الموضوع')}</label><input id="nt_subject"></div><div class="field wide"><label>${L('Message','الرسالة')}</label><textarea id="nt_msg" rows="4"></textarea></div></div><div id="nt_selected"><h3>${L('Users','المستخدمون')}</h3><div class="v34-check-list">${userChecks||L('No staff found on this device yet.','لا يوجد موظفون على هذا الجهاز بعد.')}</div><h3>${L('Clients','الزبائن')}</h3><div class="v34-check-list">${clientChecks||'—'}</div></div></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${L('Cancel','إلغاء')}</button><button class="btn" onclick="v35SendTargetNotification()">${L('Send / Create','إرسال / إنشاء')}</button></div></div></div>`);document.body.classList.add('modal-open');
+    v35ToggleTargetList();
   };
   window.v35ToggleTargetList=function(){ const e=byId('nt_selected'); if(e)e.style.display=byId('nt_group').value==='selected'?'block':'none'; };
-  window.v35SendTargetNotification=function(){ const group=byId('nt_group').value, ch=byId('nt_channel').value, subject=byId('nt_subject').value, message=byId('nt_msg').value; let targets=[]; const users=(state.users||[]).filter(u=>u.active!==false), clients=(state.clientAccounts||[]).filter(c=>c.active!==false); if(group==='selected'){targets=[...document.querySelectorAll('#nt_selected input:checked')].map(x=>x.value).map(v=>{const [t,id]=v.split(':');return t==='user'?{type:'User',...(users.find(u=>u.id===id)||{})}:{type:'Client',...(clients.find(c=>c.id===id)||{})};});} else if(group==='allUsers') targets=users.map(u=>({type:'User',...u})); else if(group==='clients') targets=clients.map(c=>({type:'Client',...c})); else if(group==='accountants') targets=users.filter(u=>/accountant/i.test(u.role||'')).map(u=>({type:'User',...u})); else if(group==='managers') targets=users.filter(u=>/management|manager|admin|owner/i.test(u.role||'')).map(u=>({type:'User',...u})); else if(group==='employees') targets=(state.employees||[]).map(e=>({type:'Employee',...e})); if(!targets.length){alert(L('No recipients selected.','لم يتم اختيار مستلمين.'));return;} targets.forEach(t=>x33Notify({recipientType:t.type||'User',recipientId:t.id||'',recipientName:t.name||t.clientName||t.email||t.username||'',recipientEmail:t.email||'',channel:ch,subject,message,status:'Ready'})); save(); closeEditor(); activeSection='notifications'; render(); };
+  window.v35SendTargetNotification=function(){
+    const group=byId('nt_group').value, ch=byId('nt_channel').value, subject=byId('nt_subject').value, message=byId('nt_msg').value;
+    let targets=[];
+    const staff=v35StaffRoster(), clients=(state.clientAccounts||[]).filter(c=>c.active!==false);
+    if(group==='selected'){
+      targets=[...document.querySelectorAll('#nt_selected input:checked')].map(x=>x.value).map(v=>{
+        const [t,id]=v.split(':');
+        return t==='user'?{type:'User',...(staff.find(u=>u.id===id)||{})}:{type:'Client',...(clients.find(c=>c.id===id)||{})};
+      });
+    } else if(group==='allUsers') targets=staff.map(u=>({type:'User',...u}));
+    else if(group==='clients') targets=clients.map(c=>({type:'Client',...c}));
+    else if(group==='accountants') targets=staff.filter(u=>u.access==='Accountant'||u.access==='Admin HR').map(u=>({type:'User',...u}));
+    else if(group==='managers') targets=staff.filter(u=>u.access==='Super Admin'||u.access==='Manager'||u.access==='Team Leader').map(u=>({type:'User',...u}));
+    else if(group==='employees') targets=staff.filter(u=>u.access==='Engineer'||u.access==='Construction Engineer'||u.access==='Viewer').map(u=>({type:'User',...u}));
+    if(!targets.length){alert(L('No recipients selected.','لم يتم اختيار مستلمين.'));return;}
+    if(!subject.trim()&&!message.trim()){alert(L('Add a subject or a message before sending.','أضف موضوعاً أو رسالة قبل الإرسال.'));return;}
+    targets.forEach(t=>x33Notify({recipientType:t.type||'User',recipientId:t.id||'',recipientName:t.name||t.clientName||t.email||t.username||'',recipientEmail:t.email||'',channel:ch,subject,message,status:'Ready'}));
+    save(); closeEditor(); activeSection='notifications'; render();
+    alert(L(`Sent to ${targets.length} recipient${targets.length===1?'':'s'}.`,`تم الإرسال إلى ${targets.length} مستلم.`));
+  };
   const oldNotif=renderNotifications; renderNotifications=function(){ oldNotif(); const h=document.querySelector('#view .page-head .rpt-actions'); if(h && !byId('v35-target-btn')) h.insertAdjacentHTML('beforeend',`<button id="v35-target-btn" class="btn" onclick="v35OpenTargetNotification()">${L('Send Targeted Notification','إرسال إشعار محدد')}</button>`);}; try{RENDERERS.notifications=renderNotifications}catch(e){}
 
   // Backup restore points and advanced import
