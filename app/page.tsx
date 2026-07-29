@@ -17,6 +17,7 @@ import {
   CircleDollarSign,
   ClipboardCheck,
   ClipboardList,
+  Coffee,
   Database,
   Eye,
   EyeOff,
@@ -247,6 +248,10 @@ type ClockLog = {
   type?: string;
   status?: string;
   time?: string;
+  note?: string;
+  clockedBy?: string;
+  lastSeen?: string;
+  active?: boolean;
 };
 type ClockSession = {
   uid: string;
@@ -4103,7 +4108,20 @@ export default function Home() {
     }
   };
 
-  const punchClock = useCallback((mode: string) => {
+  /* Pushes the saved logs into the embedded engine so both views agree
+     immediately rather than after the engine's next natural render. */
+  const refreshStaffEngine = useCallback(() => {
+    try {
+      staffRef.current?.contentWindow?.eval(`
+        state=JSON.parse(localStorage.getItem("larsaStaffV8"));
+        if(typeof render==="function"&&currentUser)render();
+      `);
+    } catch {
+      // The engine picks the saved log up on its next render.
+    }
+  }, []);
+
+  const punchClock = useCallback((mode: string, note = "") => {
     const user = sessionUserRef.current;
     if (!user) return false;
     const store = parseStore("larsaStaffV8");
@@ -4113,7 +4131,7 @@ export default function Home() {
     }
     if (!Array.isArray(store.logs)) store.logs = [];
     const latest = (store.logs as ClockLog[])
-      .filter((log) => log.uid === user.id)
+      .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
     const status = latest && latest.status === "In" ? "Out" : "In";
     const now = new Date().toISOString();
@@ -4121,20 +4139,79 @@ export default function Home() {
     store.logs.push({
       id: `l${Date.now()}`, uid: user.id, type: mode, status,
       time: now, active: status === "In", lastSeen: now,
+      ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    try {
-      staffRef.current?.contentWindow?.eval(`
-        state=JSON.parse(localStorage.getItem("larsaStaffV8"));
-        if(typeof render==="function"&&currentUser)render();
-      `);
-    } catch {
-      // The engine picks the saved log up on its next render.
-    }
+    refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify(status === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
     return true;
-  }, [notify]);
+  }, [notify, refreshStaffEngine]);
+
+  /* Breaks use their own status values on purpose. Every hour calculation in
+     this app pairs "In" with "Out", so a break recorded that way would be
+     counted as a whole separate shift. These stay visible but inert. */
+  const punchBreak = useCallback((note = "") => {
+    const user = sessionUserRef.current;
+    if (!user) return false;
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Attendance records are still loading."); return false; }
+    if (!Array.isArray(store.logs)) store.logs = [];
+    const latestBreak = (store.logs as ClockLog[])
+      .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
+      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+    const ending = latestBreak?.status === "Break Start";
+    const now = new Date().toISOString();
+    store.logs.push({
+      id: `l${Date.now()}`, uid: user.id, type: "Break",
+      status: ending ? "Break End" : "Break Start",
+      time: now, active: false, lastSeen: now,
+      ...(note.trim() ? { note: note.trim() } : {}),
+    });
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify(ending ? "Break ended." : "Break started.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
+  /* Clocking someone else in or out. Deliberately records who did it so the
+     action is never anonymous in the attendance history. */
+  const punchOther = useCallback((targetId: string, mode: string, note = "") => {
+    const actor = sessionUserRef.current;
+    const clockItem = ITEMS.find((item) => item.id === "staff-clock");
+    if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
+      notify("Your account cannot clock other people in or out.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Attendance records are still loading."); return false; }
+    if (!Array.isArray(store.logs)) store.logs = [];
+    const target = (store.users as StaffUser[] | undefined)?.find((row) => row.id === targetId);
+    if (!target) { notify("Choose who you are clocking in or out."); return false; }
+    const latest = (store.logs as ClockLog[])
+      .filter((log) => log.uid === targetId && (log.status === "In" || log.status === "Out"))
+      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+    const status = latest && latest.status === "In" ? "Out" : "In";
+    const now = new Date().toISOString();
+    store.logs.push({
+      id: `l${Date.now()}`, uid: targetId, type: mode, status,
+      time: now, active: status === "In", lastSeen: now,
+      clockedBy: actor.name,
+      note: `${status === "In" ? "Clocked in" : "Clocked out"} by ${actor.name}${note.trim() ? ` · ${note.trim()}` : ""}`,
+    });
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    raiseNotification({
+      event: "clock.byManager",
+      title: status === "In" ? "You were clocked in" : "You were clocked out",
+      body: `${actor.name} recorded this for you · ${mode}`,
+      itemId: "staff-clock", fromName: actor.name, recipients: [target],
+    });
+    notify(`${target.name} ${status === "In" ? "clocked in" : "clocked out"}.`);
+    return true;
+  }, [notify, raiseNotification, refreshStaffEngine]);
 
   const saveSchedule = useCallback((userId: string, day: string, entries: { start?: string; end?: string; code?: string; name?: string }[]) => {
     const actor = sessionUserRef.current;
@@ -4340,6 +4417,56 @@ export default function Home() {
     return true;
   }, [notify]);
 
+  /* Attendance corrections: a forgotten clock in/out, an unrecorded break, or
+     hours worked that the clock never captured. These deliberately do NOT write
+     attendance directly -- they raise a request on the person's normal approval
+     chain, and only a full approval turns them into real records. */
+  const submitCorrection = useCallback((draft: {
+    kind: "Missed Clock" | "Missed Break" | "Extra Hours";
+    date: string; from: string; to: string; reason: string; mode: string;
+  }) => {
+    const actor = sessionUserRef.current;
+    if (!actor) return false;
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Requests are still loading. Please try again."); return false; }
+    if (!draft.date || !draft.from || !draft.to) { notify("Enter the date and both times."); return false; }
+    if (draft.to <= draft.from) { notify("The end time has to be after the start time."); return false; }
+    if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
+    if (!Array.isArray(store.approvals)) store.approvals = [];
+    const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
+    const configured = flowConfig[actor.id]?.Leave;
+    const managerId = (store.users as StaffUser[])
+      .find((row) => row.name && actor.manager && row.name.toLowerCase() === actor.manager.toLowerCase())?.id;
+    const flow = configured?.length ? configured : [managerId || "u1"];
+    const record: LeaveRequest = {
+      id: `r${Date.now()}`,
+      type: draft.kind,
+      uid: actor.id,
+      requestType: draft.mode,
+      date: draft.date,
+      from: draft.from,
+      to: draft.to,
+      reason: draft.reason.trim(),
+      status: "Pending",
+      flow,
+      step: 0,
+      history: [],
+      createdAt: new Date().toISOString(),
+    };
+    store.approvals.unshift(record);
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    const approvers = (store.users as StaffUser[]).filter((row) => flow.includes(row.id));
+    raiseNotification({
+      event: "clock.correction",
+      title: `${draft.kind} correction from ${actor.name}`,
+      body: `${draft.date} · ${draft.from}–${draft.to} · ${draft.reason.trim()}`,
+      itemId: "my-requests", fromName: actor.name, recipients: approvers,
+    });
+    setStorageTick((value) => value + 1);
+    notify("Correction request submitted for approval.");
+    return true;
+  }, [notify, raiseNotification]);
+
   const decideRequest = useCallback((requestId: string, status: "Approved" | "Rejected", note = "") => {
     const actor = sessionUserRef.current;
     const approvalsItem = ITEMS.find((item) => item.id === "staff-approvals");
@@ -4357,7 +4484,32 @@ export default function Home() {
       decidedBy: actor.name, decidedAt: new Date().toISOString(),
       history: [...(record.history || []), { by: actor.name, action: status, at: new Date().toISOString(), note }],
     };
+
+    /* An approved attendance correction is what actually writes the missing
+       records. Guarded on `materialised` so re-approving can never double-count,
+       and breaks keep their own status values so they stay out of hour totals. */
+    const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
+    const updated = store.approvals[index] as LeaveRequest & { materialised?: boolean };
+    if (status === "Approved" && CORRECTIONS.includes(String(record.type)) && !updated.materialised) {
+      if (!Array.isArray(store.logs)) store.logs = [];
+      const at = (time?: string) => new Date(`${record.date}T${time || "00:00"}:00`).toISOString();
+      const stamp = `Approved correction (${record.type}) · ${record.reason || ""}`;
+      const isBreak = record.type === "Missed Break";
+      const kind = isBreak ? "Break" : (record.requestType || "Office");
+      const pair: [string, string | undefined][] = isBreak
+        ? [["Break Start", record.from], ["Break End", record.to]]
+        : [["In", record.from], ["Out", record.to]];
+      pair.forEach(([state, time], position) => {
+        (store.logs as ClockLog[]).push({
+          id: `l${Date.now()}${position}`, uid: record.uid, type: kind, status: state,
+          time: at(time), lastSeen: at(time), note: stamp,
+        });
+      });
+      updated.materialised = true;
+    }
+
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
     const employee = (store.users as StaffUser[]).find((row) => row.id === record.uid);
     if (employee) {
       raiseNotification({
@@ -4370,7 +4522,7 @@ export default function Home() {
     setStorageTick((value) => value + 1);
     notify(`Request ${status.toLowerCase()}.`);
     return true;
-  }, [notify]);
+  }, [notify, raiseNotification, refreshStaffEngine]);
 
   const saveGrowthStore = useCallback((next: GrowthStore) => {
     localStorage.setItem(GROWTH_STORE_KEY, JSON.stringify(next));
@@ -5485,6 +5637,10 @@ export default function Home() {
               sessions={clockSessions}
               summary={homeSummary}
               punch={punchClock}
+              punchBreak={punchBreak}
+              punchOther={punchOther}
+              submitCorrection={submitCorrection}
+              users={accessUsers}
               go={goToItem}
               method={sessionMethod}
               week={myWeek}
@@ -9106,11 +9262,19 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
+  punchBreak, punchOther, submitCorrection, users,
 }: {
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
-  punch: (mode: string) => boolean;
+  punch: (mode: string, note?: string) => boolean;
+  punchBreak: (note?: string) => boolean;
+  punchOther: (targetId: string, mode: string, note?: string) => boolean;
+  submitCorrection: (draft: {
+    kind: "Missed Clock" | "Missed Break" | "Extra Hours";
+    date: string; from: string; to: string; reason: string; mode: string;
+  }) => boolean;
+  users: StaffUser[];
   go: (id: string) => void;
   method: SignInMethod | null;
   week: { day: string; codes: string[]; entries: { start?: string; end?: string; code?: string; name?: string }[] }[];
@@ -9120,6 +9284,34 @@ function QuickClock({
   // Shares the schedule's catalogue so an edited shift reads the same here.
   const catalogue = useMemo(() => shiftCatalogue(store), [store]);
   const [mode, setMode] = useState("Office");
+  const [note, setNote] = useState("");
+  const [showCorrection, setShowCorrection] = useState(false);
+  const [correction, setCorrection] = useState({
+    kind: "Missed Clock" as "Missed Clock" | "Missed Break" | "Extra Hours",
+    date: dateInputValue(new Date()), from: "09:00", to: "17:00", reason: "", mode: "Office",
+  });
+  const [otherId, setOtherId] = useState("");
+  const [otherMode, setOtherMode] = useState("Office");
+
+  // Break state is read from the same log stream, so it survives a reload and
+  // is identical whichever device the person is on.
+  const logs = useMemo(() => {
+    const raw = store?.logs;
+    return Array.isArray(raw) ? raw as ClockLog[] : [];
+  }, [store]);
+  const onBreak = useMemo(() => {
+    if (!user) return null;
+    const last = logs
+      .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
+      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+    return last?.status === "Break Start" ? last : null;
+  }, [logs, user]);
+
+  const mayClockOthers = Boolean(user && (() => {
+    const item = ITEMS.find((row) => row.id === "staff-clock");
+    return item ? hasItemPermission(user, item, "manage") : false;
+  })());
+  const others = users.filter((row) => row.id !== user?.id && row.enabled !== false);
   const [now, setNow] = useState<Date | null>(null);
   const [period, setPeriod] = useState("week");
   const monthStart = new Date(); monthStart.setDate(1);
@@ -9199,10 +9391,18 @@ function QuickClock({
             ><i aria-hidden="true" />{item.label}</button>
           ))}
         </div>
+        <label className="clock-note">
+          <span>Note <em>(optional)</em></span>
+          <input
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Running late, leaving early, working from a job site…"
+          />
+        </label>
         <button
           type="button"
           className={`clock-punch ${open ? "out" : `in tone-${modeTone(mode)}`}`}
-          onClick={() => punch(open ? open.mode : mode)}
+          onClick={() => { if (punch(open ? open.mode : mode, note)) setNote(""); }}
         >
           <Timer size={22} />
           {open ? "Clock Out" : "Clock In"}
@@ -9212,6 +9412,110 @@ function QuickClock({
           <div><small>This week</small><b>{weekHours.toFixed(2)} h</b></div>
           <div><small>Sessions</small><b>{mine.length}</b></div>
         </div>
+      </section>
+
+      {onBreak ? (
+        <section className="break-banner on">
+          <span>
+            <Coffee size={16} /> On break since{" "}
+            {new Date(onBreak.time || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {onBreak.note ? ` · ${onBreak.note}` : ""}
+          </span>
+          <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>End Break</button>
+        </section>
+      ) : (
+        <section className="break-banner">
+          <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
+          <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>Start Break</button>
+        </section>
+      )}
+
+      {mayClockOthers && (
+        <section className="report-panel clock-others">
+          <div className="section-head">
+            <div><span className="eyebrow">Authorised access</span><h3>Clock someone else in or out</h3></div>
+          </div>
+          <div className="clock-others-row">
+            <label>
+              Employee
+              <select value={otherId} onChange={(event) => setOtherId(event.target.value)}>
+                <option value="">Choose a person…</option>
+                {others.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Mode
+              <select value={otherMode} onChange={(event) => setOtherMode(event.target.value)}>
+                {WORK_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="primary"
+              disabled={!otherId}
+              onClick={() => { if (punchOther(otherId, otherMode, note)) { setNote(""); setOtherId(""); } }}
+            >Clock In / Out</button>
+          </div>
+          <p className="clock-others-hint">
+            For genuine cases only — a phone left at the desk, a shared terminal. Your name is recorded on every entry.
+          </p>
+        </section>
+      )}
+
+      <section className="correction-block">
+        {!showCorrection ? (
+          <button type="button" className="correction-open" onClick={() => setShowCorrection(true)}>
+            Forgot to clock in or out, missed a break, or need to add hours? Submit a correction
+          </button>
+        ) : (
+          <div className="report-panel">
+            <div className="section-head">
+              <div><span className="eyebrow">Needs approval</span><h3>Attendance correction</h3></div>
+              <button type="button" className="btn small" onClick={() => setShowCorrection(false)}>Close</button>
+            </div>
+            <div className="correction-types">
+              {([
+                ["Missed Clock", "Missed clock in / out", "You worked but never clocked"],
+                ["Missed Break", "Unrecorded break", "Took a break without logging it"],
+                ["Extra Hours", "Add hours worked", "Hours the clock never captured"],
+              ] as const).map(([kind, label, blurb]) => (
+                <button
+                  type="button"
+                  key={kind}
+                  className={correction.kind === kind ? "on" : ""}
+                  onClick={() => setCorrection((current) => ({ ...current, kind }))}
+                ><b>{label}</b><small>{blurb}</small></button>
+              ))}
+            </div>
+            <div className="correction-fields">
+              <label>Date<input type="date" value={correction.date} onChange={(event) => setCorrection((c) => ({ ...c, date: event.target.value }))} /></label>
+              {correction.kind !== "Missed Break" && (
+                <label>
+                  Mode
+                  <select value={correction.mode} onChange={(event) => setCorrection((c) => ({ ...c, mode: event.target.value }))}>
+                    {WORK_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  </select>
+                </label>
+              )}
+              <label>{correction.kind === "Missed Break" ? "Break started" : "From"}<input type="time" value={correction.from} onChange={(event) => setCorrection((c) => ({ ...c, from: event.target.value }))} /></label>
+              <label>{correction.kind === "Missed Break" ? "Break ended" : "To"}<input type="time" value={correction.to} onChange={(event) => setCorrection((c) => ({ ...c, to: event.target.value }))} /></label>
+              <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="Explain briefly — your approver sees exactly this." /></label>
+            </div>
+            <div className="correction-actions">
+              <span>Goes to your approval chain. Your hours only change once it is approved.</span>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  if (submitCorrection(correction)) {
+                    setShowCorrection(false);
+                    setCorrection((c) => ({ ...c, reason: "" }));
+                  }
+                }}
+              >Submit for Approval</button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="hours-breakdown">

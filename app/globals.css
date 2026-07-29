@@ -2605,3 +2605,55 @@ html, body { max-width: 100%; overflow-x: hidden; }
    which is how a wide chart escaped its card in the first place. */
 .report-panel, .focus-card, .home-board, .overview-hero { min-width: 0; }
 .report-panel > *, .focus-card > * { min-width: 0; max-width: 100%; }
+
+/* --- Clock: note, break, clocking others, and attendance corrections ------
+   These sit under the main punch button on the clock screen. The correction
+   block stays collapsed by default because it is the exception, not the
+   everyday action. */
+.clock-note { display: flex; flex-direction: column; gap: 6px; width: min(100%, 460px); }
+.clock-note span { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; }
+.clock-note em { font-style: normal; font-weight: 700; text-transform: none; letter-spacing: normal; color: #9aa1ad; }
+.clock-note input { width: 100%; padding: 11px 13px; border-radius: 14px; border: 1px solid #e3e6ea; background: #fff; font: inherit; font-size: 14px; color: #17181b; }
+.clock-note input:focus { outline: none; border-color: #17181b; }
+
+.break-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 16px; border-radius: 16px; border: 1px solid #e3e6ea; background: #f6f7f9; }
+.break-banner span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; color: #3c4452; }
+.break-banner button { padding: 9px 16px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
+.break-banner button:hover { background: #000; }
+.break-banner.on { background: #fff7ed; border-color: #fed7aa; }
+.break-banner.on span { color: #9a3412; }
+
+.clock-others { margin-top: 16px; }
+.clock-others-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) auto; gap: 10px; align-items: end; }
+.clock-others-row label { display: flex; flex-direction: column; gap: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; min-width: 0; }
+.clock-others-row select { padding: 10px 12px; border-radius: 12px; border: 1px solid #e3e6ea; background: #fff; font: inherit; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: normal; color: #17181b; }
+.clock-others-row button { padding: 11px 18px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
+.clock-others-row button:disabled { opacity: .45; cursor: not-allowed; }
+.clock-others-hint { margin: 10px 0 0; font-size: 12px; font-weight: 600; color: #7a8190; }
+@media (max-width: 700px) { .clock-others-row { grid-template-columns: 1fr; } }
+
+.correction-block { margin-top: 16px; }
+.correction-open { width: 100%; padding: 12px 16px; border-radius: 14px; border: 1px dashed #d5d9df; background: transparent;
+  font: inherit; font-size: 13px; font-weight: 800; color: #7a8190; cursor: pointer; text-align: left; }
+.correction-open:hover { color: #17181b; border-color: #17181b; }
+.correction-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.correction-types button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 14px; border-radius: 14px;
+  border: 1px solid #e3e6ea; background: #fff; font: inherit; cursor: pointer; min-width: 0; }
+.correction-types button b { font-size: 13px; font-weight: 800; color: #17181b; }
+.correction-types button small { font-size: 11px; font-weight: 600; color: #7a8190; }
+.correction-types button.on { border-color: #17181b; background: #f6f7f9; }
+@media (max-width: 700px) { .correction-types { grid-template-columns: 1fr; } }
+
+.correction-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.correction-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; min-width: 0; }
+.correction-fields label.wide { grid-column: 1 / -1; }
+.correction-fields input, .correction-fields select, .correction-fields textarea {
+  padding: 10px 12px; border-radius: 12px; border: 1px solid #e3e6ea; background: #fff;
+  font: inherit; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: normal; color: #17181b; }
+.correction-fields textarea { min-height: 78px; resize: vertical; }
+.correction-fields input:focus, .correction-fields select:focus, .correction-fields textarea:focus { outline: none; border-color: #17181b; }
+.correction-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.correction-actions span { font-size: 12px; font-weight: 700; color: #7a8190; }
+.correction-actions button { padding: 11px 20px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
+.correction-actions button:hover { background: #000; }
