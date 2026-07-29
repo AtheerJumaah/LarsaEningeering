@@ -1111,6 +1111,16 @@ function fieldInput(f,rec){
     inner=`<div class="sales-wrap"><div id="${id}" class="sales-team">${rows.map((r,i)=>edSalesRow(r,i)).join("")}</div>
       <button type="button" class="mini sales-add" onclick="edAddSales()">+ ${T("Add salesman","إضافة مندوب")}</button></div>`;
   }
+  else if(f.type==="staffSelect"){
+    /* Dropdown of real Larsa people (staff directory + employees + anyone
+       already used as a salesman), same source list as the salesTeam field.
+       The current value is kept in the list even if it's not a known name,
+       so an existing project never loses its assigned engineer/PM/lead. */
+    const people=edSalesPeople();
+    const chosen=v||"";
+    const opts=[""].concat(people.includes(chosen)||!chosen?people:[chosen].concat(people));
+    inner=`<select id="${id}">${opts.map(n=>`<option value="${esc(n)}" ${n===chosen?"selected":""}>${n?esc(dv(n)):"—"}</option>`).join("")}</select>`;
+  }
   else if(f.type==="receipt"){ const has=rec.receipt&&(rec.receipt.ref||rec.receipt.data);
     inner=`<div class="rec-field"><input id="${id}" type="file" accept="image/*,application/pdf" onchange="edPickReceipt(event)">
       <span id="ed_recstate" class="muted small">${has?esc(rec.receipt.name||t("receipt")):t("rec_none")}</span>
@@ -1931,7 +1941,7 @@ function xDyn(id,a,v,f){return`<select id="${id}"><option value="">—</option>$
 const xOldField=fieldInput;fieldInput=function(f,r){const id="ed_"+f.k,w=f.wide?"wide":"";let h;if(f.type==="supplierSelect")h=xDyn(id,state.suppliers,r[f.k],x=>dv(x.name));else if(f.type==="workforceSelect")h=xDyn(id,state.workforce,r[f.k],x=>`${dv(x.name)} · ${dv(x.trade)}`);else return xOldField(f,r);return`<div class="field ${w}"><label>${f.label}</label><div class="inwrap">${h}</div></div>`};
 
 const XF=(k,l,type,opts,wide)=>({k,label:l,type,opts,wide});
-SCHEMA.projects=[XF("code","Code","text"),XF("name",t("name"),"text",null,1),XF("clientName",t("client"),"text"),XF("clientPhone","Client phone","text"),XF("clientEmail","Client email","text"),XF("clientAddress","Client address","text",null,1),XF("projectAddress","Project address","text",null,1),XF("city","City","text"),XF("country","Country","text"),XF("region",t("region"),"select",["Iraq","USA"]),XF("type",t("type"),"select",["Construction","Design Engineering","Architecture","Structural","MEP","BOQ","Supervision","Other"]),XF("phase","Phase","select",["Lead","Pricing","Design","Review","Execution","Waiting Client","On Hold","Closed","Canceled"]),XF("status",t("status"),"select",["Active","On Hold","Closed","Canceled","Negotiation"]),XF("priority","Priority","select",["Low","Normal","High","Urgent"]),XF("responsibleEngineer","Responsible engineer","text"),XF("projectManager","Project manager","text"),XF("teamLeader","Team leader","text"),XF("salesman",t("salesman"),"text"),XF("contractValue","Contract value","number"),curField(),XF("consultancyRate","Consultancy %","percent"),XF("startDate","Start date","date"),XF("dueDate","Due date","date"),XF("closeDate","Close date","date"),XF("googleDriveLink","Google Drive","text"),XF("clickUpLink","ClickUp","text"),XF("invoiceLink","Invoice link","text"),XF("notes",t("notes"),"textarea",null,1),XF("internalNotes","Internal notes","textarea",null,1)];
+SCHEMA.projects=[XF("code","Code","text"),XF("name",t("name"),"text",null,1),XF("clientName",t("client"),"text"),XF("clientPhone","Client phone","text"),XF("clientEmail","Client email","text"),XF("clientAddress","Client address","text",null,1),XF("projectAddress","Project address","text",null,1),XF("city","City","text"),XF("country","Country","text"),XF("region",t("region"),"select",["Iraq","USA"]),XF("type",t("type"),"select",["Construction","Design Engineering","Architecture","Structural","MEP","BOQ","Supervision","Other"]),XF("phase","Phase","select",["Lead","Pricing","Design","Review","Execution","Waiting Client","On Hold","Closed","Canceled"]),XF("status",t("status"),"select",["Active","On Hold","Closed","Canceled","Negotiation"]),XF("priority","Priority","select",["Low","Normal","High","Urgent"]),XF("responsibleEngineer","Responsible engineer","staffSelect"),XF("projectManager","Project manager","staffSelect"),XF("teamLeader","Team leader","staffSelect"),XF("salesman",t("salesman"),"staffSelect"),XF("contractValue","Contract value","number"),curField(),XF("consultancyRate","Consultancy %","percent"),XF("startDate","Start date","date"),XF("dueDate","Due date","date"),XF("closeDate","Close date","date"),XF("googleDriveLink","Google Drive","text"),XF("clickUpLink","ClickUp","text"),XF("invoiceLink","Invoice link","text"),XF("notes",t("notes"),"textarea",null,1),XF("internalNotes","Internal notes","textarea",null,1)];
 SCHEMA.funding=[XF("date",t("date"),"date"),XF("projectId",t("project"),"projectSelect"),XF("payerName","Payer","text"),XF("fundingSource","Funding source","select",["Client Payment","Owner Advance","Reimbursement","Adjustment","Refund"]),XF("amount",t("f_gross"),"number"),curField(),XF("method",t("method"),"select",METHODS),XF("referenceNumber","Reference number","text"),XF("receivedBy","Received by","text"),XF("status",t("status"),"select",["Draft","Expected","Pending Approval","Approved","Received","Refunded","Rejected","Void"]),XF("waived",t("f_waive"),"checkbox"),XF("consultancyRate","Consultancy %","percent"),XF("allocatedTo","Allocated to","select",["Construction Funds","Consultancy Fee","Reimbursement","Refund"]),XF("description",t("description"),"text",null,1),XF("receipt",t("receipt"),"receipt"),XF("notes",t("notes"),"textarea",null,1)];
 SCHEMA.expenses=[XF("date",t("date"),"date"),XF("projectId",t("project"),"projectSelect"),XF("expenseType","Expense type","select",["Material","Labor","Subcontractor","Transport","Government","Office Allocation","Reimbursement","Other"]),XF("category",t("category"),"select",EXP_CATS),XF("supplierId","Supplier","supplierSelect"),XF("workforceId","Workforce","workforceSelect"),XF("quantity","Quantity","number"),XF("unit","Unit","text"),XF("unitPrice","Unit price","number"),XF("amount",t("amount"),"number"),curField(),XF("paymentSource","Payment source","select",XPAY),XF("method",t("method"),"select",METHODS),XF("invoiceNumber","Invoice number","text"),XF("paidBy","Paid by","text"),XF("dueDate","Due date","date"),XF("status",t("status"),"select",XSTATUS),XF("description",t("description"),"text",null,1),XF("receipt",t("receipt"),"receipt"),XF("notes",t("notes"),"textarea",null,1)];
 SCHEMA.materials=[XF("date",t("date"),"date"),XF("projectId",t("project"),"projectSelect"),XF("supplierId","Supplier","supplierSelect"),XF("materialCategory",t("category"),"select",XMAT),XF("itemName","Item name","text"),XF("description",t("description"),"text",null,1),XF("quantity","Quantity","number"),XF("unit","Unit","text"),XF("unitPrice","Unit price","number"),curField(),XF("paymentSource","Payment source","select",XPAY),XF("paymentMethod",t("method"),"select",METHODS),XF("status",t("status"),"select",["Requested","Ordered","Received","Partially Paid","Pending Approval","Approved","Paid","Rejected","Void"]),XF("invoiceNumber","Invoice number","text"),XF("deliveryNote","Delivery note","text"),XF("receipt",t("receipt"),"receipt"),XF("notes",t("notes"),"textarea",null,1)];
@@ -4682,17 +4692,22 @@ function v35SetRange(scope, field, value) {
   save(); render();
 }
 
+// Shared by every chart block below (company/USA/Iraq, construction, payroll)
+// so "Last 12 Months / Custom" only has one implementation and one look.
+function v35RangeControls(key, cur) {
+  return `<div class="filter-bar inline">
+    <div class="seg">
+      <button class="${cur.preset !== "custom" ? "on" : ""}" onclick="v35SetRange('${key}','preset','last12')">${T("Last 12 Months", "آخر 12 شهر")}</button>
+      <button class="${cur.preset === "custom" ? "on" : ""}" onclick="v35SetRange('${key}','preset','custom')">${T("Custom", "مخصص")}</button>
+    </div>
+    ${cur.preset === "custom" ? `<input type="month" value="${cur.from}" onchange="v35SetRange('${key}','from',this.value)"> <span class="muted">${T("to", "إلى")}</span> <input type="month" value="${cur.to}" onchange="v35SetRange('${key}','to',this.value)">` : `<span class="muted small">${cur.from} — ${cur.to}</span>`}
+  </div>`;
+}
+
 function v35ChartsBlock(scope, title) {
   const cur = v35RangeState(scope);
   const { revenue, costs, net } = v35Series(scope, cur.from, cur.to);
-  const controls = `<div class="filter-bar inline">
-    <div class="seg">
-      <button class="${cur.preset !== "custom" ? "on" : ""}" onclick="v35SetRange('${scope}','preset','last12')">${T("Last 12 Months", "آخر 12 شهر")}</button>
-      <button class="${cur.preset === "custom" ? "on" : ""}" onclick="v35SetRange('${scope}','preset','custom')">${T("Custom", "مخصص")}</button>
-    </div>
-    ${cur.preset === "custom" ? `<input type="month" value="${cur.from}" onchange="v35SetRange('${scope}','from',this.value)"> <span class="muted">${T("to", "إلى")}</span> <input type="month" value="${cur.to}" onchange="v35SetRange('${scope}','to',this.value)">` : `<span class="muted small">${cur.from} — ${cur.to}</span>`}
-  </div>`;
-  return `<div class="page-head"><h2>${esc(title)}</h2></div>${controls}
+  return `<div class="page-head"><h2>${esc(title)}</h2></div>${v35RangeControls(scope, cur)}
     <div class="grid-3">
       ${card(T("Monthly Revenue", "الإيراد الشهري"), chBars(revenue, { color: C.rev }))}
       ${card(T("Monthly Expenses & Costs", "المصاريف والتكاليف الشهرية"), chBars(costs, { color: C.exp }))}
@@ -4700,17 +4715,143 @@ function v35ChartsBlock(scope, title) {
     </div>`;
 }
 
+/* ============================================================
+   V35B — Construction project charts (whole + per project) and
+   Payroll & Commission charts. Same "always on, last 12 months or
+   custom" pattern as V35 above, extended to:
+     - Construction Funding (every construction project, combined)
+     - each project's own Summary tab
+     - the Payroll page (salaries vs. commissions vs. combined total)
+   ============================================================ */
+Object.assign(C, { mat: "#f0b429", lab: "#9c6ade" });
+
+/* Revenue / Materials / Labor / Total / Net for whichever projects
+   `matchesProject(projectId)` accepts -- one project, or every construction
+   project at once. Mirrors xTotals()'s own field names (gross funding as
+   revenue, exp+mat+lab as total, revenue+fee-direct as the project's result)
+   but split by month, so this reads as the same numbers the Summary tab and
+   Client Statement already show, just over time instead of as one snapshot.
+   Larsa's own consultancy fee is included in revenue here for the same
+   reason it is in xTotals.result -- it is money the project earned Larsa,
+   even though it never reaches the construction trust balance. */
+function v35ProjectLikeSeries(matchesProject, from, to) {
+  const keys = v35MonthKeys(from, to);
+  const rev = Object.fromEntries(keys.map((k) => [k, 0]));
+  const mat = Object.fromEntries(keys.map((k) => [k, 0]));
+  const lab = Object.fromEntries(keys.map((k) => [k, 0]));
+  const exp = Object.fromEntries(keys.map((k) => [k, 0]));
+  const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in rev ? k : null; };
+  const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
+
+  (state.funding || []).forEach((f) => {
+    const k = (matchesProject(f.projectId) && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
+    if (k) rev[k] += usd(f.amount, f.currency) + (f.waived ? 0 : usd(f.consultancyFee, f.currency));
+  });
+  (state.revenue || []).forEach((r) => {
+    const k = (matchesProject(r.projectId) && r.status === "Received") ? bucket(r.date) : null;
+    if (k) rev[k] += usd(r.amount, r.currency);
+  });
+  (state.expenses || []).forEach((e) => {
+    const k = (matchesProject(e.projectId) && actual(e.status)) ? bucket(e.date) : null;
+    if (k) exp[k] += usd(e.amount, e.currency);
+  });
+  (state.materials || []).forEach((m) => {
+    const k = (matchesProject(m.projectId) && actual(m.status)) ? bucket(m.date) : null;
+    if (k) mat[k] += usd(m.amount, m.currency);
+  });
+  (state.projectLabor || []).forEach((l) => {
+    const k = (matchesProject(l.projectId) && actual(l.status)) ? bucket(l.date) : null;
+    if (k) lab[k] += usd(l.total, l.currency);
+  });
+
+  return {
+    revenue: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k]) })),
+    materials: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(mat[k]) })),
+    labor: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(lab[k]) })),
+    total: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(exp[k] + mat[k] + lab[k]) })),
+    net: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k] - (exp[k] + mat[k] + lab[k])) })),
+  };
+}
+function v35ProjectSeries(pid, from, to) {
+  return v35ProjectLikeSeries((id) => id === pid, from, to);
+}
+// Same "construction" definition already used for the advanced workbook
+// export (type Construction, or a project currently in the Execution phase).
+function v35ConstructionProjects() {
+  return new Set((state.projects || []).filter((p) => p.type === "Construction" || p.phase === "Execution").map((p) => p.id));
+}
+function v35ConstructionSeries(from, to) {
+  const ids = v35ConstructionProjects();
+  return v35ProjectLikeSeries((id) => ids.has(id), from, to);
+}
+
+function v35FiveChartsBlock(rangeKey, seriesFn, title) {
+  const cur = v35RangeState(rangeKey);
+  const s = seriesFn(cur.from, cur.to);
+  return `<div class="page-head"><h2>${esc(title)}</h2></div>${v35RangeControls(rangeKey, cur)}
+    <div class="grid-3">
+      ${card(T("Monthly Revenue", "الإيراد الشهري"), chBars(s.revenue, { color: C.rev }))}
+      ${card(T("Monthly Total Expenses", "إجمالي المصاريف الشهرية"), chBars(s.total, { color: C.exp }))}
+      ${card(T("Monthly Net Profit", "صافي الربح الشهري"), chBars(s.net, { signed: true }))}
+    </div>
+    <div class="grid-2" style="margin-top:18px">
+      ${card(T("Monthly Materials", "المواد الشهرية"), chBars(s.materials, { color: C.mat }))}
+      ${card(T("Monthly Labor", "العمالة الشهرية"), chBars(s.labor, { color: C.lab }))}
+    </div>`;
+}
+
+/* Payroll's own monthly trend: salaries, commissions, and the two combined.
+   Company cost (not gross pay) is used for salaries so this agrees with the
+   "Company payroll cost" KPI already shown on this page and with totals()'s
+   own definition of payroll cost everywhere else. */
+function v35PayrollSeries(from, to) {
+  const keys = v35MonthKeys(from, to);
+  const sal = Object.fromEntries(keys.map((k) => [k, 0]));
+  const com = Object.fromEntries(keys.map((k) => [k, 0]));
+  const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in sal ? k : null; };
+  (state.payroll || []).forEach((p) => {
+    const k = !["Void", "Rejected"].includes(p.status) ? bucket(p.payDate) : null;
+    if (k) sal[k] += usd(p.totalCompanyCost || p.grossPay || p.gross || 0, p.currency);
+  });
+  (state.commissions || []).forEach((c) => {
+    const k = !["Void", "Rejected"].includes(c.status) ? bucket(c.date) : null;
+    if (k) com[k] += num(c.due);
+  });
+  return {
+    salaries: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(sal[k]) })),
+    commissions: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(com[k]) })),
+    totals: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(sal[k] + com[k]) })),
+  };
+}
+function v35PayrollChartsBlock() {
+  const cur = v35RangeState("payroll");
+  const { salaries, commissions, totals } = v35PayrollSeries(cur.from, cur.to);
+  return `<div class="page-head"><h2>${T("Payroll &amp; Commission Trend", "اتجاه الرواتب والعمولات")}</h2></div>${v35RangeControls("payroll", cur)}
+    <div class="grid-3">
+      ${card(T("Monthly Salaries", "الرواتب الشهرية"), chBars(salaries, { color: C.rev }))}
+      ${card(T("Monthly Commissions", "العمولات الشهرية"), chBars(commissions, { color: C.mat }))}
+      ${card(T("Monthly Total Payroll Cost", "إجمالي تكلفة الرواتب الشهرية"), chBars(totals, { color: C.exp }))}
+    </div>`;
+}
+
 // Non-destructive: each wrapped renderer still runs exactly as it did, this
-// only appends the chart block(s) right after its page heading -- the same
+// only appends HTML right after its page heading -- the same
 // insertAdjacentHTML pattern renderDashboardEnterprise already uses above to
 // layer a KPI row onto the base dashboard without touching its template.
-function v35AppendAll(rendererName, blocks) {
+// RENDERERS is read at call time (not captured early), so this safely wraps
+// whatever the CURRENT renderer is for that id, however many earlier patches
+// already replaced it -- payroll alone has been reassigned four times before
+// this file reaches here.
+function v35AppendHTML(rendererName, htmlFn) {
   const prev = RENDERERS[rendererName];
   RENDERERS[rendererName] = function () {
     prev();
     const head = document.querySelector("#view .page-head");
-    if (head) head.insertAdjacentHTML("afterend", blocks.map((b) => v35ChartsBlock(b.scope, b.title)).join(""));
+    if (head) head.insertAdjacentHTML("afterend", htmlFn());
   };
+}
+function v35AppendAll(rendererName, blocks) {
+  v35AppendHTML(rendererName, () => blocks.map((b) => v35ChartsBlock(b.scope, b.title)).join(""));
 }
 const V35_TITLES = {
   all: T("Company Financial Trend", "الاتجاه المالي للشركة"),
@@ -4727,6 +4868,43 @@ v35AppendAll("master", [
   { scope: "USA", title: V35_TITLES.USA },
   { scope: "Iraq", title: V35_TITLES.Iraq },
 ]);
+
+// Construction Funding -- every construction project combined, the same
+// revenue / total (materials + labor) / net-profit shape as above, plus the
+// materials and labor split out on their own since those are the two costs
+// this page (and this business) actually tracks by hand.
+v35AppendHTML("funding", () => v35FiveChartsBlock(
+  "construction",
+  (from, to) => v35ConstructionSeries(from, to),
+  T("Construction Financial Trend — All Projects", "الاتجاه المالي للتنفيذ — كل المشاريع"),
+));
+
+// Payroll -- salaries, commissions, and the two combined, month by month.
+v35AppendHTML("payroll", () => v35PayrollChartsBlock());
+
+// Each construction project gets its own copy of the same five charts, on
+// its Summary tab only -- Materials/Labor/etc. already have their own ledger
+// tabs, and repeating the charts there would just be noise. xRenderProject
+// has been reassigned several times earlier in this file (v3.7, v3.10...);
+// capturing it here, at the very end, wraps whichever version is actually
+// live, the same way v35AppendHTML wraps whatever is live in RENDERERS.
+(function () {
+  const prevRenderProject = xRenderProject;
+  xRenderProject = function () {
+    prevRenderProject();
+    if (window.xTab && window.xTab !== "summary") return;
+    const pid = window.xProject;
+    if (!pid) return;
+    const head = document.querySelector("#view .page-head");
+    if (head) {
+      head.insertAdjacentHTML("afterend", v35FiveChartsBlock(
+        `project:${pid}`,
+        (from, to) => v35ProjectSeries(pid, from, to),
+        T("Financial Trend", "الاتجاه المالي"),
+      ));
+    }
+  };
+})();
 </script>
 
 </body>

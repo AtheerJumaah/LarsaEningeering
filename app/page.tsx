@@ -6436,28 +6436,26 @@ function Overview({
         </div>
         {reminderGroups.length > 0 && (
           <div className="reminder-columns">
-            {reminderGroups.map(({ group, rows }) => (
-              <section className="reminder-column" key={group}>
-                <h4>{group}<span>{rows.length}</span></h4>
-                {rows.map((reminder) => (
-                  <button
-                    type="button"
-                    key={reminder.id}
-                    className={`reminder-row ${reminder.tone}`}
-                    onClick={() => openReminder(reminder)}
-                    disabled={!reminder.itemId}
-                  >
-                    <i aria-hidden="true" />
-                    <span>
-                      <b>{reminder.title}</b>
-                      <small>{reminder.detail}</small>
-                      {reminder.meta && <em>{reminder.meta}</em>}
-                    </span>
-                    {reminder.itemId && <ArrowRight size={15} />}
-                  </button>
-                ))}
-              </section>
-            ))}
+            {reminderGroups.flatMap(({ group, rows }) =>
+              rows.map((reminder) => (
+                <button
+                  type="button"
+                  key={reminder.id}
+                  className={`reminder-row ${reminder.tone}`}
+                  onClick={() => openReminder(reminder)}
+                  disabled={!reminder.itemId}
+                >
+                  <i aria-hidden="true" />
+                  <span>
+                    <label>{group}</label>
+                    <b>{reminder.title}</b>
+                    <small>{reminder.detail}</small>
+                    {reminder.meta && <em>{reminder.meta}</em>}
+                  </span>
+                  {reminder.itemId && <ArrowRight size={15} />}
+                </button>
+              )),
+            )}
           </div>
         )}
       </section>
