@@ -2532,6 +2532,7 @@ export default function Home() {
   // app behaves exactly as it always has. See lib/supabase/sync.ts.
   useEffect(() => {
     if (!hydrated) return;
+    console.log("[larsa-sync] effect fired, hydrated =", hydrated);
     const cleanup = initLarsaSync({
       onRemoteChange: () => {
         setStorageTick((value) => value + 1);

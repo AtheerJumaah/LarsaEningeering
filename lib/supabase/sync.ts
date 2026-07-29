@@ -48,9 +48,17 @@ function hasContent(value: unknown): boolean {
 }
 
 export function initLarsaSync(options: SyncOptions = {}): () => void {
-  if (typeof window === "undefined" || !supabaseConfigured()) return () => {};
+  if (typeof window === "undefined") return () => {};
+  if (!supabaseConfigured()) {
+    console.warn("[larsa-sync] not configured — NEXT_PUBLIC_SUPABASE_URL/ANON_KEY missing at build time. Sync is off.");
+    return () => {};
+  }
   const client = getSupabaseClient();
-  if (!client) return () => {};
+  if (!client) {
+    console.warn("[larsa-sync] getSupabaseClient() returned null even though supabaseConfigured() was true. Sync is off.");
+    return () => {};
+  }
+  console.log("[larsa-sync] starting up");
   // Re-bound to a definitely-non-null const: the functions below are
   // closures that run later, asynchronously, and TypeScript can't carry the
   // null-check above across that gap on its own.
@@ -67,8 +75,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   async function ensureSession() {
     const { data } = await supabase.auth.getSession();
     if (!data.session) {
+      console.log("[larsa-sync] no local session — calling signInAnonymously()");
       const { error } = await supabase.auth.signInAnonymously();
       if (error) throw error;
+      console.log("[larsa-sync] signInAnonymously() succeeded");
+    } else {
+      console.log("[larsa-sync] reusing existing local session, user id:", data.session.user?.id);
     }
   }
 
@@ -109,7 +121,15 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     try {
       await ensureSession();
       await Promise.all(SYNCED_KEYS.map(async (key) => {
-        const { data: row } = await supabase.from("app_state").select("data").eq("store_key", key).maybeSingle();
+        const { data: row, error: selectError } = await supabase
+          .from("app_state")
+          .select("data")
+          .eq("store_key", key)
+          .maybeSingle();
+        if (selectError) {
+          console.error(`[larsa-sync] select failed for "${key}":`, selectError);
+          throw selectError;
+        }
         const remote = row?.data;
         const local = readLocal(key);
         if (hasContent(remote)) {
@@ -118,15 +138,21 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           originalSetItem(key, text);
           lastKnown.set(key, text);
           if (text !== before) caughtUpKeys.push(key);
+          console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
         } else if (hasContent(local)) {
           // First device to sign in with real local data seeds the table.
+          console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
           await pushKey(key);
+        } else {
+          console.log(`[larsa-sync] "${key}" empty both locally and remotely — nothing to do`);
         }
       }));
       if (cancelled) return;
       options.onStatusChange?.("synced");
+      console.log("[larsa-sync] initial catch-up complete, keys updated:", caughtUpKeys);
       caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
-    } catch {
+    } catch (err) {
+      console.error("[larsa-sync] bootstrap failed — sync is OFF for this session:", err);
       options.onStatusChange?.("offline");
       return;
     }
@@ -143,10 +169,13 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           if (lastKnown.get(row.store_key) === text) return; // our own write, echoed back
           lastKnown.set(row.store_key, text);
           originalSetItem(row.store_key, text);
+          console.log(`[larsa-sync] realtime change received for "${row.store_key}"`);
           options.onRemoteChange?.(row.store_key as SyncedKey);
         },
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log("[larsa-sync] realtime channel status:", status, err ?? "");
+      });
 
     cleanupChannel = () => { supabase.removeChannel(channel); };
   }
