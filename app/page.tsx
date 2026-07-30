@@ -454,7 +454,7 @@ const EMAIL_DEFAULT_EVENTS = new Set([
 const DEFAULT_NOTIFY_PREFS: NotifyPrefs = Object.fromEntries(
     NOTIFY_EVENTS.map((event) => [event.id, {
           inApp: true,
-          push: event.id === "admin.broadcast",
+          push: EMAIL_DEFAULT_EVENTS.has(event.id),
           email: EMAIL_DEFAULT_EVENTS.has(event.id),
     }]),
   );
