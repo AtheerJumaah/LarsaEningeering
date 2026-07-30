@@ -106,7 +106,8 @@ type NativeView =
   | "development"
   | "performanceHistory"
   | "projects"
-  | "notifications";
+  | "notifications"
+  | "constructionFinancials";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -374,12 +375,35 @@ type PayrollRow = {
   id: string; employee: string; employeeId: string; payDate: string; period: string;
   grossPay: number; totalCompanyCost: number; currency: string; status: string; region: string;
 };
+/* The cost and income lines the accounting engine keeps per project. Only the
+   fields the construction analysis needs are lifted out; the engine stays the
+   system of record and nothing here writes back. Materials store a derived
+   `amount` (quantity x unit price) and labour a derived `total`
+   (quantity x rate), which is what the engine's own totals use. */
+type LedgerLine = {
+  id: string;
+  projectId: string;
+  date: string;
+  status: string;
+  currency: string;
+  amount: number;
+  /* funding only: Larsa's consultancy fee on that payment, and whether it was
+     waived for this particular payment. */
+  consultancyFee: number;
+  waived: boolean;
+  label: string;
+};
 type AccountingSnapshot = {
   key: string;
   projects: AccountingProject[];
   documents: AccountingDocument[];
   commissions: CommissionRow[];
   payroll: PayrollRow[];
+  funding: LedgerLine[];
+  revenue: LedgerLine[];
+  materials: LedgerLine[];
+  labor: LedgerLine[];
+  expenses: LedgerLine[];
 };
 
 // Every event that can reach a person, and who it is aimed at by default.
@@ -492,6 +516,13 @@ const PROJECT_PORTAL_ITEM: Item = {
   code: "AP",
   native: "projects",
 };
+const CONSTRUCTION_FINANCIALS_ITEM: Item = {
+  id: "construction-financials",
+  label: "Construction Financials",
+  description: "Company, Iraq, USA, and per-project cost and profit",
+  code: "CX",
+  native: "constructionFinancials",
+};
 const EXTRA_PERMISSION_ITEMS = [PERFORMANCE_REVIEW_ITEM, PERFORMANCE_TARGETS_ITEM, NOTIFICATIONS_ITEM];
 
 const GROUPS: Group[] = [
@@ -539,6 +570,7 @@ const GROUPS: Group[] = [
     label: "Accounting",
     items: [
       engineItem("accounting", "acc-dashboard", "Accounting Dashboard", "Financial overview and alerts", "AD", "dashboard"),
+      CONSTRUCTION_FINANCIALS_ITEM,
       PROJECT_PORTAL_ITEM,
       engineItem("accounting", "acc-master", "Profit & Loss", "Company master P&L view", "PL", "master"),
       engineItem("accounting", "acc-funding", "Construction Funding", "Funding and consultancy balances", "CF", "funding"),
@@ -691,6 +723,7 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
   "hr-matrix": FULL_EDIT,
   "hr-reports": VIEW_EXPORT,
   "project-portal": ["view", "edit", "export"],
+  "construction-financials": ["view", "export"],
   access: ["view", "add", "edit", "delete", "manage"],
   "admin-notifications": ["view", "add", "edit", "delete", "manage"],
   data: ["view", "export", "manage"],
@@ -814,7 +847,7 @@ const ACCOUNTING_TREE: { id: string; label: string; description: string; icon: s
   {
     id: "acc-grp-construction", tone: "amber", label: "Construction Projects", icon: "acc-projects",
     description: "Project delivery costs: expenses, materials, labour, and pricing",
-    items: ["acc-projects", "project-portal", "acc-expenses", "acc-materials", "acc-labor", "acc-boq"],
+    items: ["acc-projects", "construction-financials", "project-portal", "acc-expenses", "acc-materials", "acc-labor", "acc-boq"],
   },
   {
     id: "acc-grp-people", tone: "violet", label: "Payroll & People", icon: "acc-payroll",
@@ -851,6 +884,7 @@ const ICONS: Record<string, LucideIcon> = {
   "hr-reports": IdCard,
   "acc-dashboard": LayoutDashboard,
   "project-portal": FolderLock,
+  "construction-financials": FileBarChart,
   "acc-master": CircleDollarSign,
   "acc-funding": WalletCards,
   "acc-iq-revenue": Landmark,
@@ -1096,6 +1130,7 @@ function presetPermissionProfile(preset: string): PermissionProfile {
     ["acc-dashboard", "acc-funding", "acc-expenses", "acc-materials", "acc-labor", "acc-clients", "acc-projects", "acc-boq", "acc-refs", "acc-reports", "acc-review"].forEach((id) =>
       allow(id, ["view", "add", "edit", "approve", "export"]),
     );
+    allow("construction-financials", VIEW_EXPORT);
   } else if (preset === "Construction Engineer") {
     ["staff-clock", "staff-live", "staff-schedule", "staff-performance"].forEach((id) =>
       allow(id, id === "staff-live" ? VIEW_ONLY : BASIC_EDIT),
@@ -1105,6 +1140,7 @@ function presetPermissionProfile(preset: string): PermissionProfile {
     allow("performance-history", VIEW_ONLY);
     allow("staff-timesheet", VIEW_EXPORT);
     allow("project-portal", ["view", "edit", "export"]);
+    allow("construction-financials", VIEW_EXPORT);
     ["acc-expenses", "acc-materials", "acc-labor", "acc-projects", "acc-boq", "acc-review"].forEach((id) =>
       allow(id, BASIC_EDIT),
     );
@@ -1477,7 +1513,8 @@ function channelForItem(item: Item): NavChannel {
   ) {
     return "performance";
   }
-  if (item.id === "project-portal" || item.id === "accounting-hub") return "accounting";
+  if (item.id === "project-portal" || item.id === "accounting-hub"
+    || item.id === "construction-financials") return "accounting";
   if (item.engine === "staff") return "time";
   if (item.engine === "hr") return "hr";
   if (item.engine === "accounting") return "accounting";
@@ -2541,8 +2578,37 @@ function roomMembers(projectId: string, staff: StaffUser[], projects: Accounting
     && visibleProjectIds(person, projects).has(projectId));
 }
 
+/* Rates the engine itself uses to report every currency in USD. Kept in step
+   with usd() in public/engines/accounting.html so the two sides never disagree
+   about what a project earned. */
+const FX_TO_USD: Record<string, number> = { USD: 1, IQD: 1 / 1320 };
+function toUsd(amount: unknown, currency: unknown) {
+  const rate = FX_TO_USD[String(currency || "USD").toUpperCase()] ?? 1;
+  return finiteNumber(amount) * rate;
+}
+/* A line only counts once it is real money: the engine treats these as
+   settled and excludes anything still requested, pending, or rejected. */
+const SETTLED = ["Approved", "Paid", "Received"];
+function readLedger(rows: unknown, amountKey: string): LedgerLine[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row: Record<string, unknown>) => ({
+    id: String(row.id || ""),
+    projectId: String(row.projectId || ""),
+    date: String(row.date || ""),
+    status: String(row.status || ""),
+    currency: String(row.currency || "USD"),
+    amount: finiteNumber(row[amountKey]),
+    consultancyFee: finiteNumber(row.consultancyFee),
+    waived: row.waived === true,
+    label: String(row.itemName || row.trade || row.description || row.category || ""),
+  }));
+}
+
 function readAccountingSnapshot(): AccountingSnapshot {
-  const empty: AccountingSnapshot = { key: "", projects: [], documents: [], commissions: [], payroll: [] };
+  const empty: AccountingSnapshot = {
+    key: "", projects: [], documents: [], commissions: [], payroll: [],
+    funding: [], revenue: [], materials: [], labor: [], expenses: [],
+  };
   if (typeof window === "undefined") return empty;
   const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
     .filter((key): key is string => Boolean(key?.toLowerCase().startsWith("larsa")));
@@ -2620,9 +2686,364 @@ function readAccountingSnapshot(): AccountingSnapshot {
         status: String(row.status || ""),
         region: String(row.region || ""),
       }));
-    return { key, projects, documents, commissions, payroll };
+    return {
+      key, projects, documents, commissions, payroll,
+      funding: readLedger(store.funding, "amount"),
+      revenue: readLedger(store.revenue, "amount"),
+      materials: readLedger(store.materials, "amount"),
+      labor: readLedger(store.projectLabor, "total"),
+      expenses: readLedger(store.expenses, "amount"),
+    };
   }
   return empty;
+}
+
+/* ============================================================
+   Construction financials
+   One project's figures, and the same figures added up for a
+   region or the whole company. The arithmetic deliberately
+   mirrors xTotals() and v35ProjectLikeSeries() inside
+   public/engines/accounting.html so a number here always equals
+   the number on the engine's own Summary tab and client
+   statement:
+     income  = client funding + Larsa's consultancy fee on it
+               + any engineering revenue booked to the project
+     cost    = materials + labour + other project expenses
+     net     = income - cost
+   The consultancy fee counts as income even though it never
+   lands in the construction trust balance, because it is what
+   the project earned Larsa. A fee waived on a payment is not
+   counted for that payment.
+   ============================================================ */
+type ProjectFinancials = {
+  income: number; funding: number; fees: number; revenue: number;
+  materials: number; labor: number; expenses: number; cost: number; net: number;
+  margin: number;
+};
+const ZERO_FINANCIALS: ProjectFinancials = {
+  income: 0, funding: 0, fees: 0, revenue: 0,
+  materials: 0, labor: 0, expenses: 0, cost: 0, net: 0, margin: 0,
+};
+function sumLedger(rows: LedgerLine[], ids: Set<string> | null) {
+  return rows.reduce((total, row) => {
+    if (ids && !ids.has(row.projectId)) return total;
+    if (!SETTLED.includes(row.status)) return total;
+    return total + toUsd(row.amount, row.currency);
+  }, 0);
+}
+function financialsFor(snapshot: AccountingSnapshot, ids: Set<string> | null): ProjectFinancials {
+  const funding = sumLedger(snapshot.funding, ids);
+  const fees = snapshot.funding.reduce((total, row) => {
+    if (ids && !ids.has(row.projectId)) return total;
+    if (!SETTLED.includes(row.status) || row.waived) return total;
+    return total + toUsd(row.consultancyFee, row.currency);
+  }, 0);
+  const revenue = sumLedger(snapshot.revenue, ids);
+  const materials = sumLedger(snapshot.materials, ids);
+  const labor = sumLedger(snapshot.labor, ids);
+  const expenses = sumLedger(snapshot.expenses, ids);
+  const income = funding + fees + revenue;
+  const cost = materials + labor + expenses;
+  const net = income - cost;
+  return {
+    income, funding, fees, revenue, materials, labor, expenses, cost, net,
+    margin: income > 0 ? (net / income) * 100 : 0,
+  };
+}
+function money(value: number) {
+  const rounded = Math.round(value);
+  return `$${rounded.toLocaleString("en-US")}`;
+}
+
+/* A worked example, held in memory and never written to storage or synced, so
+   the layout can be read and checked against real arithmetic before the
+   company's own figures are in. Four projects across both regions, with a
+   deliberately loss-making one and a fee-waived payment, because those are
+   the cases worth being able to spot. Toggled off, this view shows the real
+   accounting store instead — same columns, same maths. */
+function sampleConstructionSnapshot(): AccountingSnapshot {
+  const project = (
+    id: string, code: string, name: string, clientName: string,
+    region: string, status: string,
+  ): AccountingProject => ({
+    id, code, name, clientName, clientEmail: "", region,
+    type: "Construction", phase: "Execution", status, priority: "Normal",
+    responsibleEngineer: "", projectManager: "", teamLeader: "",
+    startDate: "", dueDate: "", projectAddress: "", progress: 0,
+    googleDriveLink: "", clickUpLink: "",
+  });
+  const line = (
+    projectId: string, date: string, amount: number, label: string,
+    extra: Partial<LedgerLine> = {},
+  ): LedgerLine => ({
+    id: `${projectId}-${date}-${label}`, projectId, date, status: "Approved",
+    currency: "USD", amount, consultancyFee: 0, waived: false, label, ...extra,
+  });
+  return {
+    key: "sample",
+    documents: [], commissions: [], payroll: [],
+    projects: [
+      project("sp1", "IQ-101", "Erbil Residential Tower", "Barzani Holdings", "Iraq", "Active"),
+      project("sp2", "IQ-102", "Basra Warehouse Complex", "Gulf Logistics", "Iraq", "Active"),
+      project("sp3", "US-201", "Houston Office Fit-Out", "Lone Star Realty", "USA", "Active"),
+      project("sp4", "IQ-103", "Mosul Clinic Extension", "Health Ministry", "Iraq", "On Hold"),
+    ],
+    /* Client money into the construction trust, with Larsa's consultancy fee
+       on each payment. sp2's March payment is waived, so its fee is nil. */
+    funding: [
+      line("sp1", "2026-02-10", 400000, "Advance", { consultancyFee: 20000, status: "Received" }),
+      line("sp1", "2026-04-12", 350000, "Stage 2", { consultancyFee: 17500, status: "Received" }),
+      line("sp1", "2026-06-15", 250000, "Stage 3", { consultancyFee: 12500, status: "Received" }),
+      line("sp2", "2026-03-05", 180000, "Advance", { consultancyFee: 9000, waived: true, status: "Received" }),
+      line("sp2", "2026-05-20", 220000, "Stage 2", { consultancyFee: 11000, status: "Received" }),
+      line("sp4", "2026-04-01", 90000, "Advance", { consultancyFee: 4500, status: "Received" }),
+    ],
+    // USA construction is billed as engineering revenue, not trust funding.
+    revenue: [
+      line("sp3", "2026-03-18", 210000, "Fit-out billing", { status: "Received" }),
+      line("sp3", "2026-05-22", 165000, "Fit-out billing 2", { status: "Received" }),
+    ],
+    materials: [
+      line("sp1", "2026-02-20", 190000, "Concrete & rebar"),
+      line("sp1", "2026-04-18", 145000, "Cladding"),
+      line("sp1", "2026-06-20", 96000, "Finishes"),
+      line("sp2", "2026-03-12", 120000, "Steel frame"),
+      line("sp2", "2026-05-25", 88000, "Roof sheeting"),
+      line("sp3", "2026-03-25", 74000, "Partitions & glazing"),
+      line("sp3", "2026-05-28", 51000, "Flooring"),
+      line("sp4", "2026-04-10", 68000, "Blockwork"),
+    ],
+    labor: [
+      line("sp1", "2026-02-25", 82000, "Structural crew"),
+      line("sp1", "2026-04-22", 64000, "Cladding crew"),
+      line("sp1", "2026-06-24", 41000, "Finishing crew"),
+      line("sp2", "2026-03-16", 58000, "Erection crew"),
+      line("sp2", "2026-05-28", 39000, "Roofing crew"),
+      line("sp3", "2026-03-28", 46000, "Fit-out crew"),
+      line("sp3", "2026-05-30", 32000, "Finishing crew"),
+      line("sp4", "2026-04-15", 43000, "Masonry crew"),
+    ],
+    expenses: [
+      line("sp1", "2026-03-01", 26000, "Site supervision"),
+      line("sp1", "2026-05-01", 21000, "Equipment hire"),
+      line("sp2", "2026-04-02", 18000, "Site supervision"),
+      line("sp3", "2026-04-05", 15000, "Permits & inspection"),
+      line("sp4", "2026-05-05", 24000, "Site supervision"),
+    ],
+  };
+}
+
+function ConstructionFinancials({
+  snapshot, viewer,
+}: {
+  snapshot: AccountingSnapshot;
+  viewer: StaffUser | null;
+}) {
+  const [useSample, setUseSample] = useState(false);
+  const [region, setRegion] = useState("All");
+  const [openProject, setOpenProject] = useState("");
+
+  const sample = useMemo(() => sampleConstructionSnapshot(), []);
+  const live = useSample ? sample : snapshot;
+
+  // Only projects this account is allowed to see, and only construction ones.
+  const allowed = useMemo(
+    () => (useSample ? new Set(sample.projects.map((row) => row.id)) : visibleProjectIds(viewer, snapshot.projects)),
+    [useSample, sample, viewer, snapshot.projects],
+  );
+  const projects = useMemo(
+    () => live.projects.filter((row) => allowed.has(row.id)
+      && (row.type === "Construction" || row.phase === "Execution")
+      && (region === "All" || row.region === region)),
+    [live.projects, allowed, region],
+  );
+
+  const rows = useMemo(
+    () => projects
+      .map((project) => ({ project, figures: financialsFor(live, new Set([project.id])) }))
+      .sort((a, b) => b.figures.income - a.figures.income),
+    [projects, live],
+  );
+  const totals = useMemo(
+    () => (projects.length
+      ? financialsFor(live, new Set(projects.map((row) => row.id)))
+      : ZERO_FINANCIALS),
+    [projects, live],
+  );
+  // The same figures per region, so the company splits are always visible.
+  const regionRows = useMemo(() => ["Iraq", "USA"].map((name) => {
+    const ids = new Set(live.projects
+      .filter((row) => allowed.has(row.id)
+        && (row.type === "Construction" || row.phase === "Execution")
+        && row.region === name)
+      .map((row) => row.id));
+    return { name, count: ids.size, figures: ids.size ? financialsFor(live, ids) : ZERO_FINANCIALS };
+  }), [live, allowed]);
+
+  const costMax = Math.max(1, ...rows.map((row) => Math.max(row.figures.income, row.figures.cost)));
+
+  return (
+    <div className="native-scroll">
+      <section className="overview-hero">
+        <div>
+          <span className="eyebrow">Accounting</span>
+          <h2>Construction financials</h2>
+          <p>
+            Income, materials, labour, expenses, and Larsa&apos;s consultancy fee — for the whole
+            company, for each region, and for every project on its own. Figures follow the
+            accounting engine: a line counts once it is approved, paid, or received, and every
+            currency is reported in USD.
+          </p>
+        </div>
+        <span className="access-pill"><CircleDollarSign size={16} /> USD</span>
+      </section>
+
+      <section className="filter-toolbar">
+        <label>
+          <span>Region</span>
+          <select value={region} onChange={(event) => setRegion(event.target.value)}>
+            <option value="All">Whole company</option>
+            <option value="Iraq">Iraq</option>
+            <option value="USA">USA</option>
+          </select>
+        </label>
+        <label className="notify-push" style={{ marginInlineStart: "auto" }}>
+          <input type="checkbox" checked={useSample} onChange={(event) => setUseSample(event.target.checked)} />
+          <span>Show worked example</span>
+        </label>
+      </section>
+
+      {useSample && (
+        <p className="auth-hint">
+          Showing a four-project example so the figures and layout can be checked. Nothing here is
+          saved or synced — untick to return to the real accounting store.
+        </p>
+      )}
+
+      <section className="metric-grid">
+        {([
+          ["Income", totals.income, "Client funding + fees + revenue"],
+          ["Client funding", totals.funding, "Money received into the trust"],
+          ["Our consultancy fee", totals.fees, "Larsa's earnings, waivers excluded"],
+          ["Materials", totals.materials, "Quantity x unit price"],
+          ["Labour", totals.labor, "Quantity x rate"],
+          ["Other expenses", totals.expenses, "Supervision, hire, permits"],
+          ["Total cost", totals.cost, "Materials + labour + expenses"],
+          ["Net", totals.net, `${totals.margin.toFixed(1)}% margin`],
+        ] as [string, number, string][]).map(([label, value, note]) => (
+          <article className="metric-card" key={label}>
+            <small>{label}</small>
+            <b style={label === "Net" && value < 0 ? { color: "#b42318" } : undefined}>{money(value)}</b>
+            <em>{note}</em>
+          </article>
+        ))}
+      </section>
+
+      <section className="settings-panel">
+        <div className="section-head">
+          <div><span className="eyebrow">By region</span><h3>Iraq and USA side by side</h3></div>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Region</th><th>Projects</th><th>Income</th><th>Our fee</th>
+                <th>Materials</th><th>Labour</th><th>Expenses</th><th>Cost</th><th>Net</th><th>Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {regionRows.map((row) => (
+                <tr key={row.name}>
+                  <td><b>{row.name}</b></td>
+                  <td>{row.count}</td>
+                  <td>{money(row.figures.income)}</td>
+                  <td>{money(row.figures.fees)}</td>
+                  <td>{money(row.figures.materials)}</td>
+                  <td>{money(row.figures.labor)}</td>
+                  <td>{money(row.figures.expenses)}</td>
+                  <td>{money(row.figures.cost)}</td>
+                  <td style={row.figures.net < 0 ? { color: "#b42318", fontWeight: 900 } : { fontWeight: 900 }}>
+                    {money(row.figures.net)}
+                  </td>
+                  <td>{row.figures.margin.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="settings-panel">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Project by project</span>
+            <h3>{rows.length} construction project{rows.length === 1 ? "" : "s"}</h3>
+          </div>
+        </div>
+        {!rows.length && (
+          <div className="empty compact">
+            No construction projects to report yet. Add them in the accounting engine, or tick
+            &ldquo;Show worked example&rdquo; above to see how this reads with figures in place.
+          </div>
+        )}
+        {rows.map(({ project, figures }) => {
+          const open = openProject === project.id;
+          return (
+            <article className="project-financial" key={project.id}>
+              <button
+                type="button"
+                className="project-financial-head"
+                onClick={() => setOpenProject(open ? "" : project.id)}
+                aria-expanded={open}
+              >
+                <span className="pf-name">
+                  <b>{project.code ? `${project.code} · ` : ""}{project.name}</b>
+                  <small>{[project.clientName, project.region, project.status].filter(Boolean).join(" · ")}</small>
+                </span>
+                <span className="pf-figure"><small>Income</small><b>{money(figures.income)}</b></span>
+                <span className="pf-figure"><small>Cost</small><b>{money(figures.cost)}</b></span>
+                <span className="pf-figure">
+                  <small>Net</small>
+                  <b style={figures.net < 0 ? { color: "#b42318" } : undefined}>{money(figures.net)}</b>
+                </span>
+                <ChevronRight size={16} className={open ? "pf-caret open" : "pf-caret"} />
+              </button>
+              {/* Income against cost, on one scale across every project, so a
+                  project running close to or past its income is obvious. */}
+              <div className="pf-bars">
+                <span className="pf-bar income" style={{ width: `${(figures.income / costMax) * 100}%` }} />
+                <span className="pf-bar cost" style={{ width: `${(figures.cost / costMax) * 100}%` }} />
+              </div>
+              {open && (
+                <div className="pf-detail">
+                  {([
+                    ["Client funding", figures.funding],
+                    ["Our consultancy fee", figures.fees],
+                    ["Engineering revenue", figures.revenue],
+                    ["Materials", figures.materials],
+                    ["Labour", figures.labor],
+                    ["Other expenses", figures.expenses],
+                    ["Total cost", figures.cost],
+                    ["Net result", figures.net],
+                  ] as [string, number][]).map(([label, value]) => (
+                    <div className="pf-row" key={label}>
+                      <span>{label}</span>
+                      <b style={label === "Net result" && value < 0 ? { color: "#b42318" } : undefined}>
+                        {money(value)}
+                      </b>
+                    </div>
+                  ))}
+                  <div className="pf-row total">
+                    <span>Margin on income</span><b>{figures.margin.toFixed(1)}%</b>
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </section>
+    </div>
+  );
 }
 
 function visibleProjectIds(user: StaffUser | null, projects: AccountingProject[]) {
@@ -5630,7 +6051,10 @@ export default function Home() {
   const accountingSnapshot = useMemo(
     () => (hydrated
       ? readAccountingSnapshot()
-      : { key: "", projects: [], documents: [], commissions: [], payroll: [] } as AccountingSnapshot),
+      : {
+        key: "", projects: [], documents: [], commissions: [], payroll: [],
+        funding: [], revenue: [], materials: [], labor: [], expenses: [],
+      } as AccountingSnapshot),
     [hydrated, storageTick],
   );
   // R1: the directory used to expose every account (and its plaintext password
@@ -6183,6 +6607,9 @@ export default function Home() {
               commissions={accountingSnapshot.commissions}
               payroll={accountingSnapshot.payroll}
             />
+          </div>
+          <div className={active.native === "constructionFinancials" ? "native active" : "native"}>
+            <ConstructionFinancials snapshot={accountingSnapshot} viewer={sessionUser} />
           </div>
           <div className={active.native === "projects" ? "native active" : "native"}>
             <ProjectPortal
