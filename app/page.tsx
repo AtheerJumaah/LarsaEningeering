@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess";
 import {
   ArrowLeft,
   ArrowRight,
@@ -206,7 +206,7 @@ type StaffUser = {
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
   phoneAlt?: string;
-  emailVerified?: boolean;
+  emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean;
 };
 type Item = {
   id: string;
@@ -3336,7 +3336,7 @@ export default function Home() {
   const [loginMode, setLoginMode] = useState<SignInMethod>("email");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPass, setLoginPass] = useState("");
-  const [loginPin, setLoginPin] = useState("");
+  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   // Email verification gate: only engaged when Supabase is configured (it's
   // what actually sends the code) and the account hasn't verified its email
@@ -6988,7 +6988,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {!sessionUser && verifyStage && (
+      {sessionUser && sessionUser.mustResetPassword ? (<AccountAccess mode="reset" currentUser={sessionUser} onResetComplete={() => { const refreshed = readStaffUsers().find((row) => row.id === sessionUser.id); if (refreshed) completeSignIn(refreshed, sessionMethod || "email"); else setSessionUser((prev) => (prev ? { ...prev, mustResetPassword: false } : prev)); }} />) : null}{!sessionUser && verifyStage && (
         <div className="auth-layer">
           <section className="auth-card" aria-labelledby="verify-title">
             <div className="auth-brand">
@@ -7033,7 +7033,7 @@ export default function Home() {
                 aria-controls="auth-panel"
                 tabIndex={loginMode === "pin" ? 0 : -1}
                 className={loginMode === "pin" ? "active" : ""}
-                onClick={() => { setLoginMode("pin"); setLoginError(""); }}
+                onClick={() => { setLoginMode("pin"); setLoginError(""); setAccessMode(null); }}
               >Employee PIN</button>
               <button
                 type="button"
@@ -7043,10 +7043,10 @@ export default function Home() {
                 aria-controls="auth-panel"
                 tabIndex={loginMode === "email" ? 0 : -1}
                 className={loginMode === "email" ? "active" : ""}
-                onClick={() => { setLoginMode("email"); setLoginError(""); }}
-              >Email + Password</button>
+                onClick={() => { setLoginMode("email"); setLoginError(""); setAccessMode(null); }}
+              >Email + Password</button><button type="button" role="tab" id="auth-tab-new" aria-selected={accessMode === "signup"} aria-controls="auth-panel" tabIndex={accessMode === "signup" ? 0 : -1} className={accessMode === "signup" ? "active" : ""} onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button>
             </div>
-            <form onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
+            {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}{!accessMode && loginMode === "email" ? (<div className="rowActions" style={{ justifyContent: "center" }}><button type="button" className="btn small" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot your password?</button></div>) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
               {loginMode === "email" ? (
                 <>
                   <label>Work Email<input type="email" name="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" placeholder="name@larsaeng.com" /></label>
