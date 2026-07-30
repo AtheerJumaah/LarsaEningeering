@@ -530,7 +530,9 @@ function t(k){ const e=I18N[k]; return e? (isAR()?e[1]:e[0]) : k; }
    money / dates
    ============================================================ */
 function rate(){ return Math.max(1, num(state?.settings?.rate)); }
-function usd(v,cur,fx){ return cur==="IQD" ? num(v)/(num(fx)>0?num(fx):rate()) : num(v); }\n/* Convert one stored line using the rate captured on it. */\nfunction usdRow(row,field){ if(!row) return 0; return usd(row[field||"amount"],row.currency,row.fxRate); }
+function usd(v,cur,fx){ return cur==="IQD" ? num(v)/(num(fx)>0?num(fx):rate()) : num(v); }
+/* Convert one stored line using the rate captured on it. */
+function usdRow(row,field){ if(!row) return 0; return usd(row[field||"amount"],row.currency,row.fxRate); }
 function toIQD(v,cur){ return cur==="USD" ? num(v)*rate() : num(v); }
 function fmt(v,cur){
   cur=cur||"USD";
@@ -1084,7 +1086,13 @@ function fieldInput(f,rec){
   const v=rec[f.k]; const id="ed_"+f.k; const wide=f.wide?"wide":"";
   let inner="";
   if(f.type==="text") inner=`<input id="${id}" value="${esc(v||"")}">`;
-  else if(f.type==="number") inner=`<input id="${id}" type="number" value="${v!=null?v:0}">`;\n  /* The USD rate on the day this line is entered, kept on the line itself.\n     One company-wide rate re-valued every past project every time it moved;\n     a rate stored per line means a 2026 payment keeps reporting at the rate\n     that was actually paid. Pre-filled with the current setting so the\n     accountant only types when the day differs. */\n  else if(f.type==="fx") inner=`<input id="${id}" type="number" step="1" min="1" value="${num(v)>0?v:rate()}">`;
+  else if(f.type==="number") inner=`<input id="${id}" type="number" value="${v!=null?v:0}">`;
+  /* The USD rate on the day this line is entered, kept on the line itself.
+     One company-wide rate re-valued every past project every time it moved;
+     a rate stored per line means a 2026 payment keeps reporting at the rate
+     that was actually paid. Pre-filled with the current setting so the
+     accountant only types when the day differs. */
+  else if(f.type==="fx") inner=`<input id="${id}" type="number" step="1" min="1" value="${num(v)>0?v:rate()}">`;
   else if(f.type==="percent") inner=`<input id="${id}" type="number" step="0.5" value="${v!=null?(num(v)*100):0}">`;
   else if(f.type==="date") inner=`<input id="${id}" type="date" value="${v||today()}">`;
   else if(f.type==="textarea") inner=`<textarea id="${id}" rows="2">${esc(v||"")}</textarea>`;

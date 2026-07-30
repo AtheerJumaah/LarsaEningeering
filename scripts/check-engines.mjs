@@ -14,6 +14,7 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import vm from "node:vm";
 
 const DIR = "public/engines";
 const TAG = '<script type="__bundler/template">';
@@ -47,6 +48,57 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".html"))) {
       `       Re-encode with forward slashes escaped: JSON.stringify(s).replaceAll("/", "\\\\/")`,
     );
   }
+}
+
+/* The check above proves the HTML shell and the packed template survive a
+ * browser parse. It says nothing about the JavaScript inside the ordinary
+ * <script> blocks -- and a syntax error there kills the whole engine, which
+ * renders as a completely blank page with no clue on screen. That shipped
+ * once: an edit inserted a literal backslash-n instead of a real newline, the
+ * HTML stayed perfectly valid, this script still said "ok", and the accounting
+ * engine went white. Parsing every inline script with the real JS parser is
+ * what catches it.
+ *
+ * A bundler-wrapped file has to be unpacked first, otherwise the script tags
+ * found are the escaped ones inside the JSON string, which are not JavaScript
+ * yet and never parse.
+ */
+for (const file of readdirSync(DIR).filter((f) => f.endsWith(".html"))) {
+  const path = join(DIR, file);
+  const raw = readFileSync(path, "utf8");
+  const tagAt = raw.indexOf(TAG);
+  let source = raw;
+  let note = "";
+  if (tagAt !== -1) {
+    const body = raw.slice(tagAt + TAG.length);
+    const end = body.indexOf("</script");
+    try {
+      source = JSON.parse(end === -1 ? body : body.slice(0, end));
+      note = " inside packed template";
+    } catch {
+      continue; // the template check above already reported this file
+    }
+  }
+  const blocks = [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
+    .filter(([tag]) => !/type="__bundler\/template"/.test(tag));
+  let index = 0;
+  let bad = 0;
+  for (const [, code] of blocks) {
+    index += 1;
+    if (!code.trim()) continue;
+    try {
+      new vm.Script(code, { filename: `${file}#script${index}` });
+    } catch (error) {
+      failed = true;
+      bad += 1;
+      const lineAt = source.slice(0, source.indexOf(code)).split("\n").length;
+      console.error(`  FAIL ${file} script #${index}${note}: ${error.message}`);
+      console.error(`       block starts around line ${lineAt}`);
+      const offending = String(error.stack || "").split("\n")[1];
+      if (offending) console.error(`       ${offending.trim().slice(0, 160)}`);
+    }
+  }
+  if (!bad) console.log(`  ok   ${file} (${blocks.length} inline script block(s) parse${note})`);
 }
 
 if (failed) {
