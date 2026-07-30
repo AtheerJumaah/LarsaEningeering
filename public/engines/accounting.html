@@ -926,7 +926,59 @@ function rowActions(coll,id,rec){
     <button class="mini" title="${t('ed_edit')}" onclick="event.stopPropagation();openEditor('${coll}','${id}')">✎</button>
     <button class="mini" onclick="event.stopPropagation();delRec('${coll}','${id}')">✕</button></td>`;
 }
-function delRec(coll,id){ if(!confirm(T("Delete this record? This cannot be undone.","حذف هذا السجل؟ لا يمكن التراجع."))) return;
+/* Losing a whole project or a person takes every transaction, document and
+   audit line attached to it, so those two cannot be removed by one click on a
+   row. They raise a request that has to be approved from the Reviews screen by
+   someone holding approve rights, which leaves the request, the approver and
+   the time in the audit log. Ordinary transaction rows delete as before. */
+const XPROTECTED_DELETE = ["projects","users","employees"];
+function xRecLabel(coll,id){
+  const r=(state[coll]||[]).find(x=>x.id===id)||{};
+  return String(r.name||r.code||r.email||id);
+}
+/* Approval has to come from authority over the thing being removed, not from
+   any elevated permission at all. An earlier version OR-ed these together,
+   which let someone holding only settings rights approve deleting a project.
+   Deleting a person needs user management; deleting a project needs approval
+   rights on projects. */
+function canApproveDelete(coll){
+  if(coll==="users"||coll==="employees") return can("manageUsers","settings");
+  return can("approve","projects");
+}
+function requestDelete(coll,id){
+  const pending=(state.reviewQueue||[]).find(f=>!f.resolved&&f.kind==="delete"&&f.ledger===coll&&f.refId===id);
+  if(pending){ toast(T("Already waiting for approval in Reviews.","بانتظار الموافقة في المراجعات.")); render(); return; }
+  state.reviewQueue.push({
+    id:uid("rev"), kind:"delete", ledger:coll, refId:id,
+    note:T("Deletion requested: ","طلب حذف: ")+xRecLabel(coll,id),
+    at:new Date().toISOString(), by:currentUser?.email||"", resolved:false,
+  });
+  log("Deletion requested",coll+" "+id);
+  toast(T("Sent for approval. It stays until someone approves it in Reviews.",
+          "أُرسل للموافقة. يبقى حتى يوافق عليه أحد في المراجعات."));
+  save(); render();
+}
+function approveDelete(fid){
+  const f=(state.reviewQueue||[]).find(x=>x.id===fid);
+  if(!f||f.resolved||f.kind!=="delete") return;
+  if(!canApproveDelete(f.ledger)){ toast(T("You do not have approval rights for this.","لا تملك صلاحية الموافقة على هذا.")); return; }
+  if(!confirm(T("Approve deletion of ","الموافقة على حذف ")+xRecLabel(f.ledger,f.refId)+"?")) return;
+  state[f.ledger]=(state[f.ledger]||[]).filter(x=>x.id!==f.refId);
+  f.resolved=true; f.resolvedAt=new Date().toISOString(); f.resolvedBy=currentUser?.email||"";
+  log("Deletion approved",f.ledger+" "+f.refId+" by "+(currentUser?.email||""));
+  save(); render();
+}
+function rejectDelete(fid){
+  const f=(state.reviewQueue||[]).find(x=>x.id===fid);
+  if(!f||f.kind!=="delete") return;
+  if(!canApproveDelete(f.ledger)){ toast(T("You do not have approval rights for this.","لا تملك صلاحية الموافقة على هذا.")); return; }
+  f.resolved=true; f.resolvedAt=new Date().toISOString(); f.rejected=true; f.resolvedBy=currentUser?.email||"";
+  log("Deletion rejected",f.ledger+" "+f.refId);
+  save(); render();
+}
+function delRec(coll,id){
+  if(XPROTECTED_DELETE.indexOf(coll)>=0) return requestDelete(coll,id);
+  if(!confirm(T("Delete this record? This cannot be undone.","حذف هذا السجل؟ لا يمكن التراجع."))) return;
   state[coll]=state[coll].filter(x=>x.id!==id); log("Deleted",coll+" "+id); save(); render(); }
 
 /* ---- generic ledger table: clickable rows, actions on every row ---- */
@@ -1242,6 +1294,16 @@ async function saveEditor(){
     else if(f.type==="number"||f.type==="fx") rec[f.k]=num(el.value);
     else if(f.type==="percent") rec[f.k]=num(el.value)/100;
     else rec[f.k]=el.value;
+  }
+  /* An exchange rate is required on every line that records money, whatever
+     the company setting happens to say today. Without it a past entry would
+     silently inherit whatever the rate is at the moment someone reads the
+     report, and no closed month would stay closed. Refuse the save rather than
+     store a line whose USD value is a guess. */
+  if(XFX_COLLS.indexOf(coll)>=0 && num(rec.fxRate)<=0){
+    toast(T("Enter the USD exchange rate for this transaction before saving.",
+            "أدخل سعر صرف الدولار لهذه الحركة قبل الحفظ."));
+    return;
   }
   deriveRecord(coll,rec);
   if(!id0) state[coll].unshift(rec);
@@ -1822,7 +1884,10 @@ function renderReview(){
   const open=state.reviewQueue.filter(f=>!f.resolved), done=state.reviewQueue.filter(f=>f.resolved);
   const rowHtml=f=>`<tr><td><span class="pill">${t(LEDGER_LABEL[f.ledger]||"")||f.ledger}</span></td>
     <td>${reviewRefDesc(f)}</td><td>${esc(f.note||"—")}</td><td class="muted">${new Date(f.at).toLocaleDateString(isAR()?"ar":"en")}</td>
-    <td class="right">${f.resolved?"✓":`<button class="mini" onclick="resolveFlag('${f.id}')">${t("resolve")}</button>`}</td></tr>`;
+    <td class="right">${f.resolved?(f.rejected?"✕":"✓"):(f.kind==="delete"
+      ? `<button class="mini" onclick="approveDelete('${f.id}')">${T("Approve delete","موافقة الحذف")}</button>
+         <button class="mini" onclick="rejectDelete('${f.id}')">${T("Reject","رفض")}</button>`
+      : `<button class="mini" onclick="resolveFlag('${f.id}')">${t("resolve")}</button>`)}</td></tr>`;
   setHTML("view",`<div class="page-head"><h1>${t("nav_review")}</h1><span class="muted">${open.length} ${T("open","قيد المراجعة")}</span></div>
     ${card(T("Open items","عناصر قيد المراجعة"),`<div class="table-wrap"><table>
       <thead><tr><th>${T("Ledger","السجل")}</th><th>${T("Entry","القيد")}</th><th>${t("notes")}</th><th>${t("date")}</th><th></th></tr></thead>
@@ -1862,10 +1927,105 @@ function importBackup(ev){ const f=ev.target.files[0]; if(!f) return; const rd=n
 function resetData(){ if(confirm(T("Reset system data? This erases current local data.","إعادة تعيين بيانات النظام؟ سيتم مسح البيانات المحلية الحالية."))){ state=blankState(); normalize(); save(); render(); } }
 function setTheme(th){ state.settings.theme=th; save(); applyTheme(); render(); }
 function applyTheme(){ document.body.classList.toggle("light", state?.settings?.theme==="light"); }
+/* ============================================================
+   Construction examples
+   Real records, written into the live store like any other entry,
+   so the whole chain can be exercised end to end: funding with a
+   consultancy fee, a waived fee, materials, labour, expenses, and
+   two IQD payments captured at different rates so the historical
+   rate is visibly doing its job. Every row is tagged
+   example:true and carries an EX- code, so `Remove construction
+   examples` takes all of it back out and nothing else.
+   ============================================================ */
+const XEXAMPLE_TAG = "example";
+function xExampleCount(){
+  return ["projects","funding","revenue","expenses","materials","projectLabor"]
+    .reduce((n,c)=>n+(state[c]||[]).filter(r=>r&&r[XEXAMPLE_TAG]).length,0);
+}
+function addConstructionExamples(){
+  if(!can("create","projects")){ toast(T("You cannot add projects.","لا تملك صلاحية إضافة المشاريع.")); return; }
+  if(xExampleCount()>0){ toast(T("Examples are already loaded.","الأمثلة محمّلة بالفعل.")); return; }
+  const ex=(o)=>Object.assign({id:uid("ex"),example:true},o);
+  const p1=uid("ex"), p2=uid("ex"), p3=uid("ex");
+  state.projects.unshift(
+    ex({id:p1,code:"EX-IRQ-001",name:"Erbil Residential Tower (example)",clientName:"Barzani Holdings",client:"Barzani Holdings",
+        region:"Iraq",type:"Construction",phase:"Execution",status:"Active",contractValue:1310000000,currency:"IQD",
+        consultancyRate:0.05,dueDate:"2026-12-31",responsibleEngineer:"",projectManager:"",notes:"Example data — safe to delete."}),
+    ex({id:p2,code:"EX-IRQ-002",name:"Mosul Clinic Extension (example)",clientName:"Health Ministry",client:"Health Ministry",
+        region:"Iraq",type:"Construction",phase:"Execution",status:"Active",contractValue:150000000,currency:"IQD",
+        consultancyRate:0.05,dueDate:"2026-10-31",responsibleEngineer:"",projectManager:"",notes:"Example data — runs at a loss on purpose."}),
+    ex({id:p3,code:"EX-USA-001",name:"Houston Office Fit-Out (example)",clientName:"Lone Star Realty",client:"Lone Star Realty",
+        region:"USA",type:"Construction",phase:"Execution",status:"Active",contractValue:375000,currency:"USD",
+        consultancyRate:0,dueDate:"2026-11-30",responsibleEngineer:"",projectManager:"",notes:"Example data — billed as revenue, not trust funding."}),
+  );
+  /* Two IQD payments of the same size, entered at 1310 and at 1500. In USD
+     they differ, which is the whole point of storing the rate per line. */
+  const fund=(pid,date,amount,fx,waived)=>ex({projectId:pid,date,amount,currency:"IQD",fxRate:fx,
+    method:"Bank Transfer",status:"Received",waived:!!waived,payerName:"Client",
+    description:"Example funding",consultancyRate:0.05,
+    consultancyFee:waived?0:Math.round(amount*0.05),
+    netConstruction:amount-(waived?0:Math.round(amount*0.05))});
+  state.funding.unshift(
+    fund(p1,"2026-03-10",524000000,1310,false),
+    fund(p1,"2026-05-12",450000000,1500,false),
+    fund(p2,"2026-04-05",150000000,1450,true),
+  );
+  state.revenue.unshift(
+    ex({projectId:p3,date:"2026-04-18",stream:"USA Engineering Revenue",jobNumber:"EX-JOB-1",amount:210000,
+        currency:"USD",fxRate:1,method:"Bank Transfer",status:"Received",description:"Example fit-out billing"}),
+    ex({projectId:p3,date:"2026-06-22",stream:"USA Engineering Revenue",jobNumber:"EX-JOB-2",amount:165000,
+        currency:"USD",fxRate:1,method:"Bank Transfer",status:"Received",description:"Example fit-out billing"}),
+  );
+  const mat=(pid,date,item,amount,cur,fx)=>ex({projectId:pid,date,itemName:item,materialCategory:"Concrete / Rebar",
+    quantity:1,unit:"lump sum",unitPrice:amount,amount,currency:cur,fxRate:fx,
+    paymentSource:"Client Funding",paymentMethod:"Bank Transfer",status:"Approved",description:"Example material"});
+  state.materials.unshift(
+    mat(p1,"2026-03-20","Concrete & rebar",240000000,"IQD",1310),
+    mat(p1,"2026-05-18","Cladding",180000000,"IQD",1500),
+    mat(p2,"2026-04-12","Blockwork",92000000,"IQD",1450),
+    mat(p3,"2026-04-25","Partitions & glazing",74000,"USD",1),
+  );
+  const lab=(pid,date,trade,total,cur,fx)=>ex({projectId:pid,date,trade,quantity:1,unit:"lump sum",rate:total,total,
+    currency:cur,fxRate:fx,paymentSource:"Client Funding",status:"Approved",notes:"Example labour"});
+  state.projectLabor.unshift(
+    lab(p1,"2026-03-25","Structural crew",96000000,"IQD",1310),
+    lab(p1,"2026-05-22","Cladding crew",72000000,"IQD",1500),
+    lab(p2,"2026-04-15","Masonry crew",58000000,"IQD",1450),
+    lab(p3,"2026-04-28","Fit-out crew",46000,"USD",1),
+  );
+  const exp=(pid,date,cat,amount,cur,fx)=>ex({projectId:pid,date,category:cat,supplier:"Example supplier",
+    amount,currency:cur,fxRate:fx,method:"Cash",status:"Approved",paymentSource:"Client Funding",
+    description:"Example expense"});
+  state.expenses.unshift(
+    exp(p1,"2026-04-01","Site Supervision",34000000,"IQD",1310),
+    exp(p2,"2026-05-05","Site Supervision",31000000,"IQD",1450),
+    exp(p3,"2026-05-08","Permits",15000,"USD",1),
+  );
+  log("Added construction examples", xExampleCount()+" records");
+  toast(T("Construction examples added.","تمت إضافة أمثلة التنفيذ."));
+  save(); render();
+}
+function removeConstructionExamples(){
+  const n=xExampleCount();
+  if(!n){ toast(T("No examples to remove.","لا توجد أمثلة.")); return; }
+  if(!confirm(T("Remove all "+n+" example records?","إزالة كل "+n+" سجل مثال؟"))) return;
+  ["projects","funding","revenue","expenses","materials","projectLabor"].forEach(c=>{
+    state[c]=(state[c]||[]).filter(r=>!(r&&r[XEXAMPLE_TAG]));
+  });
+  log("Removed construction examples", n+" records");
+  toast(T("Examples removed.","تمت إزالة الأمثلة."));
+  save(); render();
+}
 function renderSettings(){
   const notif = (typeof Notification!=="undefined") ? (state.settings.notifications&&Notification.permission==="granted") : false;
   setHTML("view",`<div class="page-head"><h1>${t("nav_settings")}</h1></div>
     <div class="notice">${t("keep_note")}</div>
+    ${card(T("Construction examples","أمثلة التنفيذ"),`<p class="muted small">${T(
+      "Loads three example construction projects with funding, materials, labour, expenses and two IQD payments captured at different exchange rates. Every example row is tagged, so removing them takes out nothing else.",
+      "يضيف ثلاثة مشاريع تنفيذ مع التمويل والمواد والعمالة والمصروفات ودفعتين بالدينار بسعرين مختلفين. كل سجل مثال موسوم، وإزالتها لا تحذف غيرها.")}</p>
+      <div class="rowActions"><button class="btn" onclick="addConstructionExamples()">${T("Add construction examples","إضافة أمثلة التنفيذ")}</button>
+      <button class="btn" onclick="removeConstructionExamples()">${T("Remove construction examples","إزالة أمثلة التنفيذ")}</button></div>
+      <p class="muted small">${T("Currently loaded: ","المحمّل حاليًا: ")}${xExampleCount()}</p>`)}
     ${card(T("Appearance","المظهر"),`<div class="seg big">
       <button class="${state.settings.theme!=='light'?'on':''}" onclick="setTheme('dark')">🌙 ${t("theme_dark")}</button>
       <button class="${state.settings.theme==='light'?'on':''}" onclick="setTheme('light')">☀️ ${t("theme_light")}</button>
@@ -5065,10 +5225,10 @@ function v35cEnsureCharts() {
         "construction",
         (from, to) => v35ConstructionSeries(from, to),
         T("Construction Financial Trend — All Projects", "الاتجاه المالي للتنفيذ — كل المشاريع"),
-      )}</div>`);
+      )}</div>`, "end");
     }
     if (activeSection === "payroll" && document.querySelector("#view .page-head")) {
-      v35cInsertIfMissing("v35-payroll-charts", `<div id="v35-payroll-charts">${v35PayrollChartsBlock()}</div>`);
+      v35cInsertIfMissing("v35-payroll-charts", `<div id="v35-payroll-charts">${v35PayrollChartsBlock()}</div>`, "end");
     }
     if (window.xProject) {
       const p = (state.projects || []).find((x) => x.id === window.xProject);
