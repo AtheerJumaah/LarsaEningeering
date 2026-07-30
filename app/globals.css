@@ -2948,6 +2948,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
    the full number is on the element's title. */
 .fin-tile b { font-size: 21px; font-weight: 900; line-height: 1.15; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fin-tile em { font-style: normal; font-size: 10.5px; font-weight: 750; color: var(--muted); }
+.fin-tile.in b { color: #1d4ed8; }
+.fin-tile.out b { color: #b42318; }
 .fin-tile.up b { color: #0f7b45; }
 .fin-tile.down b { color: #b42318; }
 
@@ -2962,9 +2964,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .fin-chart-key { display: flex; flex-wrap: wrap; gap: 14px; }
 .fin-chart-key span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 800; color: var(--muted); }
 .fin-chart-key i { width: 10px; height: 10px; border-radius: 3px; }
-.fin-chart-key i.income { background: #159b56; }
-.fin-chart-key i.cost { background: #f0b429; }
-.fin-chart-key i.net { background: var(--ink); }
+/* Income blue, cost red, net green — cost is the figure you want to catch
+   your eye when it runs high, and a positive net reading green matches the
+   summary tile. A negative net turns red in the label below the bars. */
+.fin-chart-key i.income { background: #2563eb; }
+.fin-chart-key i.cost { background: #d92d20; }
+.fin-chart-key i.net { background: #0f7b45; }
 .fin-chart-plot { display: grid; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
 .fin-month { display: grid; grid-template-rows: 1fr auto auto; gap: 5px; justify-items: center; min-width: 0; }
 .fin-month-bars {
@@ -2973,9 +2978,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
   border-bottom: 1px solid var(--line);
 }
 .fin-month-bars i { display: block; width: 11px; min-height: 2px; border-radius: 4px 4px 0 0; }
-.fin-month-bars i.income { background: #159b56; }
-.fin-month-bars i.cost { background: #f0b429; }
-.fin-month-net { font-size: 10.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-month-bars i.income { background: #2563eb; }
+.fin-month-bars i.cost { background: #d92d20; }
+.fin-month-net { font-size: 10.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; color: #0f7b45; }
 .fin-month-net.down { color: #b42318; }
 .fin-month small { font-size: 9.5px; font-weight: 850; color: var(--muted); white-space: nowrap; }
 
@@ -3000,8 +3005,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .pf-caret.open { transform: rotate(90deg); }
 .pf-bars { display: grid; gap: 3px; padding: 0 15px 12px; }
 .pf-bar { display: block; height: 6px; border-radius: 999px; min-width: 2px; }
-.pf-bar.income { background: #159b56; }
-.pf-bar.cost { background: #f0b429; }
+.pf-bar.income { background: #2563eb; }
+.pf-bar.cost { background: #d92d20; }
 .pf-open { display: grid; gap: 14px; padding: 12px 15px 15px; border-top: 1px solid var(--line); }
 .pf-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
 .pf-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }

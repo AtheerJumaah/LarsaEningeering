@@ -2833,7 +2833,7 @@ function formatCompact(usdValue: number, currency: "IQD" | "USD", rate: number) 
    deliberately loss-making one and a fee-waived payment, because those are
    the cases worth being able to spot. Toggled off, this view shows the real
    accounting store instead — same columns, same maths. */
-function sampleConstructionSnapshot(): AccountingSnapshot {
+function sampleConstructionSnapshot(rate: number): AccountingSnapshot {
   const project = (
     id: string, code: string, name: string, clientName: string,
     region: string, status: string,
@@ -2853,7 +2853,9 @@ function sampleConstructionSnapshot(): AccountingSnapshot {
   });
   return {
     key: "sample",
-    rate: DEFAULT_IQD_RATE,
+    // The example converts at whatever rate the office has set, so switching
+    // to IQD here reads the same way the real figures will.
+    rate,
     documents: [], commissions: [], payroll: [],
     projects: [
       project("sp1", "IQ-101", "Erbil Residential Tower", "Barzani Holdings", "Iraq", "Active"),
@@ -2968,7 +2970,7 @@ function ConstructionFinancials({
   const [currency, setCurrency] = useState<"IQD" | "USD">("IQD");
   const [openProject, setOpenProject] = useState("");
 
-  const sample = useMemo(() => sampleConstructionSnapshot(), []);
+  const sample = useMemo(() => sampleConstructionSnapshot(snapshot.rate), [snapshot.rate]);
   const live = useSample ? sample : snapshot;
   const rate = live.rate;
   const show = (value: number) => formatMoney(value, currency, rate);
@@ -3016,14 +3018,17 @@ function ConstructionFinancials({
 
   const scale = Math.max(1, ...rows.map((row) => Math.max(row.figures.income, row.figures.cost)));
 
-  const tiles: { label: string; value: number; note: string; tone?: string }[] = [
-    { label: "Income", value: totals.income, note: "Funding + fee + revenue" },
-    { label: "Client funding", value: totals.funding, note: "Received into trust" },
-    { label: "Our fee", value: totals.fees, note: "Waivers excluded" },
-    { label: "Materials", value: totals.materials, note: "Supply cost" },
-    { label: "Labour", value: totals.labor, note: "Workforce cost" },
-    { label: "Other expenses", value: totals.expenses, note: "Supervision, hire" },
-    { label: "Total cost", value: totals.cost, note: "Materials + labour + expenses" },
+  /* Money coming in reads blue, money going out red, and the result green
+     (or red if the project lost money) — so the three kinds of figure are
+     told apart by colour without a legend. */
+  const tiles: { label: string; value: number; note: string; tone: string }[] = [
+    { label: "Income", value: totals.income, note: "Funding + fee + revenue", tone: "in" },
+    { label: "Client funding", value: totals.funding, note: "Received into trust", tone: "in" },
+    { label: "Our fee", value: totals.fees, note: "Waivers excluded", tone: "in" },
+    { label: "Materials", value: totals.materials, note: "Supply cost", tone: "out" },
+    { label: "Labour", value: totals.labor, note: "Workforce cost", tone: "out" },
+    { label: "Other expenses", value: totals.expenses, note: "Supervision, hire", tone: "out" },
+    { label: "Total cost", value: totals.cost, note: "Materials + labour + expenses", tone: "out" },
     { label: "Net", value: totals.net, note: `${totals.margin.toFixed(1)}% margin`, tone: totals.net < 0 ? "down" : "up" },
   ];
 
@@ -3079,7 +3084,7 @@ function ConstructionFinancials({
 
       <section className="fin-tiles">
         {tiles.map((tile) => (
-          <article key={tile.label} className={tile.tone ? `fin-tile ${tile.tone}` : "fin-tile"}>
+          <article key={tile.label} className={`fin-tile ${tile.tone}`}>
             <small>{tile.label}</small>
             <b title={show(tile.value)}>{brief(tile.value)}</b>
             <em>{tile.note}</em>
@@ -3318,6 +3323,23 @@ export default function Home() {
   // localStorage stores shared across everyone's browser instead of one
   // machine at a time. If they aren't set, initLarsaSync is a no-op and the
   // app behaves exactly as it always has. See lib/supabase/sync.ts.
+  /* The three engines run in same-origin iframes and write straight to
+     localStorage. A write in another document of the same origin fires a
+     `storage` event here, but nothing was listening, so the native pages kept
+     showing whatever they read at mount: change the USD/IQD rate in the
+     accounting engine and Construction Financials went on reporting the old
+     one until a full reload. Re-reading on that event is what every native
+     view already does when the parent app itself writes. */
+  useEffect(() => {
+    if (!hydrated) return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key && !event.key.toLowerCase().startsWith("larsa")) return;
+      setStorageTick((value) => value + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [hydrated]);
+
   useEffect(() => {
     if (!hydrated) return;
     console.log("[larsa-sync] effect fired, hydrated =", hydrated);
