@@ -2992,6 +2992,35 @@ function MonthBars({
   );
 }
 
+/* Why "Install" can look broken on an iPhone.
+   Only Safari can add a real standalone web app on iOS. Chrome, Edge, Firefox
+   and the rest all render with WebKit there, so the page looks identical and
+   the Install button appears to do nothing useful — by far the commonest cause
+   of "it will not install on iPhone". Every iOS browser reports "Safari"
+   somewhere in its user agent, so the dependable test is the presence of
+   another browser's own token rather than looking for Safari itself. */
+function installPlatform() {
+  if (typeof navigator === "undefined" || typeof window === "undefined") {
+    return { ios: false, wrongBrowser: "", standalone: false };
+  }
+  const ua = navigator.userAgent || "";
+  const ios = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const wrongBrowser = /CriOS/.test(ua) ? "Chrome"
+    : /FxiOS/.test(ua) ? "Firefox"
+    : /EdgiOS/.test(ua) ? "Edge"
+    : /OPiOS|OPT\//.test(ua) ? "Opera"
+    : /DuckDuckGo/.test(ua) ? "DuckDuckGo"
+    : /YaBrowser/.test(ua) ? "Yandex"
+    : "";
+  let standalone = false;
+  try {
+    standalone = window.matchMedia("(display-mode: standalone)").matches
+      || (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
+  } catch { /* matchMedia missing on very old browsers */ }
+  return { ios, wrongBrowser: ios ? wrongBrowser : "", standalone };
+}
+
 function ConstructionFinancials({
   snapshot, viewer,
 }: {
@@ -6879,8 +6908,36 @@ export default function Home() {
               <div><span className="eyebrow">Phone, tablet & computer</span><h2>Install Larsa Control</h2></div>
               <button type="button" onClick={() => setInstallHelp(false)} aria-label="Close"><X size={18} /></button>
             </div>
+            {(() => {
+              const { wrongBrowser, standalone } = installPlatform();
+              if (standalone) {
+                return <p className="install-callout ok">Larsa Control is already installed — you are running it now.</p>;
+              }
+              if (!wrongBrowser) return null;
+              return (
+                <div className="install-callout">
+                  <b>You are in {wrongBrowser}, not Safari.</b>
+                  <p>
+                    iPhone and iPad can only install an app from Safari. {wrongBrowser} can add a
+                    bookmark, but it opens back inside {wrongBrowser} rather than as its own app.
+                    Copy the address, open Safari, paste it, then use Share → Add to Home Screen.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(window.location.origin);
+                        notify("Address copied. Now paste it into Safari.");
+                      } catch {
+                        notify(`Open this in Safari: ${window.location.host}`);
+                      }
+                    }}
+                  >Copy address for Safari</button>
+                </div>
+              );
+            })()}
             <div className="install-grid">
-              <article><b>iPhone / iPad</b><p>Open in Safari, tap Share, then choose Add to Home Screen.</p></article>
+              <article><b>iPhone / iPad</b><p>Open in <b>Safari</b> (not Chrome), tap Share, then choose Add to Home Screen.</p></article>
               <article><b>Android</b><p>Open in Chrome, open the browser menu, then choose Install app.</p></article>
               <article><b>Mac</b><p>Use Safari Add to Dock, or choose Install from the Chrome address bar.</p></article>
               <article><b>Windows</b><p>Open in Edge or Chrome, then choose Install app from the address bar or browser menu.</p></article>

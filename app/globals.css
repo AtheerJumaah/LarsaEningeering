@@ -3023,3 +3023,20 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .project-financial-head .pf-figure:nth-of-type(2) { display: none; }
   .pf-detail { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Install help: the callout shown when an iPhone is on the wrong browser. */
+.install-callout {
+  display: grid; gap: 8px; justify-items: start;
+  padding: 13px 15px; margin-bottom: 12px;
+  border: 1px solid #f3c98b; border-radius: 14px; background: #fff8ec;
+}
+.install-callout b { font-size: 13.5px; font-weight: 900; color: #7c3f00; }
+.install-callout p { margin: 0; font-size: 12.5px; font-weight: 650; line-height: 1.5; color: #7c4a12; }
+.install-callout button {
+  padding: 9px 14px; border: 0; border-radius: 10px;
+  background: #17181b; color: #fff; font: inherit; font-size: 12.5px; font-weight: 850; cursor: pointer;
+}
+.install-callout.ok { border-color: #a7dcc0; background: #f0fdf4; }
+.install-callout.ok, .install-callout.ok p { color: #14532d; font-weight: 750; }
+.unified-app.dark .install-callout { border-color: #6b4a1c; background: #241c10; }
+.unified-app.dark .install-callout b, .unified-app.dark .install-callout p { color: #f5d9a8; }
