@@ -39,13 +39,29 @@ export async function subscribeToPush(staffUid: string): Promise<string> {
   if (permission !== "granted") return "Push notifications were not allowed.";
 
   const registration = await navigator.serviceWorker.ready;
-  let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
-    });
-  }
+  const desiredKey = urlBase64ToUint8Array(vapidKey);
+      let subscription = await registration.pushManager.getSubscription();
+      // A subscription can already exist under an OLD VAPID key (e.g. after a
+      // key rotation) -- getSubscription() happily returns it, but the push
+      // service silently rejects anything signed with the new private key.
+      // Drop it here so the block below creates a fresh one under this key.
+      if (subscription) {
+              const existingKey = subscription.options?.applicationServerKey
+                        ? new Uint8Array(subscription.options.applicationServerKey)
+                        : null;
+              const sameKey = !!existingKey && existingKey.length === desiredKey.length
+                        && existingKey.every((byte, idx) => byte === desiredKey[idx]);
+              if (!sameKey) {
+                        await subscription.unsubscribe();
+                        subscription = null;
+              }
+      }
+      if (!subscription) {
+              subscription = await registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: desiredKey as BufferSource,
+              });
+      }
   const json = subscription.toJSON();
   if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
     return "Could not read this browser's push subscription.";
