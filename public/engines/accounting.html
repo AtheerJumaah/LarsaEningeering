@@ -333,6 +333,7 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
       </div>
       <div class="tb-right">
         <button id="themeBtn" class="icon-btn" title="Theme">☀️</button>
+        <div class="lang-toggle" id="curToggle"><button id="curIqd">IQD</button><button id="curUsd" class="active">USD</button></div>
         <div class="lang-toggle"><button id="langEn" class="active">EN</button><button id="langAr">ع</button></div>
         <div class="user-chip"><b id="userTag">Larsa Engineering</b></div>
         <button id="signOutBtn">Sign out</button>
@@ -540,8 +541,24 @@ function fmt(v,cur){
   return isAR() ? (n+" "+(cur==="IQD"?"د.ع":"$")) : (cur==="IQD"? n+" IQD" : "$"+n);
 }
 function fmtUSD(v){ return fmt(usd(v.amount!=null?v.amount:v, v.currency), "USD"); }
-function money(v){ // v already USD number
-  return fmt(v,"USD");
+/* Which currency the screen is reading in. Display only: every figure is still
+   stored and summed in USD, and each line still converts from its own recorded
+   rate. Switching this re-prints, it never rewrites data. */
+function dispCur(){ return (state&&state.settings&&state.settings.dispCur==="IQD")?"IQD":"USD"; }
+function setDispCur(c){
+  if(!state) load();
+  state.settings.dispCur = c==="IQD" ? "IQD" : "USD";
+  save(); applyCurToggle(); render();
+}
+function applyCurToggle(){
+  const iqd=$("curIqd"), usd_=$("curUsd"); if(!iqd||!usd_) return;
+  const on=dispCur()==="IQD";
+  iqd.classList.toggle("active", on);
+  usd_.classList.toggle("active", !on);
+  const t=$("curToggle"); if(t) t.title="1 USD = "+fmt(rate(),"IQD");
+}
+function money(v){ // v is already a USD number
+  return dispCur()==="IQD" ? fmt(num(v)*rate(),"IQD") : fmt(v,"USD");
 }
 /* colored money: green positive, red negative */
 function moneyC(v){
@@ -1973,18 +1990,36 @@ function xActual(s){return["Approved","Paid","Received"].includes(s)}
 function xPending(s){return["Draft","Pending","Pending Approval","Requested","Ordered","Partially Paid","Expected"].includes(s)}
 function xTotals(pid){
   const funding=state.funding.filter(r=>r.projectId===pid&&["Approved","Received"].includes(r.status)),expenses=state.expenses.filter(r=>r.projectId===pid),materials=state.materials.filter(r=>r.projectId===pid),labor=state.projectLabor.filter(r=>r.projectId===pid);
-  const gross=funding.reduce((s,r)=>s+usd(r.amount,r.currency),0),fee=funding.reduce((s,r)=>s+usd(r.consultancyFee,r.currency),0),netFunding=funding.reduce((s,r)=>s+usd(r.netConstruction,r.currency),0);
-  const exp=expenses.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0),mat=materials.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0),lab=labor.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.total,r.currency),0);
+  /* Each line converts at the rate recorded on it, so a summary stops moving
+     every time the current rate is edited. */
+  const gross=funding.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0),fee=funding.reduce((s,r)=>s+usd(r.consultancyFee,r.currency,r.fxRate),0),netFunding=funding.reduce((s,r)=>s+usd(r.netConstruction,r.currency,r.fxRate),0);
+  const exp=expenses.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0),mat=materials.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0),lab=labor.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.total,r.currency,r.fxRate),0);
   const all=[...expenses.map(r=>({...r,cost:r.amount})),...materials.map(r=>({...r,cost:r.amount})),...labor.map(r=>({...r,cost:r.total}))];
-  const clientSpent=all.filter(r=>xActual(r.status)&&r.paymentSource==="Client Funding").reduce((s,r)=>s+usd(r.cost,r.currency),0),pending=all.filter(r=>xPending(r.status)).reduce((s,r)=>s+usd(r.cost,r.currency),0);
+  const clientSpent=all.filter(r=>xActual(r.status)&&r.paymentSource==="Client Funding").reduce((s,r)=>s+usd(r.cost,r.currency,r.fxRate),0),pending=all.filter(r=>xPending(r.status)).reduce((s,r)=>s+usd(r.cost,r.currency,r.fxRate),0);
   const projectRevenue=state.revenue.filter(r=>r.projectId===pid&&r.status==="Received");
-  const revenue=projectRevenue.reduce((s,r)=>s+usd(r.amount,r.currency),0),payroll=state.payroll.filter(r=>r.projectId===pid&&!["Void","Rejected"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross||0,r.currency),0);
+  const revenue=projectRevenue.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0),payroll=state.payroll.filter(r=>r.projectId===pid&&!["Void","Rejected"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross||0,r.currency),0);
   const revenueIds=new Set(projectRevenue.map(r=>r.id));
   const commissions=state.commissions.filter(c=>!["Void","Rejected"].includes(c.status)&&(c.projectId===pid||revenueIds.has(c.sourceId))).reduce((s,c)=>s+num(c.due),0);
   const direct=expenses.filter(r=>xActual(r.status)&&r.paymentSource==="Larsa Operating").reduce((s,r)=>s+usd(r.amount,r.currency),0)+payroll+commissions,flags=state.reviewQueue.filter(r=>r.projectId===pid&&!r.resolved);
   return{funding,expenses,materials,labor,gross,fee,netFunding,exp,mat,lab,total:exp+mat+lab,clientSpent,pending,revenue,payroll,commissions,direct,balance:netFunding-clientSpent,flags,result:revenue+fee-direct}
 }
-function xLedger(c,a,cols){return ledgerTable(c,cols,a.filter(xVisible))}
+/* Every money ledger gets a rate column, appended here rather than in each of
+   the table definitions below, so funding, expenses, materials, labour and
+   revenue all show it and none can be forgotten. It reports the rate the line
+   was actually entered at; a line saved before the engine started asking shows
+   the current setting in brackets, so it is obvious which is recorded and which
+   is assumed. USD lines have no rate to show. */
+const XFX_COLLS=["funding","revenue","expenses","materials","projectLabor"];
+function xFxCell(r){
+  if(String(r.currency||"USD").toUpperCase()!=="IQD") return "—";
+  return num(r.fxRate)>0 ? fmt(num(r.fxRate),"IQD") : `(${fmt(rate(),"IQD")})`;
+}
+function xLedger(c,a,cols){
+  const withFx = XFX_COLLS.indexOf(c)>=0 && !cols.some(col=>col.label==="USD rate")
+    ? cols.concat([{label:"USD rate",r:1,get:xFxCell}])
+    : cols;
+  return ledgerTable(c,withFx,a.filter(xVisible));
+}
 function xExpenseTable(a){return xLedger("expenses",a,[{label:t("date"),get:r=>r.date},{label:t("project"),get:r=>esc(project(r.projectId)?.name||"—")},{label:t("type"),get:r=>dv(r.expenseType)},{label:t("category"),get:r=>dv(r.category)},{label:"Supplier / Workforce",get:r=>esc(r.supplier||"—")},{label:"Qty",r:1,get:r=>num(r.quantity)||"—"},{label:"Unit",get:r=>esc(r.unit||"—")},{label:"Unit price",r:1,get:r=>num(r.unitPrice)?fmt(r.unitPrice,r.currency):"—"},{label:t("amount"),r:1,get:r=>fmt(r.amount,r.currency)},{label:"Payment source",get:r=>dv(r.paymentSource)},{label:t("status"),get:r=>`<span class="pill">${dv(r.status)}</span>`}])}
 function xMaterialTable(a){return xLedger("materials",a,[{label:t("date"),get:r=>r.date},{label:t("project"),get:r=>esc(project(r.projectId)?.name||"—")},{label:t("category"),get:r=>dv(r.materialCategory)},{label:"Item",get:r=>esc(r.itemName||r.description||"—")},{label:"Supplier",get:r=>esc(r.supplierName||"—")},{label:"Qty",r:1,get:r=>`${num(r.quantity)} ${esc(r.unit||"")}`},{label:"Unit price",r:1,get:r=>fmt(r.unitPrice,r.currency)},{label:t("amount"),r:1,get:r=>`${fmt(r.amount,r.currency)}<div class="muted small">${money(usd(r.amount,r.currency))}</div>`},{label:"Payment source",get:r=>dv(r.paymentSource)},{label:t("status"),get:r=>`<span class="pill">${dv(r.status)}</span>`}])}
 function xLaborTable(a){return xLedger("projectLabor",a,[{label:t("date"),get:r=>r.date},{label:t("project"),get:r=>esc(project(r.projectId)?.name||"—")},{label:"Workforce",get:r=>esc(state.workforce.find(w=>w.id===r.workforceId)?.name||"—")},{label:"Trade",get:r=>esc(r.trade||"—")},{label:"Quantity",r:1,get:r=>`${num(r.quantity)} ${r.unit}`},{label:"Rate",r:1,get:r=>fmt(r.rate,r.currency)},{label:t("amount"),r:1,get:r=>fmt(r.total,r.currency)},{label:"Payment source",get:r=>dv(r.paymentSource)},{label:t("status"),get:r=>`<span class="pill">${dv(r.status)}</span>`}])}
@@ -2541,6 +2576,10 @@ function boot(){
   if(LOGO){ document.querySelectorAll(".larsa-logo-img").forEach(img=>img.src=LOGO); }
   applyTheme();
   initLoginScreen();
+  const ci=$("curIqd"), cu=$("curUsd");
+  if(ci) ci.onclick=()=>setDispCur("IQD");
+  if(cu) cu.onclick=()=>setDispCur("USD");
+  applyCurToggle();
   $("langEn").onclick=()=>setLang("en");
   $("langAr").onclick=()=>setLang("ar");
   $("loginLangEn").onclick=()=>setLang("en");
@@ -5006,9 +5045,17 @@ v35AppendHTML("payroll", () => v35PayrollChartsBlock());
    same "insert only if missing" guard v36AddRuntimeTools already relies on,
    so nothing is ever duplicated and a stale project's block never lingers
    after switching to another one. */
-function v35cInsertIfMissing(blockId, html) {
+/* `where` picks the anchor. "head" puts the block straight under the page
+   title, which suits a list page. "end" appends it after everything already on
+   screen, which is what a project's Summary tab wants: the + Add Funding /
+   Expense / Material / Labour buttons and the KPI row belong above the charts,
+   not pushed down by them. */
+function v35cInsertIfMissing(blockId, html, where) {
   if (document.getElementById(blockId)) return;
-  const head = document.querySelector("#view .page-head");
+  const view = document.querySelector("#view");
+  if (!view) return;
+  if (where === "end") { view.insertAdjacentHTML("beforeend", html); return; }
+  const head = view.querySelector(".page-head");
   if (head) head.insertAdjacentHTML("afterend", html);
 }
 function v35cEnsureCharts() {
@@ -5035,7 +5082,7 @@ function v35cEnsureCharts() {
           `project:${p.id}`,
           (from, to) => v35ProjectSeries(p.id, from, to),
           T("Financial Trend", "الاتجاه المالي"),
-        )}</div>`);
+        )}</div>`, "end");
       }
     }
   } catch (e) { console.error("v35c chart safety net", e); }
