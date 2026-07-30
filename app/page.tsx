@@ -4,6 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
+import { sendMail } from "../lib/supabase/mail";
 import {
   ArrowLeft,
   ArrowRight,
@@ -445,9 +446,18 @@ const PROJECT_CHAT_KEY = "larsaProjectRoomsV1";
 // unread until they happen to enable push for an event they've never seen.
 // People can still turn it off from the same Notification Preferences page
 // as any other event.
+const EMAIL_DEFAULT_EVENTS = new Set([
+    "leave.requested", "leave.decided", "clock.correction",
+    "development.assigned", "development.reviewed",
+    "accounting.entry", "accounting.flag", "admin.broadcast",
+  ]);
 const DEFAULT_NOTIFY_PREFS: NotifyPrefs = Object.fromEntries(
-  NOTIFY_EVENTS.map((event) => [event.id, { inApp: true, email: false, push: event.id === "admin.broadcast" }]),
-);
+    NOTIFY_EVENTS.map((event) => [event.id, {
+          inApp: true,
+          push: event.id === "admin.broadcast",
+          email: EMAIL_DEFAULT_EVENTS.has(event.id),
+    }]),
+  );
 
 const GROWTH_STORE_KEY = "larsaStaffGrowthV1";
 
@@ -2447,6 +2457,11 @@ function raiseNotification(input: {
       // fully closed — the "phone" half of push that new Notification() alone
       // never could.
       sendPush(person.id, input.title, input.body);
+    }
+    if (prefs.email && person.email) {
+      // Same fire-and-forget contract as sendPush -- a failed email should
+      // never block the in-app/push notification it rides with.
+      sendMail({ to: person.email, subject: input.title, html: `<p>${input.body}</p>` });
     }
   });
   localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({ version: 1, items: items.slice(0, 400) }));
