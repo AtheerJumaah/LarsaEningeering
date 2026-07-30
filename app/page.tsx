@@ -4582,7 +4582,7 @@ export default function Home() {
   const sendVerificationCode = useCallback(async (email: string) => {
     const client = getSupabaseClient();
     if (!client) return "Verification is unavailable right now.";
-    const { error } = await client.auth.signInWithOtp({ email });
+    const { data: sent } = await client.functions.invoke("auth-code", { body: { op: "send", email, purpose: "verify" } }); const error = sent && sent.ok ? null : { message: (sent && sent.error) || "Could not send a verification code." };
     if (!error) return "";
     /* The default Supabase sender allows only a couple of emails an hour and
        the ceiling cannot be raised -- it lifts once a real SMTP provider is
@@ -4600,7 +4600,7 @@ export default function Home() {
   const checkEmailCode = useCallback(async (email: string, code: string) => {
     const client = getSupabaseClient();
     if (!client) return "Verification is unavailable right now.";
-    const { error } = await client.auth.verifyOtp({ email, token: code.trim(), type: "email" });
+    const { data: checked } = await client.functions.invoke("auth-code", { body: { op: "verify", email, purpose: "verify", code: code.trim() } }); const error = checked && checked.ok ? null : { message: (checked && checked.error) || "That code was not accepted." };
     return error ? "That code was not accepted. Check it and try again." : "";
   }, []);
 
@@ -4612,7 +4612,7 @@ export default function Home() {
     setVerifyError("");
     const client = getSupabaseClient();
     if (!client) { setVerifyBusy(false); setVerifyError("Verification is unavailable right now."); return; }
-    const { error } = await client.auth.verifyOtp({ email: verifyStage.email, token: code, type: "email" });
+    const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
     setVerifyBusy(false);
     if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
     persistEmailVerified(verifyStage.user.id, true);
