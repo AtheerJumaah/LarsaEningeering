@@ -3040,3 +3040,45 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .install-callout.ok, .install-callout.ok p { color: #14532d; font-weight: 750; }
 .unified-app.dark .install-callout { border-color: #6b4a1c; background: #241c10; }
 .unified-app.dark .install-callout b, .unified-app.dark .install-callout p { color: #f5d9a8; }
+
+
+/* Sign-in card: a third way in ------------------------------------------ */
+
+/* The tab strip was built for two options (Employee PIN, Email + Password).
+   Create account makes three, and a two-column grid pushed the third onto a
+   row of its own. Three across on a normal screen; stacked below 560px, where
+   three labels side by side are too cramped to read. */
+.auth-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 560px) {
+  .auth-tabs { grid-template-columns: 1fr; }
+}
+
+/* The account panels bring their own heading, so the card was showing two of
+   them: "Welcome back" sitting above "Create your account". Hide the sign-in
+   greeting whenever a second copy block follows it. */
+.auth-card > .auth-copy:has(~ .auth-copy) { display: none; }
+
+/* .btn and .rowActions come from the engine HTML files, which have their own
+   stylesheet; inside the Next-rendered auth card those classes style nothing,
+   so the secondary buttons rendered as bare text running together
+   ("Back to sign inReset my password"). Give them a shape here. */
+.auth-card .rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin: 12px 0 2px;
+}
+.auth-card .rowActions .btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.auth-card .rowActions .btn:hover { background: var(--bg); }
+.auth-card .rowActions .btn:disabled { opacity: 0.55; cursor: default; }
