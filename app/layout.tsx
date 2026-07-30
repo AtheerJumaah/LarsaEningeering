@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -27,6 +27,18 @@ export const metadata: Metadata = {
   },
 };
 
+/* Installed on an iPhone the app runs full-bleed, and the status bar is set to
+   black-translucent, so without viewport-fit=cover iOS gives no safe-area
+   insets and the top bar slides under the clock and the notch. Declaring the
+   viewport explicitly also stops the app depending on a framework default.
+   maximumScale is left alone on purpose: locking zoom breaks accessibility. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#000000",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -35,7 +47,6 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <meta name="theme-color" content="#000000" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
