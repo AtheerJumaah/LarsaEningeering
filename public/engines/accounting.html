@@ -530,7 +530,7 @@ function t(k){ const e=I18N[k]; return e? (isAR()?e[1]:e[0]) : k; }
    money / dates
    ============================================================ */
 function rate(){ return Math.max(1, num(state?.settings?.rate)); }
-function usd(v,cur){ return cur==="IQD" ? num(v)/rate() : num(v); }
+function usd(v,cur,fx){ return cur==="IQD" ? num(v)/(num(fx)>0?num(fx):rate()) : num(v); }\n/* Convert one stored line using the rate captured on it. */\nfunction usdRow(row,field){ if(!row) return 0; return usd(row[field||"amount"],row.currency,row.fxRate); }
 function toIQD(v,cur){ return cur==="USD" ? num(v)*rate() : num(v); }
 function fmt(v,cur){
   cur=cur||"USD";
@@ -1084,7 +1084,7 @@ function fieldInput(f,rec){
   const v=rec[f.k]; const id="ed_"+f.k; const wide=f.wide?"wide":"";
   let inner="";
   if(f.type==="text") inner=`<input id="${id}" value="${esc(v||"")}">`;
-  else if(f.type==="number") inner=`<input id="${id}" type="number" value="${v!=null?v:0}">`;
+  else if(f.type==="number") inner=`<input id="${id}" type="number" value="${v!=null?v:0}">`;\n  /* The USD rate on the day this line is entered, kept on the line itself.\n     One company-wide rate re-valued every past project every time it moved;\n     a rate stored per line means a 2026 payment keeps reporting at the rate\n     that was actually paid. Pre-filled with the current setting so the\n     accountant only types when the day differs. */\n  else if(f.type==="fx") inner=`<input id="${id}" type="number" step="1" min="1" value="${num(v)>0?v:rate()}">`;
   else if(f.type==="percent") inner=`<input id="${id}" type="number" step="0.5" value="${v!=null?(num(v)*100):0}">`;
   else if(f.type==="date") inner=`<input id="${id}" type="date" value="${v||today()}">`;
   else if(f.type==="textarea") inner=`<textarea id="${id}" rows="2">${esc(v||"")}</textarea>`;
@@ -1214,7 +1214,7 @@ async function saveEditor(){
     }
     const el=$("ed_"+f.k); if(!el) continue;
     if(f.type==="checkbox") rec[f.k]=el.checked;
-    else if(f.type==="number") rec[f.k]=num(el.value);
+    else if(f.type==="number"||f.type==="fx") rec[f.k]=num(el.value);
     else if(f.type==="percent") rec[f.k]=num(el.value)/100;
     else rec[f.k]=el.value;
   }
@@ -1952,6 +1952,13 @@ SCHEMA.payroll=[XF("employeeId",t("p_employee"),"empSelect"),XF("periodStart","P
 SCHEMA.boqItems=[XF("projectId",t("project"),"projectSelect"),XF("section","Section","text"),XF("itemCode","Item code","text"),XF("description",t("description"),"text",null,1),XF("unit","Unit","text"),XF("quantity","Quantity","number"),XF("unitPrice","Unit price","number"),curField(),XF("costCategory",t("category"),"select",EXP_CATS),XF("notes",t("notes"),"textarea",null,1)];
 SCHEMA.documents=[XF("projectId",t("project"),"projectSelect"),XF("title","Title","text"),XF("type",t("type"),"select",["Google Drive","ClickUp","Invoice","Drawing","Calculation","Receipt","Other"]),XF("url","URL","text",null,1),XF("notes",t("notes"),"textarea",null,1)];
 SCHEMA.users=[XF("name",t("name"),"text"),XF("email",t("email"),"text"),XF("pass","Local password","text"),XF("role",t("role"),"select",XROLES),XF("region",t("region"),"select",["Shared","Iraq","USA"]),XF("active",t("active"),"checkbox"),XF("notes",t("notes"),"textarea",null,1)];
+/* Historical exchange rate, asked for whenever money is recorded. Added after
+   every SCHEMA.* assignment above so it lands on the finished arrays, and
+   guarded so a reload cannot append it twice. */
+["funding","revenue","expenses","materials","projectLabor"].forEach(function(coll){
+  if(SCHEMA[coll] && !SCHEMA[coll].some(function(f){return f.k==="fxRate";}))
+    SCHEMA[coll].push({k:"fxRate",label:T("USD rate on this date","سعر الدولار في هذا التاريخ"),type:"fx"});
+});
 Object.assign(TITLEKEY,{materials:"Materials",projectLabor:"Project Labor",boqItems:"BOQ / Pricing",documents:"Documents / Links",users:"Users & Access"});
 
 function xActual(s){return["Approved","Paid","Received"].includes(s)}
@@ -4809,25 +4816,28 @@ function v35ProjectLikeSeries(matchesProject, from, to) {
   const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in rev ? k : null; };
   const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
 
+  /* Each line converts at the rate captured on it (row.fxRate), falling back
+     to the current setting for lines entered before that was recorded, so a
+     past month stops being re-valued every time the rate moves. */
   (state.funding || []).forEach((f) => {
     const k = (matchesProject(f.projectId) && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
-    if (k) rev[k] += usd(f.amount, f.currency) + (f.waived ? 0 : usd(f.consultancyFee, f.currency));
+    if (k) rev[k] += usd(f.amount, f.currency, f.fxRate) + (f.waived ? 0 : usd(f.consultancyFee, f.currency, f.fxRate));
   });
   (state.revenue || []).forEach((r) => {
     const k = (matchesProject(r.projectId) && r.status === "Received") ? bucket(r.date) : null;
-    if (k) rev[k] += usd(r.amount, r.currency);
+    if (k) rev[k] += usd(r.amount, r.currency, r.fxRate);
   });
   (state.expenses || []).forEach((e) => {
     const k = (matchesProject(e.projectId) && actual(e.status)) ? bucket(e.date) : null;
-    if (k) exp[k] += usd(e.amount, e.currency);
+    if (k) exp[k] += usd(e.amount, e.currency, e.fxRate);
   });
   (state.materials || []).forEach((m) => {
     const k = (matchesProject(m.projectId) && actual(m.status)) ? bucket(m.date) : null;
-    if (k) mat[k] += usd(m.amount, m.currency);
+    if (k) mat[k] += usd(m.amount, m.currency, m.fxRate);
   });
   (state.projectLabor || []).forEach((l) => {
     const k = (matchesProject(l.projectId) && actual(l.status)) ? bucket(l.date) : null;
-    if (k) lab[k] += usd(l.total, l.currency);
+    if (k) lab[k] += usd(l.total, l.currency, l.fxRate);
   });
 
   return {

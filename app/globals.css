@@ -2967,19 +2967,19 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* Income blue, cost red, net green — cost is the figure you want to catch
    your eye when it runs high, and a positive net reading green matches the
    summary tile. A negative net turns red in the label below the bars. */
-.fin-chart-key i.income { background: #2563eb; }
-.fin-chart-key i.cost { background: #d92d20; }
-.fin-chart-key i.net { background: #0f7b45; }
+.fin-chart-key i { flex: 0 0 auto; }
 .fin-chart-plot { display: grid; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
 .fin-month { display: grid; grid-template-rows: 1fr auto auto; gap: 5px; justify-items: center; min-width: 0; }
 .fin-month-bars {
-  display: flex; align-items: flex-end; justify-content: center; gap: 3px;
-  width: 100%; height: 128px; padding: 0 2px;
+  display: flex; align-items: flex-end; justify-content: center; gap: 5px;
+  width: 100%; height: 142px; padding: 0 2px;
   border-bottom: 1px solid var(--line);
 }
-.fin-month-bars i { display: block; width: 11px; min-height: 2px; border-radius: 4px 4px 0 0; }
-.fin-month-bars i.income { background: #2563eb; }
-.fin-month-bars i.cost { background: #d92d20; }
+/* One stack per side. Segments sit bottom-up, so the column height is the
+   month's total and each band is its share of it. */
+.fin-stack { display: flex; flex-direction: column-reverse; justify-content: flex-start; width: 14px; height: 100%; }
+.fin-stack i { display: block; width: 100%; min-height: 2px; }
+.fin-stack i:last-child { border-radius: 4px 4px 0 0; }
 .fin-month-net { font-size: 10.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; color: #0f7b45; }
 .fin-month-net.down { color: #b42318; }
 .fin-month small { font-size: 9.5px; font-weight: 850; color: var(--muted); white-space: nowrap; }

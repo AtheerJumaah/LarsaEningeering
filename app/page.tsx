@@ -392,6 +392,11 @@ type LedgerLine = {
   consultancyFee: number;
   waived: boolean;
   label: string;
+  /* The USD rate recorded on this line the day it was entered. 0 for lines
+     written before the engine started asking, which fall back to the current
+     setting. Storing it per line is what stops a rate change from silently
+     re-valuing every closed month. */
+  fxRate: number;
 };
 type AccountingSnapshot = {
   key: string;
@@ -2583,11 +2588,13 @@ function roomMembers(projectId: string, staff: StaffUser[], projects: Accounting
 }
 
 /* Mirrors usd() in public/engines/accounting.html exactly: an IQD figure is
-   divided by the configured rate, anything else is already USD. */
+   divided by the rate captured on that line, or by the current setting when
+   the line predates that being recorded. Anything else is already USD. */
 const DEFAULT_IQD_RATE = 1310;
-function toUsd(amount: unknown, currency: unknown, rate: number) {
+function toUsd(amount: unknown, currency: unknown, rate: number, lineRate = 0) {
   const value = finiteNumber(amount);
-  return String(currency || "USD").toUpperCase() === "IQD" ? value / Math.max(1, rate) : value;
+  if (String(currency || "USD").toUpperCase() !== "IQD") return value;
+  return value / Math.max(1, lineRate > 0 ? lineRate : rate);
 }
 /* A line only counts once it is real money: the engine treats these as
    settled and excludes anything still requested, pending, or rejected. */
@@ -2603,6 +2610,7 @@ function readLedger(rows: unknown, amountKey: string): LedgerLine[] {
     amount: finiteNumber(row[amountKey]),
     consultancyFee: finiteNumber(row.consultancyFee),
     waived: row.waived === true,
+    fxRate: finiteNumber(row.fxRate),
     label: String(row.itemName || row.trade || row.description || row.category || ""),
   }));
 }
@@ -2740,7 +2748,7 @@ function sumLedger(
     if (ids && !ids.has(row.projectId)) return total;
     if (!SETTLED.includes(row.status)) return total;
     if (within && !within(row)) return total;
-    return total + toUsd(row.amount, row.currency, rate);
+    return total + toUsd(row.amount, row.currency, rate, row.fxRate);
   }, 0);
 }
 function financialsFor(
@@ -2753,7 +2761,7 @@ function financialsFor(
     if (ids && !ids.has(row.projectId)) return total;
     if (!SETTLED.includes(row.status) || row.waived) return total;
     if (within && !within(row)) return total;
-    return total + toUsd(row.consultancyFee, row.currency, rate);
+    return total + toUsd(row.consultancyFee, row.currency, rate, row.fxRate);
   }, 0);
   const revenue = sumLedger(snapshot.revenue, ids, rate, within);
   const materials = sumLedger(snapshot.materials, ids, rate, within);
@@ -2849,7 +2857,7 @@ function sampleConstructionSnapshot(rate: number): AccountingSnapshot {
     extra: Partial<LedgerLine> = {},
   ): LedgerLine => ({
     id: `${projectId}-${date}-${label}`, projectId, date, status: "Approved",
-    currency: "USD", amount, consultancyFee: 0, waived: false, label, ...extra,
+    currency: "USD", amount, consultancyFee: 0, waived: false, label, fxRate: 0, ...extra,
   });
   return {
     key: "sample",
@@ -2908,9 +2916,24 @@ function sampleConstructionSnapshot(rate: number): AccountingSnapshot {
   };
 }
 
-/* One month's income and cost as vertical bars, on a scale shared with every
-   other month on screen, so the shape of the run is comparable at a glance.
-   Deliberately CSS-only: no chart library, and it prints. */
+/* Two stacked columns a month, on one scale shared across every month shown.
+   Stacking rather than a bar per figure means each column still reads as the
+   month's total income or total cost, while showing what it is made of —
+   funding / fee / revenue on the way in, materials / labour / expenses on the
+   way out. Income shades of blue, cost shades of red, so the two sides stay
+   distinguishable by hue and the parts by lightness, which survives colour
+   blindness where six separate hues would not. CSS only, and it prints. */
+const INCOME_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[] = [
+  { key: "funding", label: "Client funding", tint: "#1e40af" },
+  { key: "fees", label: "Our fee", tint: "#3b82f6" },
+  { key: "revenue", label: "Engineering revenue", tint: "#93c5fd" },
+];
+const COST_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[] = [
+  { key: "materials", label: "Materials", tint: "#991b1b" },
+  { key: "labor", label: "Labour", tint: "#dc2626" },
+  { key: "expenses", label: "Other expenses", tint: "#fca5a5" },
+];
+
 function MonthBars({
   points, currency, rate,
 }: {
@@ -2923,37 +2946,47 @@ function MonthBars({
     1,
     ...points.map((point) => Math.max(point.figures.income, point.figures.cost)),
   );
+  const column = (
+    figures: ProjectFinancials,
+    parts: typeof INCOME_PARTS,
+    total: number,
+    heading: string,
+  ) => (
+    <span className="fin-stack" title={`${heading} ${formatMoney(total, currency, rate)}`}>
+      {parts.map((part) => {
+        const value = figures[part.key] as number;
+        if (value <= 0) return null;
+        return (
+          <i
+            key={part.key}
+            style={{ height: `${(value / peak) * 100}%`, background: part.tint }}
+            title={`${part.label} ${formatMoney(value, currency, rate)}`}
+          />
+        );
+      })}
+    </span>
+  );
   return (
     <div className="fin-chart">
       <div className="fin-chart-key">
-        <span><i className="income" /> Income</span>
-        <span><i className="cost" /> Cost</span>
-        <span><i className="net" /> Net</span>
+        {[...INCOME_PARTS, ...COST_PARTS].map((part) => (
+          <span key={part.key}><i style={{ background: part.tint }} /> {part.label}</span>
+        ))}
+        <span><i style={{ background: "#0f7b45" }} /> Net</span>
       </div>
-      <div className="fin-chart-plot" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(34px, 1fr))` }}>
-        {points.map((point) => {
-          const { income, cost, net } = point.figures;
-          return (
-            <div className="fin-month" key={point.key}>
-              <span className="fin-month-bars">
-                <i
-                  className="income"
-                  style={{ height: `${(income / peak) * 100}%` }}
-                  title={`Income ${formatMoney(income, currency, rate)}`}
-                />
-                <i
-                  className="cost"
-                  style={{ height: `${(cost / peak) * 100}%` }}
-                  title={`Cost ${formatMoney(cost, currency, rate)}`}
-                />
-              </span>
-              <b className={net < 0 ? "fin-month-net down" : "fin-month-net"}>
-                {net === 0 ? "—" : formatCompact(net, currency, rate)}
-              </b>
-              <small>{point.label}</small>
-            </div>
-          );
-        })}
+      <div className="fin-chart-plot" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(46px, 1fr))` }}>
+        {points.map((point) => (
+          <div className="fin-month" key={point.key}>
+            <span className="fin-month-bars">
+              {column(point.figures, INCOME_PARTS, point.figures.income, "Income")}
+              {column(point.figures, COST_PARTS, point.figures.cost, "Cost")}
+            </span>
+            <b className={point.figures.net < 0 ? "fin-month-net down" : "fin-month-net"}>
+              {point.figures.net === 0 ? "\u2014" : formatCompact(point.figures.net, currency, rate)}
+            </b>
+            <small>{point.label}</small>
+          </div>
+        ))}
       </div>
     </div>
   );
