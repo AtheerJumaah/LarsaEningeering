@@ -10940,7 +10940,7 @@ function QuickClock({
       <section className="clock-face">
         <div className="clock-readout compact">
           <small>{open ? "Time on shift" : "Current time"}</small>
-          <b>{open ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--:--:--"}</b>
+          <b>{open ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</b>
           <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }) : ""}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
