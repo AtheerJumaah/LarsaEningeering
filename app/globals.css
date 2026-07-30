@@ -2171,6 +2171,16 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .unified-app.dark .settings-fields input { background: #1b1e24; border-color: #2b303a; color: #f4f5f7; }
 .unified-app.dark .settings-fields input:disabled { background: #22262e; }
 .settings-fields small { font-size: 10.5px; font-weight: 650; color: #8b909b; text-transform: none; letter-spacing: 0; }
+.settings-fields textarea {
+  width: 100%; min-width: 0; padding: 12px 13px; border: 1px solid #dfe2e8; border-radius: 12px;
+  background: #fff; font-size: 14px; font-weight: 600; color: #17181b; text-transform: none;
+  letter-spacing: normal; font-family: inherit; resize: vertical; line-height: 1.5;
+}
+.unified-app.dark .settings-fields textarea { background: #1b1e24; border-color: #2b303a; color: #f4f5f7; }
+.notify-push { display: flex; align-items: center; gap: 9px; cursor: pointer; width: fit-content; }
+.notify-push input { width: 17px; height: 17px; accent-color: #17181b; }
+.notify-send-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.notify-send-row .status { color: var(--muted); font-size: 12.5px; font-weight: 700; }
 .theme-choice { display: inline-flex; gap: 6px; padding: 5px; border-radius: 999px; background: #f1f3f7; }
 .unified-app.dark .theme-choice { background: #21252d; }
 .theme-choice button {

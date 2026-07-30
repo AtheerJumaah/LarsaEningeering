@@ -105,7 +105,8 @@ type NativeView =
   | "performance"
   | "development"
   | "performanceHistory"
-  | "projects";
+  | "projects"
+  | "notifications";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -396,6 +397,7 @@ const NOTIFY_EVENTS: { id: string; label: string; description: string; audience:
   { id: "accounting.entry", label: "Accounting activity", description: "Funding, expenses, payroll, or invoices are recorded", audience: "Finance" },
   { id: "accounting.flag", label: "Accounting review flag", description: "An entry is flagged for review", audience: "Finance" },
   { id: "project.updated", label: "Project updated", description: "Progress or status changes on a project you can see", audience: "Assigned" },
+  { id: "admin.broadcast", label: "Admin announcement", description: "A targeted message sent to you from Notifications", audience: "Everyone" },
 ];
 const NOTIFY_STORE_KEY = "larsaNotificationsV1";
 // Sign-in convenience. The address and the "stay signed in" session are stored;
@@ -404,8 +406,14 @@ const NOTIFY_STORE_KEY = "larsaNotificationsV1";
 const KEEP_SESSION_KEY = "larsa-control-session-keep";
 const REMEMBER_EMAIL_KEY = "larsa-control-remember-email";
 const PROJECT_CHAT_KEY = "larsaProjectRoomsV1";
+// Every event defaults push off until the person opts in from their own
+// notification settings — except admin.broadcast: an admin picking specific
+// people and sending a message expects it to actually reach them, not sit
+// unread until they happen to enable push for an event they've never seen.
+// People can still turn it off from the same Notification Preferences page
+// as any other event.
 const DEFAULT_NOTIFY_PREFS: NotifyPrefs = Object.fromEntries(
-  NOTIFY_EVENTS.map((event) => [event.id, { inApp: true, email: false, push: false }]),
+  NOTIFY_EVENTS.map((event) => [event.id, { inApp: true, email: false, push: event.id === "admin.broadcast" }]),
 );
 
 const GROWTH_STORE_KEY = "larsaStaffGrowthV1";
@@ -443,6 +451,7 @@ const NOTIFICATIONS_ITEM: Item = {
   label: "Notifications",
   description: "Send, target, and manage staff notifications",
   code: "NT",
+  native: "notifications",
 };
 const PERFORMANCE_CENTER_ITEM: Item = {
   id: "performance-center",
@@ -6003,6 +6012,9 @@ export default function Home() {
               }}
             />
           </div>
+          <div className={active.native === "notifications" ? "native active" : "native"}>
+            <NotificationsCenter users={directoryUsers} currentUser={sessionUser} />
+          </div>
           <div className={active.native === "data" ? "native active" : "native"}>
             <DataCenter
               storage={storage}
@@ -6524,6 +6536,13 @@ function AdminCenter({
       color: "amber",
     },
     {
+      id: "admin-notifications",
+      title: "Notifications",
+      text: "Send a targeted message to a group or specific people",
+      icon: Bell,
+      color: "violet",
+    },
+    {
       id: "data",
       title: "Data Center",
       text: "Synchronize staff and manage backup or restore",
@@ -6567,6 +6586,147 @@ function AdminCenter({
           <h3>Custom permissions remain active</h3>
           <p>Each administrative account sees only the tools allowed by its assigned permissions. Super Admin retains complete control.</p>
         </div>
+      </section>
+    </div>
+  );
+}
+
+type NotifyGroup = "all" | "managers" | "accountants" | "engineers" | "selected";
+const NOTIFY_GROUP_MATCH: Partial<Record<NotifyGroup, string[]>> = {
+  managers: ["Super Admin", "Manager", "Team Leader"],
+  accountants: ["Accountant", "Admin HR"],
+  engineers: ["Engineer", "Construction Engineer", "Viewer"],
+};
+
+function NotificationsCenter({
+  users,
+  currentUser,
+}: {
+  users: StaffUser[];
+  currentUser: StaffUser | null;
+}) {
+  const [group, setGroup] = useState<NotifyGroup>("all");
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [subject, setSubject] = useState("");
+  const [message, setMessage] = useState("");
+  const [pushToo, setPushToo] = useState(true);
+  const [log, setLog] = useState<AppNotification[]>([]);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => { setLog(readNotifications()); }, []);
+
+  const active = useMemo(() => users.filter((person) => person.enabled !== false), [users]);
+  const recipients = useMemo(() => {
+    if (group === "selected") return active.filter((person) => selected[person.id]);
+    const allow = NOTIFY_GROUP_MATCH[group];
+    return allow ? active.filter((person) => allow.includes(person.access || "")) : active;
+  }, [active, group, selected]);
+
+  const send = () => {
+    if (!subject.trim() && !message.trim()) { setStatus("Add a subject or a message first."); return; }
+    if (!recipients.length) { setStatus("No recipients matched that group."); return; }
+    // Push defaults on for admin.broadcast (see DEFAULT_NOTIFY_PREFS), but the
+    // sender can turn it off per-send for an in-app-only heads-up; the
+    // in-app item is always written so it shows up in the bell either way.
+    const targets = pushToo
+      ? recipients
+      : recipients.map((person) => ({
+        ...person,
+        notifyPrefs: { ...person.notifyPrefs, "admin.broadcast": { ...person.notifyPrefs?.["admin.broadcast"], push: false } },
+      }));
+    raiseNotification({
+      event: "admin.broadcast",
+      title: subject.trim() || "Notification",
+      body: message.trim(),
+      fromName: currentUser?.name || "Larsa Control",
+      itemId: "admin-notifications",
+      recipients: targets,
+    });
+    setLog(readNotifications());
+    setStatus(`Sent to ${recipients.length} ${recipients.length === 1 ? "person" : "people"}.`);
+    setSubject("");
+    setMessage("");
+  };
+
+  return (
+    <div className="native-scroll">
+      <section className="overview-hero">
+        <div>
+          <span className="eyebrow">Administration</span>
+          <h2>Notifications</h2>
+          <p>Send a message to a group or to specific people. It lands in their notification bell, and reaches their devices with push if they have it enabled.</p>
+        </div>
+        <span className="access-pill"><Bell size={16} /> {active.length} staff on record</span>
+      </section>
+
+      <section className="settings-panel">
+        <div className="settings-fields">
+          <label>
+            Target group
+            <select value={group} onChange={(event) => setGroup(event.target.value as NotifyGroup)}>
+              <option value="all">All staff</option>
+              <option value="managers">Managers</option>
+              <option value="accountants">Accountants</option>
+              <option value="engineers">Engineers &amp; staff</option>
+              <option value="selected">Specific people</option>
+            </select>
+          </label>
+          <label>
+            Subject
+            <input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="e.g. Office closed Friday" />
+          </label>
+        </div>
+        <div className="settings-fields">
+          <label style={{ gridColumn: "1 / -1" }}>
+            Message
+            <textarea rows={4} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Write the message..." />
+          </label>
+        </div>
+
+        {group === "selected" && (
+          <div className="project-check-list" aria-label="Choose recipients">
+            {active.map((person) => (
+              <label key={person.id}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(selected[person.id])}
+                  onChange={() => setSelected((prev) => ({ ...prev, [person.id]: !prev[person.id] }))}
+                />
+                <span><b>{person.name}</b><small>{person.access || "Engineer"}</small></span>
+              </label>
+            ))}
+            {!active.length && <span className="muted">No staff on record yet.</span>}
+          </div>
+        )}
+
+        <label className="notify-push">
+          <input type="checkbox" checked={pushToo} onChange={(event) => setPushToo(event.target.checked)} />
+          Also push to their devices, not just the in-app bell
+        </label>
+
+        <div className="notify-send-row">
+          <button type="button" className="primary" onClick={send}>
+            Send to {recipients.length} {recipients.length === 1 ? "person" : "people"}
+          </button>
+          {status && <span className="status">{status}</span>}
+        </div>
+      </section>
+
+      <section className="table-wrap">
+        <table>
+          <thead><tr><th>When</th><th>To</th><th>Subject</th><th>From</th></tr></thead>
+          <tbody>
+            {log.slice(0, 40).map((item) => (
+              <tr key={item.id}>
+                <td>{new Date(item.at).toLocaleString()}</td>
+                <td>{active.find((person) => person.id === item.toId)?.name || item.toId}</td>
+                <td><b>{item.title}</b>{item.body && <div className="muted">{item.body}</div>}</td>
+                <td>{item.fromName}</td>
+              </tr>
+            ))}
+            {!log.length && <tr><td colSpan={4} className="muted">Nothing sent from this device yet.</td></tr>}
+          </tbody>
+        </table>
       </section>
     </div>
   );
