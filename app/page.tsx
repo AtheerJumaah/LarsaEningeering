@@ -4918,13 +4918,40 @@ export default function Home() {
     setMenuOpen(false);
   };
 
+  /* Chrome, Edge and Android fire beforeinstallprompt when the app is
+     installable, and hand over an event that installs it in one tap. Nothing
+     was listening for it, so that event was dropped every time and Install
+     always fell back to the instructions panel — even on the platforms that
+     can genuinely do it automatically. Safari on iOS never fires this and
+     offers no equivalent, which is why iPhone still needs Share → Add to Home
+     Screen; there is no API to automate it there. */
+  useEffect(() => {
+    const onPrompt = (event: Event) => {
+      event.preventDefault(); // keeps the browser's own mini-banner from racing us
+      setInstallPrompt(event as InstallEvent);
+    };
+    const onInstalled = () => { setInstallPrompt(null); setInstallHelp(false); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
   const install = async () => {
     if (!installPrompt) {
       setInstallHelp(true);
       return;
     }
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
+    try {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice?.outcome === "accepted") notify("Larsa Control installed.");
+    } catch {
+      // The event is single-use and expires; fall back to showing the steps.
+      setInstallHelp(true);
+    }
     setInstallPrompt(null);
   };
 
