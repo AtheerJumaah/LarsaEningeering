@@ -395,6 +395,10 @@ type LedgerLine = {
 };
 type AccountingSnapshot = {
   key: string;
+  /* IQD per USD, as set in the accounting engine's own settings. Read from the
+     store rather than hardcoded: the engine's rate() does the same, and a rate
+     baked in here would quietly disagree with every figure it reports. */
+  rate: number;
   projects: AccountingProject[];
   documents: AccountingDocument[];
   commissions: CommissionRow[];
@@ -2578,13 +2582,12 @@ function roomMembers(projectId: string, staff: StaffUser[], projects: Accounting
     && visibleProjectIds(person, projects).has(projectId));
 }
 
-/* Rates the engine itself uses to report every currency in USD. Kept in step
-   with usd() in public/engines/accounting.html so the two sides never disagree
-   about what a project earned. */
-const FX_TO_USD: Record<string, number> = { USD: 1, IQD: 1 / 1320 };
-function toUsd(amount: unknown, currency: unknown) {
-  const rate = FX_TO_USD[String(currency || "USD").toUpperCase()] ?? 1;
-  return finiteNumber(amount) * rate;
+/* Mirrors usd() in public/engines/accounting.html exactly: an IQD figure is
+   divided by the configured rate, anything else is already USD. */
+const DEFAULT_IQD_RATE = 1310;
+function toUsd(amount: unknown, currency: unknown, rate: number) {
+  const value = finiteNumber(amount);
+  return String(currency || "USD").toUpperCase() === "IQD" ? value / Math.max(1, rate) : value;
 }
 /* A line only counts once it is real money: the engine treats these as
    settled and excludes anything still requested, pending, or rejected. */
@@ -2606,7 +2609,7 @@ function readLedger(rows: unknown, amountKey: string): LedgerLine[] {
 
 function readAccountingSnapshot(): AccountingSnapshot {
   const empty: AccountingSnapshot = {
-    key: "", projects: [], documents: [], commissions: [], payroll: [],
+    key: "", rate: DEFAULT_IQD_RATE, projects: [], documents: [], commissions: [], payroll: [],
     funding: [], revenue: [], materials: [], labor: [], expenses: [],
   };
   if (typeof window === "undefined") return empty;
@@ -2686,8 +2689,11 @@ function readAccountingSnapshot(): AccountingSnapshot {
         status: String(row.status || ""),
         region: String(row.region || ""),
       }));
+    const settings = (store.settings || {}) as Record<string, unknown>;
     return {
-      key, projects, documents, commissions, payroll,
+      key,
+      rate: Math.max(1, finiteNumber(settings.rate) || DEFAULT_IQD_RATE),
+      projects, documents, commissions, payroll,
       funding: readLedger(store.funding, "amount"),
       revenue: readLedger(store.revenue, "amount"),
       materials: readLedger(store.materials, "amount"),
@@ -2724,24 +2730,35 @@ const ZERO_FINANCIALS: ProjectFinancials = {
   income: 0, funding: 0, fees: 0, revenue: 0,
   materials: 0, labor: 0, expenses: 0, cost: 0, net: 0, margin: 0,
 };
-function sumLedger(rows: LedgerLine[], ids: Set<string> | null) {
+/* `within` lets the same arithmetic serve a whole-company total, one region,
+   one project, or a single month, without a second copy of the rules. */
+function sumLedger(
+  rows: LedgerLine[], ids: Set<string> | null, rate: number,
+  within?: (row: LedgerLine) => boolean,
+) {
   return rows.reduce((total, row) => {
     if (ids && !ids.has(row.projectId)) return total;
     if (!SETTLED.includes(row.status)) return total;
-    return total + toUsd(row.amount, row.currency);
+    if (within && !within(row)) return total;
+    return total + toUsd(row.amount, row.currency, rate);
   }, 0);
 }
-function financialsFor(snapshot: AccountingSnapshot, ids: Set<string> | null): ProjectFinancials {
-  const funding = sumLedger(snapshot.funding, ids);
+function financialsFor(
+  snapshot: AccountingSnapshot, ids: Set<string> | null,
+  within?: (row: LedgerLine) => boolean,
+): ProjectFinancials {
+  const rate = snapshot.rate;
+  const funding = sumLedger(snapshot.funding, ids, rate, within);
   const fees = snapshot.funding.reduce((total, row) => {
     if (ids && !ids.has(row.projectId)) return total;
     if (!SETTLED.includes(row.status) || row.waived) return total;
-    return total + toUsd(row.consultancyFee, row.currency);
+    if (within && !within(row)) return total;
+    return total + toUsd(row.consultancyFee, row.currency, rate);
   }, 0);
-  const revenue = sumLedger(snapshot.revenue, ids);
-  const materials = sumLedger(snapshot.materials, ids);
-  const labor = sumLedger(snapshot.labor, ids);
-  const expenses = sumLedger(snapshot.expenses, ids);
+  const revenue = sumLedger(snapshot.revenue, ids, rate, within);
+  const materials = sumLedger(snapshot.materials, ids, rate, within);
+  const labor = sumLedger(snapshot.labor, ids, rate, within);
+  const expenses = sumLedger(snapshot.expenses, ids, rate, within);
   const income = funding + fees + revenue;
   const cost = materials + labor + expenses;
   const net = income - cost;
@@ -2750,9 +2767,64 @@ function financialsFor(snapshot: AccountingSnapshot, ids: Set<string> | null): P
     margin: income > 0 ? (net / income) * 100 : 0,
   };
 }
-function money(value: number) {
-  const rounded = Math.round(value);
-  return `$${rounded.toLocaleString("en-US")}`;
+
+/* Every month from the first dated line to the last, with no gaps, so a month
+   where nothing happened still shows as an empty column rather than being
+   skipped and making the run of months read wrong. */
+function monthKeysFor(snapshot: AccountingSnapshot, ids: Set<string> | null) {
+  const ledgers = [snapshot.funding, snapshot.revenue, snapshot.materials, snapshot.labor, snapshot.expenses];
+  const found: string[] = [];
+  ledgers.forEach((rows) => rows.forEach((row) => {
+    if (ids && !ids.has(row.projectId)) return;
+    if (!SETTLED.includes(row.status)) return;
+    const key = String(row.date || "").slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(key)) found.push(key);
+  }));
+  if (!found.length) return [] as string[];
+  const sorted = found.sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const keys: string[] = [];
+  let year = Number(first.slice(0, 4));
+  let month = Number(first.slice(5, 7));
+  for (let guard = 0; guard < 240; guard += 1) {
+    const key = `${year}-${String(month).padStart(2, "0")}`;
+    keys.push(key);
+    if (key === last) break;
+    month += 1;
+    if (month > 12) { month = 1; year += 1; }
+  }
+  return keys;
+}
+type MonthPoint = { key: string; label: string; figures: ProjectFinancials };
+function monthlySeries(snapshot: AccountingSnapshot, ids: Set<string> | null): MonthPoint[] {
+  return monthKeysFor(snapshot, ids).map((key) => ({
+    key,
+    label: new Date(`${key}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+    figures: financialsFor(snapshot, ids, (row) => String(row.date || "").slice(0, 7) === key),
+  }));
+}
+
+/* Figures are held in USD, matching the engine, and converted only for
+   display. IQD is shown whole; USD keeps no cents either, since these are
+   project totals rather than invoice lines. */
+function formatMoney(usdValue: number, currency: "IQD" | "USD", rate: number) {
+  const value = currency === "IQD" ? usdValue * rate : usdValue;
+  const text = Math.round(value).toLocaleString("en-US");
+  return currency === "IQD" ? `${text} IQD` : `$${text}`;
+}
+/* Long IQD figures need to stay readable inside a card, so millions and
+   billions are abbreviated on the summary tiles only. */
+function formatCompact(usdValue: number, currency: "IQD" | "USD", rate: number) {
+  const value = currency === "IQD" ? usdValue * rate : usdValue;
+  const sign = value < 0 ? "-" : "";
+  const size = Math.abs(value);
+  const unit = currency === "IQD" ? " IQD" : "";
+  const head = currency === "IQD" ? "" : "$";
+  if (size >= 1e9) return `${sign}${head}${(size / 1e9).toFixed(2)}b${unit}`;
+  if (size >= 1e6) return `${sign}${head}${(size / 1e6).toFixed(2)}m${unit}`;
+  if (size >= 1e4) return `${sign}${head}${Math.round(size / 1e3).toLocaleString("en-US")}k${unit}`;
+  return `${sign}${head}${Math.round(size).toLocaleString("en-US")}${unit}`;
 }
 
 /* A worked example, held in memory and never written to storage or synced, so
@@ -2781,6 +2853,7 @@ function sampleConstructionSnapshot(): AccountingSnapshot {
   });
   return {
     key: "sample",
+    rate: DEFAULT_IQD_RATE,
     documents: [], commissions: [], payroll: [],
     projects: [
       project("sp1", "IQ-101", "Erbil Residential Tower", "Barzani Holdings", "Iraq", "Active"),
@@ -2833,6 +2906,57 @@ function sampleConstructionSnapshot(): AccountingSnapshot {
   };
 }
 
+/* One month's income and cost as vertical bars, on a scale shared with every
+   other month on screen, so the shape of the run is comparable at a glance.
+   Deliberately CSS-only: no chart library, and it prints. */
+function MonthBars({
+  points, currency, rate,
+}: {
+  points: MonthPoint[];
+  currency: "IQD" | "USD";
+  rate: number;
+}) {
+  if (!points.length) return null;
+  const peak = Math.max(
+    1,
+    ...points.map((point) => Math.max(point.figures.income, point.figures.cost)),
+  );
+  return (
+    <div className="fin-chart">
+      <div className="fin-chart-key">
+        <span><i className="income" /> Income</span>
+        <span><i className="cost" /> Cost</span>
+        <span><i className="net" /> Net</span>
+      </div>
+      <div className="fin-chart-plot" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(34px, 1fr))` }}>
+        {points.map((point) => {
+          const { income, cost, net } = point.figures;
+          return (
+            <div className="fin-month" key={point.key}>
+              <span className="fin-month-bars">
+                <i
+                  className="income"
+                  style={{ height: `${(income / peak) * 100}%` }}
+                  title={`Income ${formatMoney(income, currency, rate)}`}
+                />
+                <i
+                  className="cost"
+                  style={{ height: `${(cost / peak) * 100}%` }}
+                  title={`Cost ${formatMoney(cost, currency, rate)}`}
+                />
+              </span>
+              <b className={net < 0 ? "fin-month-net down" : "fin-month-net"}>
+                {net === 0 ? "—" : formatCompact(net, currency, rate)}
+              </b>
+              <small>{point.label}</small>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ConstructionFinancials({
   snapshot, viewer,
 }: {
@@ -2841,46 +2965,67 @@ function ConstructionFinancials({
 }) {
   const [useSample, setUseSample] = useState(false);
   const [region, setRegion] = useState("All");
+  const [currency, setCurrency] = useState<"IQD" | "USD">("IQD");
   const [openProject, setOpenProject] = useState("");
 
   const sample = useMemo(() => sampleConstructionSnapshot(), []);
   const live = useSample ? sample : snapshot;
+  const rate = live.rate;
+  const show = (value: number) => formatMoney(value, currency, rate);
+  const brief = (value: number) => formatCompact(value, currency, rate);
 
-  // Only projects this account is allowed to see, and only construction ones.
+  // Only projects this account may see, and only construction ones.
   const allowed = useMemo(
-    () => (useSample ? new Set(sample.projects.map((row) => row.id)) : visibleProjectIds(viewer, snapshot.projects)),
+    () => (useSample
+      ? new Set(sample.projects.map((row) => row.id))
+      : visibleProjectIds(viewer, snapshot.projects)),
     [useSample, sample, viewer, snapshot.projects],
   );
+  const isConstruction = (row: AccountingProject) => row.type === "Construction" || row.phase === "Execution";
   const projects = useMemo(
-    () => live.projects.filter((row) => allowed.has(row.id)
-      && (row.type === "Construction" || row.phase === "Execution")
+    () => live.projects.filter((row) => allowed.has(row.id) && isConstruction(row)
       && (region === "All" || row.region === region)),
     [live.projects, allowed, region],
   );
+  const scopeIds = useMemo(() => new Set(projects.map((row) => row.id)), [projects]);
 
   const rows = useMemo(
     () => projects
-      .map((project) => ({ project, figures: financialsFor(live, new Set([project.id])) }))
+      .map((project) => ({
+        project,
+        figures: financialsFor(live, new Set([project.id])),
+        months: monthlySeries(live, new Set([project.id])),
+      }))
       .sort((a, b) => b.figures.income - a.figures.income),
     [projects, live],
   );
   const totals = useMemo(
-    () => (projects.length
-      ? financialsFor(live, new Set(projects.map((row) => row.id)))
-      : ZERO_FINANCIALS),
-    [projects, live],
+    () => (scopeIds.size ? financialsFor(live, scopeIds) : ZERO_FINANCIALS),
+    [scopeIds, live],
   );
-  // The same figures per region, so the company splits are always visible.
+  const totalMonths = useMemo(
+    () => (scopeIds.size ? monthlySeries(live, scopeIds) : []),
+    [scopeIds, live],
+  );
   const regionRows = useMemo(() => ["Iraq", "USA"].map((name) => {
     const ids = new Set(live.projects
-      .filter((row) => allowed.has(row.id)
-        && (row.type === "Construction" || row.phase === "Execution")
-        && row.region === name)
+      .filter((row) => allowed.has(row.id) && isConstruction(row) && row.region === name)
       .map((row) => row.id));
     return { name, count: ids.size, figures: ids.size ? financialsFor(live, ids) : ZERO_FINANCIALS };
   }), [live, allowed]);
 
-  const costMax = Math.max(1, ...rows.map((row) => Math.max(row.figures.income, row.figures.cost)));
+  const scale = Math.max(1, ...rows.map((row) => Math.max(row.figures.income, row.figures.cost)));
+
+  const tiles: { label: string; value: number; note: string; tone?: string }[] = [
+    { label: "Income", value: totals.income, note: "Funding + fee + revenue" },
+    { label: "Client funding", value: totals.funding, note: "Received into trust" },
+    { label: "Our fee", value: totals.fees, note: "Waivers excluded" },
+    { label: "Materials", value: totals.materials, note: "Supply cost" },
+    { label: "Labour", value: totals.labor, note: "Workforce cost" },
+    { label: "Other expenses", value: totals.expenses, note: "Supervision, hire" },
+    { label: "Total cost", value: totals.cost, note: "Materials + labour + expenses" },
+    { label: "Net", value: totals.net, note: `${totals.margin.toFixed(1)}% margin`, tone: totals.net < 0 ? "down" : "up" },
+  ];
 
   return (
     <div className="native-scroll">
@@ -2889,16 +3034,16 @@ function ConstructionFinancials({
           <span className="eyebrow">Accounting</span>
           <h2>Construction financials</h2>
           <p>
-            Income, materials, labour, expenses, and Larsa&apos;s consultancy fee — for the whole
-            company, for each region, and for every project on its own. Figures follow the
-            accounting engine: a line counts once it is approved, paid, or received, and every
-            currency is reported in USD.
+            What every construction project earned and what it cost — company total, each region,
+            and each project month by month.
           </p>
         </div>
-        <span className="access-pill"><CircleDollarSign size={16} /> USD</span>
+        <span className="access-pill">
+          <CircleDollarSign size={16} /> {currency === "IQD" ? `1 USD = ${rate.toLocaleString("en-US")} IQD` : "US dollars"}
+        </span>
       </section>
 
-      <section className="filter-toolbar">
+      <section className="fin-toolbar">
         <label>
           <span>Region</span>
           <select value={region} onChange={(event) => setRegion(event.target.value)}>
@@ -2907,44 +3052,60 @@ function ConstructionFinancials({
             <option value="USA">USA</option>
           </select>
         </label>
-        <label className="notify-push" style={{ marginInlineStart: "auto" }}>
+        <div className="fin-currency" role="group" aria-label="Currency">
+          {(["IQD", "USD"] as const).map((code) => (
+            <button
+              type="button"
+              key={code}
+              className={currency === code ? "active" : ""}
+              onClick={() => setCurrency(code)}
+            >
+              {code}
+            </button>
+          ))}
+        </div>
+        <label className="fin-sample">
           <input type="checkbox" checked={useSample} onChange={(event) => setUseSample(event.target.checked)} />
-          <span>Show worked example</span>
+          <span>Worked example</span>
         </label>
       </section>
 
       {useSample && (
-        <p className="auth-hint">
-          Showing a four-project example so the figures and layout can be checked. Nothing here is
-          saved or synced — untick to return to the real accounting store.
+        <p className="fin-note">
+          A four-project example, so the figures and layout can be checked. Nothing is saved or
+          synced — untick to return to your own accounting data.
         </p>
       )}
 
-      <section className="metric-grid">
-        {([
-          ["Income", totals.income, "Client funding + fees + revenue"],
-          ["Client funding", totals.funding, "Money received into the trust"],
-          ["Our consultancy fee", totals.fees, "Larsa's earnings, waivers excluded"],
-          ["Materials", totals.materials, "Quantity x unit price"],
-          ["Labour", totals.labor, "Quantity x rate"],
-          ["Other expenses", totals.expenses, "Supervision, hire, permits"],
-          ["Total cost", totals.cost, "Materials + labour + expenses"],
-          ["Net", totals.net, `${totals.margin.toFixed(1)}% margin`],
-        ] as [string, number, string][]).map(([label, value, note]) => (
-          <article className="metric-card" key={label}>
-            <small>{label}</small>
-            <b style={label === "Net" && value < 0 ? { color: "#b42318" } : undefined}>{money(value)}</b>
-            <em>{note}</em>
+      <section className="fin-tiles">
+        {tiles.map((tile) => (
+          <article key={tile.label} className={tile.tone ? `fin-tile ${tile.tone}` : "fin-tile"}>
+            <small>{tile.label}</small>
+            <b title={show(tile.value)}>{brief(tile.value)}</b>
+            <em>{tile.note}</em>
           </article>
         ))}
       </section>
 
-      <section className="settings-panel">
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Month by month</span>
+            <h3>{region === "All" ? "All construction projects" : `${region} construction`}</h3>
+          </div>
+          <span className="black-badge">{show(totals.net)} net</span>
+        </div>
+        {totalMonths.length
+          ? <MonthBars points={totalMonths} currency={currency} rate={rate} />
+          : <div className="empty compact">No dated entries yet, so there is nothing to plot.</div>}
+      </section>
+
+      <section className="panel">
         <div className="section-head">
           <div><span className="eyebrow">By region</span><h3>Iraq and USA side by side</h3></div>
         </div>
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table fin-table">
             <thead>
               <tr>
                 <th>Region</th><th>Projects</th><th>Income</th><th>Our fee</th>
@@ -2956,24 +3117,34 @@ function ConstructionFinancials({
                 <tr key={row.name}>
                   <td><b>{row.name}</b></td>
                   <td>{row.count}</td>
-                  <td>{money(row.figures.income)}</td>
-                  <td>{money(row.figures.fees)}</td>
-                  <td>{money(row.figures.materials)}</td>
-                  <td>{money(row.figures.labor)}</td>
-                  <td>{money(row.figures.expenses)}</td>
-                  <td>{money(row.figures.cost)}</td>
-                  <td style={row.figures.net < 0 ? { color: "#b42318", fontWeight: 900 } : { fontWeight: 900 }}>
-                    {money(row.figures.net)}
-                  </td>
+                  <td>{show(row.figures.income)}</td>
+                  <td>{show(row.figures.fees)}</td>
+                  <td>{show(row.figures.materials)}</td>
+                  <td>{show(row.figures.labor)}</td>
+                  <td>{show(row.figures.expenses)}</td>
+                  <td>{show(row.figures.cost)}</td>
+                  <td className={row.figures.net < 0 ? "fin-neg" : "fin-pos"}>{show(row.figures.net)}</td>
                   <td>{row.figures.margin.toFixed(1)}%</td>
                 </tr>
               ))}
+              <tr className="fin-total-row">
+                <td><b>Total</b></td>
+                <td>{regionRows.reduce((sum, row) => sum + row.count, 0)}</td>
+                <td>{show(totals.income)}</td>
+                <td>{show(totals.fees)}</td>
+                <td>{show(totals.materials)}</td>
+                <td>{show(totals.labor)}</td>
+                <td>{show(totals.expenses)}</td>
+                <td>{show(totals.cost)}</td>
+                <td className={totals.net < 0 ? "fin-neg" : "fin-pos"}>{show(totals.net)}</td>
+                <td>{totals.margin.toFixed(1)}%</td>
+              </tr>
             </tbody>
           </table>
         </div>
       </section>
 
-      <section className="settings-panel">
+      <section className="panel">
         <div className="section-head">
           <div>
             <span className="eyebrow">Project by project</span>
@@ -2983,10 +3154,10 @@ function ConstructionFinancials({
         {!rows.length && (
           <div className="empty compact">
             No construction projects to report yet. Add them in the accounting engine, or tick
-            &ldquo;Show worked example&rdquo; above to see how this reads with figures in place.
+            Worked example above to see how this reads with figures in place.
           </div>
         )}
-        {rows.map(({ project, figures }) => {
+        {rows.map(({ project, figures, months }) => {
           const open = openProject === project.id;
           return (
             <article className="project-financial" key={project.id}>
@@ -3000,42 +3171,43 @@ function ConstructionFinancials({
                   <b>{project.code ? `${project.code} · ` : ""}{project.name}</b>
                   <small>{[project.clientName, project.region, project.status].filter(Boolean).join(" · ")}</small>
                 </span>
-                <span className="pf-figure"><small>Income</small><b>{money(figures.income)}</b></span>
-                <span className="pf-figure"><small>Cost</small><b>{money(figures.cost)}</b></span>
+                <span className="pf-figure"><small>Income</small><b>{brief(figures.income)}</b></span>
+                <span className="pf-figure"><small>Cost</small><b>{brief(figures.cost)}</b></span>
                 <span className="pf-figure">
                   <small>Net</small>
-                  <b style={figures.net < 0 ? { color: "#b42318" } : undefined}>{money(figures.net)}</b>
+                  <b className={figures.net < 0 ? "fin-neg" : undefined}>{brief(figures.net)}</b>
                 </span>
                 <ChevronRight size={16} className={open ? "pf-caret open" : "pf-caret"} />
               </button>
-              {/* Income against cost, on one scale across every project, so a
-                  project running close to or past its income is obvious. */}
+              {/* Income against cost on one scale across the whole list, so a
+                  project spending close to or past its income stands out. */}
               <div className="pf-bars">
-                <span className="pf-bar income" style={{ width: `${(figures.income / costMax) * 100}%` }} />
-                <span className="pf-bar cost" style={{ width: `${(figures.cost / costMax) * 100}%` }} />
+                <span className="pf-bar income" style={{ width: `${(figures.income / scale) * 100}%` }} />
+                <span className="pf-bar cost" style={{ width: `${(figures.cost / scale) * 100}%` }} />
               </div>
               {open && (
-                <div className="pf-detail">
-                  {([
-                    ["Client funding", figures.funding],
-                    ["Our consultancy fee", figures.fees],
-                    ["Engineering revenue", figures.revenue],
-                    ["Materials", figures.materials],
-                    ["Labour", figures.labor],
-                    ["Other expenses", figures.expenses],
-                    ["Total cost", figures.cost],
-                    ["Net result", figures.net],
-                  ] as [string, number][]).map(([label, value]) => (
-                    <div className="pf-row" key={label}>
-                      <span>{label}</span>
-                      <b style={label === "Net result" && value < 0 ? { color: "#b42318" } : undefined}>
-                        {money(value)}
-                      </b>
+                <div className="pf-open">
+                  <div className="pf-detail">
+                    {([
+                      ["Client funding", figures.funding],
+                      ["Our consultancy fee", figures.fees],
+                      ["Engineering revenue", figures.revenue],
+                      ["Materials", figures.materials],
+                      ["Labour", figures.labor],
+                      ["Other expenses", figures.expenses],
+                      ["Total cost", figures.cost],
+                      ["Net result", figures.net],
+                    ] as [string, number][]).map(([label, value]) => (
+                      <div className="pf-row" key={label}>
+                        <span>{label}</span>
+                        <b className={label === "Net result" && value < 0 ? "fin-neg" : undefined}>{show(value)}</b>
+                      </div>
+                    ))}
+                    <div className="pf-row total">
+                      <span>Margin on income</span><b>{figures.margin.toFixed(1)}%</b>
                     </div>
-                  ))}
-                  <div className="pf-row total">
-                    <span>Margin on income</span><b>{figures.margin.toFixed(1)}%</b>
                   </div>
+                  {months.length > 0 && <MonthBars points={months} currency={currency} rate={rate} />}
                 </div>
               )}
             </article>
@@ -6052,7 +6224,7 @@ export default function Home() {
     () => (hydrated
       ? readAccountingSnapshot()
       : {
-        key: "", projects: [], documents: [], commissions: [], payroll: [],
+        key: "", rate: DEFAULT_IQD_RATE, projects: [], documents: [], commissions: [], payroll: [],
         funding: [], revenue: [], materials: [], labor: [], expenses: [],
       } as AccountingSnapshot),
     [hydrated, storageTick],

@@ -2897,57 +2897,124 @@ html, body { max-width: 100%; overflow-x: hidden; }
   background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; }
 
 /* ================================================================
-   Construction financials — per-project income vs cost
+   Construction financials
+   Its own tiles rather than .metric-grid: that grid reserves a 36px
+   icon column and only re-columns small/b/p, so an <em> caption in
+   it dropped into the icon column and wrapped one word per line.
    ================================================================ */
-.project-financial {
-  margin-top: 10px;
+.fin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--panel);
-  overflow: hidden;
+}
+.fin-toolbar > label { display: grid; gap: 6px; min-width: 0; }
+.fin-toolbar > label > span {
+  font-size: 9.5px; font-weight: 950; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+}
+.fin-toolbar select {
+  min-width: 168px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 11px; background: var(--panel); color: var(--ink);
+  font: inherit; font-size: 13.5px; font-weight: 750;
+}
+.fin-currency { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.fin-currency button {
+  padding: 7px 15px; border: 0; border-radius: 9px; background: none;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 900;
+  letter-spacing: .04em; cursor: pointer;
+}
+.fin-currency button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 4px rgba(15,23,42,.12); }
+.fin-sample { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; cursor: pointer; }
+.fin-sample input { width: 16px; height: 16px; accent-color: var(--ink); }
+.fin-sample span { font-size: 12.5px; font-weight: 800; color: var(--muted); }
+.fin-note { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+
+.fin-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.fin-tile {
+  min-width: 0; display: grid; gap: 3px; align-content: start;
+  padding: 14px 15px; border: 1px solid var(--line);
+  border-radius: 16px; background: var(--panel);
+}
+.fin-tile small {
+  font-size: 9.5px; font-weight: 950; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* Tiles hold abbreviated figures precisely so they never need to wrap;
+   the full number is on the element's title. */
+.fin-tile b { font-size: 21px; font-weight: 900; line-height: 1.15; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-tile em { font-style: normal; font-size: 10.5px; font-weight: 750; color: var(--muted); }
+.fin-tile.up b { color: #0f7b45; }
+.fin-tile.down b { color: #b42318; }
+
+.fin-neg { color: #b42318; font-weight: 900; }
+.fin-pos { font-weight: 900; }
+.fin-table td, .fin-table th { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fin-total-row td { border-top: 2px solid var(--ink); font-weight: 900; }
+
+/* Month columns: two bars per month on one shared scale, drawn from the
+   baseline up, with the month's net printed above them. */
+.fin-chart { display: grid; gap: 10px; }
+.fin-chart-key { display: flex; flex-wrap: wrap; gap: 14px; }
+.fin-chart-key span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 800; color: var(--muted); }
+.fin-chart-key i { width: 10px; height: 10px; border-radius: 3px; }
+.fin-chart-key i.income { background: #159b56; }
+.fin-chart-key i.cost { background: #f0b429; }
+.fin-chart-key i.net { background: var(--ink); }
+.fin-chart-plot { display: grid; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.fin-month { display: grid; grid-template-rows: 1fr auto auto; gap: 5px; justify-items: center; min-width: 0; }
+.fin-month-bars {
+  display: flex; align-items: flex-end; justify-content: center; gap: 3px;
+  width: 100%; height: 128px; padding: 0 2px;
+  border-bottom: 1px solid var(--line);
+}
+.fin-month-bars i { display: block; width: 11px; min-height: 2px; border-radius: 4px 4px 0 0; }
+.fin-month-bars i.income { background: #159b56; }
+.fin-month-bars i.cost { background: #f0b429; }
+.fin-month-net { font-size: 10.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-month-net.down { color: #b42318; }
+.fin-month small { font-size: 9.5px; font-weight: 850; color: var(--muted); white-space: nowrap; }
+
+.project-financial {
+  margin-top: 10px; border: 1px solid var(--line);
+  border-radius: 16px; background: var(--panel); overflow: hidden;
 }
 .project-financial-head {
-  width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(88px, auto)) 18px;
-  gap: 14px;
-  align-items: center;
-  padding: 13px 15px;
-  background: none;
-  border: 0;
-  text-align: start;
-  cursor: pointer;
-  color: var(--ink);
+  width: 100%; display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(76px, auto)) 18px;
+  gap: 14px; align-items: center; padding: 13px 15px;
+  background: none; border: 0; text-align: start; cursor: pointer; color: var(--ink);
 }
 .project-financial-head:hover { background: var(--soft); }
 .pf-name { display: grid; gap: 2px; min-width: 0; }
 .pf-name b { font-size: 13.5px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-name small { font-size: 11px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-figure { display: grid; gap: 1px; justify-items: end; text-align: end; }
-.pf-figure small { font-size: 9.5px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.pf-figure b { font-size: 13px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.pf-figure small { font-size: 9px; font-weight: 950; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pf-figure b { font-size: 12.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pf-caret { color: var(--muted); transition: transform .16s ease; }
 .pf-caret.open { transform: rotate(90deg); }
-/* Both bars share one scale across every project, so a project whose cost bar
-   approaches or passes its income bar is visible without reading a number. */
 .pf-bars { display: grid; gap: 3px; padding: 0 15px 12px; }
 .pf-bar { display: block; height: 6px; border-radius: 999px; min-width: 2px; }
 .pf-bar.income { background: #159b56; }
 .pf-bar.cost { background: #f0b429; }
-.pf-detail {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 22px;
-  padding: 4px 15px 14px;
-  border-top: 1px solid var(--line);
-}
+.pf-open { display: grid; gap: 14px; padding: 12px 15px 15px; border-top: 1px solid var(--line); }
+.pf-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
 .pf-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .pf-row span { font-size: 12px; font-weight: 700; color: var(--muted); }
-.pf-row b { font-size: 12.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.pf-row b { font-size: 12.5px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pf-row.total { grid-column: 1 / -1; border-bottom: 0; }
+
+@media (max-width: 1100px) { .fin-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .project-financial-head { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-  .project-financial-head .pf-figure:nth-of-type(2),
-  .project-financial-head .pf-figure:nth-of-type(3) { display: none; }
-  .pf-detail { grid-template-columns: minmax(0,1fr); }
+  .fin-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fin-sample { margin-inline-start: 0; }
+  .project-financial-head { grid-template-columns: minmax(0, 1fr) minmax(76px, auto) 18px; gap: 10px; }
+  .project-financial-head .pf-figure:nth-of-type(1),
+  .project-financial-head .pf-figure:nth-of-type(2) { display: none; }
+  .pf-detail { grid-template-columns: minmax(0, 1fr); }
 }
