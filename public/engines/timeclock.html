@@ -192,4 +192,12 @@ document.addEventListener('DOMContentLoaded', async function() {
   @media (max-width:640px){.v25-timebar{width:100%!important;justify-content:center!important}}
   </style>
 
+<style>
+  /* Constraint builder: the Add button used height:100% of its own .field
+     wrapper, but that wrapper has no definite height of its own, so in
+     practice the button rendered far taller than the Note/time inputs next
+     to it in the same row. Pin it back to a normal button height instead. */
+  .v21-constraint-addfield .btn{height:auto!important;min-height:40px!important}
+  </style>
+
 </style>
