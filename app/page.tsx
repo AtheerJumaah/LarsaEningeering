@@ -1528,6 +1528,21 @@ const SHIFT_CODES: Record<string, { label: string; time: string; tone: "office" 
 const TONE_COLOURS: Record<string, string> = {
   office: "#159b56", online: "#2563eb", site: "#17181b", other: "#7a8190",
 };
+
+/* Every office shift stays in the same green so the grid still reads
+   "green = in the office, blue = online" at a glance. Only the lightness
+   steps with the time of day, getting deeper as the day runs later. That
+   keeps hue meaning *where* someone works and shade meaning *when*, instead
+   of spending a second hue on it and making a dense week look noisy.
+   Lightness is also the one dimension every form of colour blindness still
+   preserves, so this ramp survives where four separate hues would not.
+   A colour set by hand in the schedule's own picker still wins over these. */
+const SHIFT_TINTS: Record<string, string> = {
+  M: "#3cb873",    // morning, 09:00 — lightest
+  MID: "#159b56",  // midday, 12:00 — the existing office green
+  E: "#14804a",    // evening, 14:30 — deeper
+  MON: "#0b5a34",  // Monday meeting, 16:00 — latest, so darkest
+};
 type ShiftMeta = { label: string; time: string; tone: "office" | "online" | "site" | "other" };
 type ShiftType = ShiftMeta & { code: string; start: string; end: string; custom?: boolean };
 const SHIFT_TYPES_KEY = "shiftTypes";
@@ -1561,6 +1576,7 @@ function shiftTimesFor(code: string, store: Record<string, unknown> | null): [st
 function shiftColour(code: string, custom: Record<string, string>) {
   const key = String(code || "").toUpperCase();
   if (custom[key]) return custom[key];
+  if (SHIFT_TINTS[key]) return SHIFT_TINTS[key];
   const meta = SHIFT_CODES[key];
   return TONE_COLOURS[meta ? meta.tone : modeTone(key)] || TONE_COLOURS.other;
 }
@@ -2534,7 +2550,24 @@ function readAccountingSnapshot(): AccountingSnapshot {
     || keys.find((key) => key.toLowerCase().includes("accounting"))
     || keys.find((key) => key.toLowerCase().includes("enterprise"))
     || "";
-  const candidates = preferred ? [preferred, ...keys.filter((key) => key !== preferred)] : keys;
+  const ordered = preferred ? [preferred, ...keys.filter((key) => key !== preferred)] : keys;
+  /* An *empty* accounting store used to win this search and stop it dead: the
+     old loop accepted the first key whose `projects` was an array, and an
+     array with nothing in it still passes that test. The accounting engine
+     writes its data under "larsa_enterprise_v3_new_account_20260630", while a
+     second, always-empty "..._v34_clean" key also exists on the device, so the
+     empty one was shadowing every real project and the whole native side of
+     accounting — project list, financial charts, portal totals — rendered as
+     if the company had no projects at all. Stores that actually hold projects
+     are tried first now, and the empty ones only as a last resort so a
+     genuinely fresh install still reports "no projects" rather than nothing. */
+  const candidates = [
+    ...ordered.filter((key) => {
+      const store = parseStore(key);
+      return Array.isArray(store?.projects) && store.projects.length > 0;
+    }),
+    ...ordered,
+  ];
   for (const key of candidates) {
     const store = parseStore(key);
     if (!Array.isArray(store?.projects)) continue;
@@ -10058,6 +10091,8 @@ function QuickClock({
 }) {
   // Shares the schedule's catalogue so an edited shift reads the same here.
   const catalogue = useMemo(() => shiftCatalogue(store), [store]);
+  // Same hand-picked shift colours the schedule grid honours.
+  const shiftInks = (store?.shiftColours || {}) as Record<string, string>;
   const [mode, setMode] = useState("Office");
   const [note, setNote] = useState("");
   const [showCorrection, setShowCorrection] = useState(false);
@@ -10458,9 +10493,14 @@ function QuickClock({
                 {day.entries.length ? day.entries.map((entry, index) => {
                   const code = String(entry.code || "").toUpperCase();
                   const meta = catalogue[code];
-                  const tone = meta ? meta.tone : modeTone(entry.name || code);
+                  /* Coloured the same way as the shared schedule grid rather
+                     than by tone class, so one shift is never two different
+                     greens depending on which screen you opened. */
+                  const background = shiftColour(code, shiftInks);
                   return (
-                    <span className={`shift-chip tone-${tone}`} key={index}>
+                    <span className="shift-chip" key={index}
+                      style={{ background, color: readableInk(background) }}
+                      title={meta ? `${meta.label} · ${meta.time}` : entry.name || code}>
                       <b>{code || entry.name || "Shift"}</b>
                       <em>{entry.start && entry.end ? `${entry.start}–${entry.end}` : meta?.time || ""}</em>
                     </span>

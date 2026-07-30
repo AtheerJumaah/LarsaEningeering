@@ -22,8 +22,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
 
+/* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
+   itself reads and writes (see STORE_KEY in public/engines/accounting.html).
+   The "..._v34_clean" name below was never used by that engine, so until this
+   line existed every project, revenue line, material, labour entry and expense
+   in the company stayed on whichever single browser typed it in — none of it
+   reached Supabase, and none of it reached a second device or the Iraq office.
+   The old name is kept in the list so the empty row already in the table keeps
+   round-tripping harmlessly instead of resurrecting as a conflict. */
 export const SYNCED_KEYS = [
   "larsaStaffV8",
+  "larsa_enterprise_v3_new_account_20260630",
   "larsa_enterprise_v3_new_account_20260630_v34_clean",
   "larsa_hr_visual_counts_v5",
 ] as const;
