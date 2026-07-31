@@ -558,7 +558,7 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    label: "Timeclock & Performance",
+    label: "Engineering Management",    items: [      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },    ],  },  {    label: "Timeclock & Performance",
     items: [
       engineItem("staff", "staff-dashboard", "Performance Dashboard", "Workboard summaries, alerts, and KPIs", "DB", "dashboard"),
       PERFORMANCE_CENTER_ITEM,
@@ -618,7 +618,7 @@ const GROUPS: Group[] = [
   {
     label: "Administration",
     items: [
-      ACCESS_ITEM,      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },
+      ACCESS_ITEM,
       {
         id: "admin",
         label: "Admin Center",
@@ -778,7 +778,7 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
   },
   {
     label: "HR & Skills",
-    items: GROUPS.find((group) => group.label === "HR & Skills")!.items,
+    items: GROUPS.find((group) => group.label === "HR & Skills")!.items,    },    {      label: "Engineering Management",      items: GROUPS.find((group) => group.label === "Engineering Management")!.items,
   },
   {
     label: "Accounting",
@@ -787,7 +787,7 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
   {
     label: "Administration",
     items: [
-      ACCESS_ITEM,      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },
+      ACCESS_ITEM,
       ITEMS.find((item) => item.id === "staff-people")!,
       ITEMS.find((item) => item.id === "staff-rules")!,
       {
@@ -4924,7 +4924,7 @@ export default function Home() {
       notify("You do not have access to this area.");
       return;
     }
-    if (item.engine === "accounting" && sessionUserRef.current && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
+    if (!previewOwner && item.engine === "accounting" && sessionUserRef.current && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);
@@ -6988,7 +6988,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {accountingGate && sessionUser ? (<AccountAccess mode="confirm" currentUser={sessionUser} onCancel={() => setAccountingGate(null)} onConfirmed={() => { const pending = accountingGate; const nextDevices = withDeviceRecorded(sessionUser.devices, getDeviceId(), describeDevice(), { verified: true, accounting: true }); try { const gateStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (gateStore && Array.isArray(gateStore.users)) { const seat = gateStore.users.findIndex((row) => row.id === sessionUser.id); if (seat >= 0) { gateStore.users[seat] = { ...gateStore.users[seat], devices: nextDevices }; localStorage.setItem("larsaStaffV8", JSON.stringify(gateStore)); } } } catch { /* The check still passed; only the record of it failed. */ } const refreshedUser = { ...sessionUser, devices: nextDevices }; sessionUserRef.current = refreshedUser; setSessionUser(refreshedUser); setAccountingGate(null); if (pending) choose(pending); }} />) : null}{sessionUser && sessionUser.mustResetPassword ? (<AccountAccess mode="reset" currentUser={sessionUser} onResetComplete={() => { const refreshed = readStaffUsers().find((row) => row.id === sessionUser.id); if (refreshed) completeSignIn(refreshed, sessionMethod || "email"); else setSessionUser((prev) => (prev ? { ...prev, mustResetPassword: false } : prev)); }} />) : null}{!sessionUser && verifyStage && (
+      {accountingGate && sessionUser && !previewOwner ? (<AccountAccess mode="confirm" currentUser={sessionUser} onCancel={() => setAccountingGate(null)} onConfirmed={() => { const pending = accountingGate; const nextDevices = withDeviceRecorded(sessionUser.devices, getDeviceId(), describeDevice(), { verified: true, accounting: true }); try { const gateStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (gateStore && Array.isArray(gateStore.users)) { const seat = gateStore.users.findIndex((row) => row.id === sessionUser.id); if (seat >= 0) { gateStore.users[seat] = { ...gateStore.users[seat], devices: nextDevices }; localStorage.setItem("larsaStaffV8", JSON.stringify(gateStore)); } } } catch { /* The check still passed; only the record of it failed. */ } const refreshedUser = { ...sessionUser, devices: nextDevices }; sessionUserRef.current = refreshedUser; setSessionUser(refreshedUser); setAccountingGate(null); if (pending) choose(pending); }} />) : null}{sessionUser && sessionUser.mustResetPassword && !previewOwner ? (<AccountAccess mode="reset" currentUser={sessionUser} onResetComplete={() => { const refreshed = readStaffUsers().find((row) => row.id === sessionUser.id); if (refreshed) completeSignIn(refreshed, sessionMethod || "email"); else setSessionUser((prev) => (prev ? { ...prev, mustResetPassword: false } : prev)); }} />) : null}{!sessionUser && verifyStage && (
         <div className="auth-layer">
           <section className="auth-card" aria-labelledby="verify-title">
             <div className="auth-brand">
