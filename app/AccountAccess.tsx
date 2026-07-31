@@ -251,7 +251,7 @@ export function AccountAccess({
       return;
     }
 
-    if (mode === "reset" || mode === "confirm") {
+    if (mode === "reset" || String(mode) === "confirm") {
       const problem = passwordProblem();
       if (problem) {
         setError(problem);
@@ -350,7 +350,7 @@ export function AccountAccess({
     writeStore(store);
     setBusy(false);
 
-    if (mode === "reset" || mode === "confirm") {
+    if (mode === "reset" || String(mode) === "confirm") {
       if (onResetComplete) onResetComplete(list[index]);
       return;
     }
@@ -542,7 +542,7 @@ export function AccountAccess({
   /* The forced reset is the only one of the three that has to cover the app
      rather than sit inside the sign-in card, because by the time it runs the
      person is already signed in. */
-  if (mode === "reset" || mode === "confirm") {
+  if (mode === "reset" || String(mode) === "confirm") {
     return (
       <div className="auth-layer">
         <section className="auth-card">
