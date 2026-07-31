@@ -3265,3 +3265,101 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .org-chip.on { background: #17181b; border-color: #17181b; color: #fff; }
 .org-chip input { accent-color: currentColor; }
+
+
+/* Six work areas, three across, two rows: Time, Performance and Engineering
+   Management on the first, HR, Accounting and Administration on the second.
+   Two across on a tablet, one on a phone. */
+@media (min-width: 900px) {
+  .module-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 600px) and (max-width: 899px) {
+  .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Engineering Management: chips and dropdowns -------------------------- */
+
+.org-me-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 18px 24px;
+  margin-top: 12px;
+}
+.org-me-grid > div { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+
+.org-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.org-none { font-size: 14px; color: var(--muted); }
+
+.org-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* A person reads as a solid object rather than a line of text, which is what
+   makes a team of eight scannable at a glance. */
+.org-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+.org-name button {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  margin-right: -2px;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.org-name button:hover { color: #b42318; }
+
+.org-select {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: #fff;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.org-select:hover { border-style: solid; color: inherit; }
+
+.org-field { display: flex; flex-direction: column; gap: 7px; margin-top: 16px; }
+
+.org-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.org-headline h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.org-headline h3 { margin: 2px 0 0; font-size: 18px; font-weight: 600; }
+.org-headline h4 { margin: 0; font-size: 15px; font-weight: 600; }
+
+/* Breathing room so nothing sits against the card edge. */
+.org-card { padding: 20px 22px; }
+.org-me { padding-bottom: 22px; }
+.org-team {
+  margin-top: 18px;
+  padding: 16px 18px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
