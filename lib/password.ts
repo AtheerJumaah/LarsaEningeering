@@ -68,7 +68,7 @@ function fromBase64(text: string): Uint8Array {
   return bytes;
 }
 
-async function derive(secret: string, salt: Uint8Array, iterations: number): Promise<string> {
+async function derive(secret: string, salt: BufferSource, iterations: number): Promise<string> {
   const api = subtle();
   if (!api) throw new Error("Web Crypto is unavailable");
   const material = await api.importKey("raw", new TextEncoder().encode(secret), "PBKDF2", false, ["deriveBits"]);
