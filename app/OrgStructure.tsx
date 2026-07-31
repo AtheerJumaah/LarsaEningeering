@@ -44,6 +44,9 @@ export function OrgStructure({
 }) {
   const [saved, setSaved] = useState<OrgChart | null>(null);
   const [note, setNote] = useState("");
+  const [newDepartmentName, setNewDepartmentName] = useState("");
+  const [teamDraftFor, setTeamDraftFor] = useState("");
+  const [newTeamName, setNewTeamName] = useState("");
 
   /* The saved chart once anything has been edited this session, otherwise the
      one derived from the staff list. */
@@ -73,18 +76,21 @@ export function OrgStructure({
   }
 
   function addDepartment() {
-    const name = window.prompt("Department name");
-    if (!name || !name.trim()) return;
-    save({ ...chart, departments: [...chart.departments, { id: newId("dep"), name: name.trim(), headIds: [] }] }, "Department added.");
+    const name = newDepartmentName.trim();
+    if (!name) return;
+    save({ ...chart, departments: [...chart.departments, { id: newId("dep"), name, headIds: [] }] }, "Department added.");
+    setNewDepartmentName("");
   }
 
   function addTeam(departmentId: string) {
-    const name = window.prompt("Team name");
-    if (!name || !name.trim()) return;
+    const name = newTeamName.trim();
+    if (!name) return;
     save(
-      { ...chart, teams: [...chart.teams, { id: newId("team"), departmentId, name: name.trim(), leadIds: [], memberIds: [] }] },
+      { ...chart, teams: [...chart.teams, { id: newId("team"), departmentId, name, leadIds: [], memberIds: [] }] },
       "Team added.",
     );
+    setTeamDraftFor("");
+    setNewTeamName("");
   }
 
   function setHeads(department: Department, headIds: string[]) {
@@ -192,16 +198,17 @@ export function OrgStructure({
           <div className="org-headline">
             <h2>Structure</h2>
             {canCreateDepartments(viewer) ? (
-              <button type="button" className="org-add" onClick={addDepartment}>
-                <Plus size={15} /> Department
-              </button>
+              <form className="org-inline-create" onSubmit={(event) => { event.preventDefault(); addDepartment(); }}>
+                <input value={newDepartmentName} onChange={(event) => setNewDepartmentName(event.target.value)} placeholder="Department name" aria-label="New department name" />
+                <button type="submit" className="org-add" disabled={!newDepartmentName.trim()}><Plus size={15} /> Add</button>
+              </form>
             ) : null}
           </div>
 
           {chart.departments.length === 0 ? <p className="org-none">No departments yet.</p> : null}
 
           {chart.departments.map((department) => {
-            const editable = canEditDepartment(chart, viewer, department.id);
+            const editable = canEditDepartment(chart, viewer, department.id, users);
             const teams = chart.teams.filter((row) => row.departmentId === department.id);
             const mine = managedTeams.some((team) => team.departmentId === department.id);
             if (!editable && !mine) return null;
@@ -216,13 +223,21 @@ export function OrgStructure({
                   </div>
                   {editable ? (
                     <div className="org-actions">
-                      <button type="button" className="btn small" onClick={() => addTeam(department.id)}><Plus size={14} /> Team</button>
+                      <button type="button" className="btn small" onClick={() => { setTeamDraftFor(department.id); setNewTeamName(""); }}><Plus size={14} /> Team</button>
                       {isOrgAdmin(viewer) ? (
                         <button type="button" className="btn small" onClick={() => removeDepartment(department)}>Remove</button>
                       ) : null}
                     </div>
                   ) : null}
                 </div>
+
+                {editable && teamDraftFor === department.id ? (
+                  <form className="org-inline-create org-team-create" onSubmit={(event) => { event.preventDefault(); addTeam(department.id); }}>
+                    <input value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} placeholder="Team name" aria-label={`New team in ${department.name}`} autoFocus />
+                    <button type="submit" className="org-add" disabled={!newTeamName.trim()}><Plus size={14} /> Add team</button>
+                    <button type="button" className="btn small" onClick={() => setTeamDraftFor("")}>Cancel</button>
+                  </form>
+                ) : null}
 
                 <div className="org-field">
                   <span className="org-label">Heads</span>
