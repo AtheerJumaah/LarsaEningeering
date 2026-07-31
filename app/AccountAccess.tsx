@@ -47,7 +47,7 @@ export type AccessUser = {
   notes?: string;
 };
 
-export type AccessMode = "signup" | "forgot" | "reset";
+export type AccessMode = "signup" | "forgot" | "reset" | "confirm";
 
 const STORE_KEY = "larsaStaffV8";
 
@@ -174,13 +174,13 @@ export function AccountAccess({
   currentUser,
   onCancel,
   onSwitchMode,
-  onResetComplete,
+  onResetComplete,  onConfirmed,
 }: {
   mode: AccessMode;
   currentUser?: AccessUser | null;
   onCancel?: () => void;
   onSwitchMode?: (next: AccessMode, email?: string) => void;
-  onResetComplete?: (user: AccessUser) => void;
+  onResetComplete?: (user: AccessUser) => void;  onConfirmed?: () => void;
 }) {
   const [stage, setStage] = useState<"details" | "code">("details");
   const [busy, setBusy] = useState(false);
@@ -201,9 +201,9 @@ export function AccountAccess({
   const users = useMemo(() => readStore().users, []);
 
   const heading =
-    mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : "Choose a new password";
+    mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : mode === "confirm" ? "Confirm it is you" : "Choose a new password";
 
-  function passwordProblem() {
+  function passwordProblem() {    if (mode === "confirm") return "";
     if (password.length < 8) return "Use at least 8 characters for your password.";
     if (password !== confirm) return "The two passwords do not match.";
     return "";
@@ -251,7 +251,7 @@ export function AccountAccess({
       return;
     }
 
-    if (mode === "reset") {
+    if (mode === "reset" || mode === "confirm") {
       const problem = passwordProblem();
       if (problem) {
         setError(problem);
@@ -260,7 +260,7 @@ export function AccountAccess({
     }
 
     setBusy(true);
-    const purpose = mode === "signup" ? "verify" : "reset";
+    const purpose = mode === "signup" || mode === "confirm" ? "verify" : "reset";
     const result = await callAuthCode({ op: "send", email: address, purpose, name: name || currentUser?.name });
     setBusy(false);
     if (!result.ok) {
@@ -287,7 +287,7 @@ export function AccountAccess({
     }
 
     const address = normalise(email);
-    const purpose = mode === "signup" ? "verify" : "reset";
+    const purpose = mode === "signup" || mode === "confirm" ? "verify" : "reset";
     setBusy(true);
     const result = await callAuthCode({ op: "verify", email: address, purpose, code });
     if (!result.ok) {
@@ -296,7 +296,7 @@ export function AccountAccess({
       return;
     }
 
-    const store = readStore();
+    if (mode === "confirm") { setBusy(false); if (onConfirmed) onConfirmed(); return; }    const store = readStore();
     const list = store.users;
 
     if (mode === "signup") {
@@ -350,7 +350,7 @@ export function AccountAccess({
     writeStore(store);
     setBusy(false);
 
-    if (mode === "reset") {
+    if (mode === "reset" || mode === "confirm") {
       if (onResetComplete) onResetComplete(list[index]);
       return;
     }
@@ -361,7 +361,7 @@ export function AccountAccess({
   async function resend() {
     setBusy(true);
     setError("");
-    const purpose = mode === "signup" ? "verify" : "reset";
+    const purpose = mode === "signup" || mode === "confirm" ? "verify" : "reset";
     const result = await callAuthCode({ op: "send", email: normalise(email), purpose, name: name || currentUser?.name });
     setBusy(false);
     if (!result.ok) setError(result.error || "Could not send another code.");
@@ -421,7 +421,7 @@ export function AccountAccess({
             ? "We will email you a code to confirm it is yours."
             : mode === "forgot"
               ? "We will email you a code to set a new password."
-              : "Choose a password only you know."}
+              : mode === "confirm" ? "We will email you a code to confirm it is you." : "Choose a password only you know."}
         </p>
       </div>
 
@@ -460,7 +460,7 @@ export function AccountAccess({
               required
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              readOnly={mode === "reset"}
+              readOnly={mode === "reset" || mode === "confirm"}
               autoComplete="username"
               autoCapitalize="none"
               autoCorrect="off"
@@ -470,7 +470,7 @@ export function AccountAccess({
             />
           </label>
 
-          {mode !== "forgot" && (
+          {mode !== "forgot" && mode !== "confirm" && (
             <>
               {passwordField}
               {confirmField}
@@ -487,7 +487,7 @@ export function AccountAccess({
           <div className="auth-error" role="alert">{error}</div>
           {info ? <p className="auth-hint">{info}</p> : null}
           <button type="submit" className="auth-submit" disabled={busy}>
-            {busy ? "Sending..." : mode === "signup" ? "Send Verification Code" : "Send Reset Code"}
+            {busy ? "Sending..." : mode === "signup" ? "Send Verification Code" : mode === "confirm" ? "Email Me a Code" : "Send Reset Code"}
           </button>
 
           {onCancel ? (
@@ -528,7 +528,7 @@ export function AccountAccess({
           <div className="auth-error" role="alert">{error}</div>
           {info ? <p className="auth-hint">{info}</p> : null}
           <button type="submit" className="auth-submit" disabled={busy}>
-            {busy ? "Checking..." : mode === "signup" ? "Confirm and Create Account" : "Save New Password"}
+            {busy ? "Checking..." : mode === "signup" ? "Confirm and Create Account" : mode === "confirm" ? "Confirm" : "Save New Password"}
           </button>
           <div className="rowActions" style={{ justifyContent: "center", marginTop: 10 }}>
             <button type="button" className="btn small" onClick={resend} disabled={busy}>Resend Code</button>
@@ -542,7 +542,7 @@ export function AccountAccess({
   /* The forced reset is the only one of the three that has to cover the app
      rather than sit inside the sign-in card, because by the time it runs the
      person is already signed in. */
-  if (mode === "reset") {
+  if (mode === "reset" || mode === "confirm") {
     return (
       <div className="auth-layer">
         <section className="auth-card">
