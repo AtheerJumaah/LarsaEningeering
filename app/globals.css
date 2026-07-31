@@ -1137,7 +1137,18 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .record-history article b { font-size: 10px; }
 .record-history article small { margin-top: 2px; color: var(--muted); font-size: 9px; font-weight: 700; }
 .record-history article p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
-.history-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.history-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.history-kind { width: min(420px, 100%); margin: 0; }
+.period-presets { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.period-presets button,
+.period-presets span {
+  min-height: 36px; display: inline-flex; align-items: center; padding: 7px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+  color: var(--ink); font-size: 11px; font-weight: 850;
+}
+.period-presets button { cursor: pointer; }
+.period-presets button:hover { border-color: #17181b; }
+.period-presets span { color: var(--muted); background: transparent; }
 
 .project-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .project-card {
@@ -1456,8 +1467,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .nav-item.nav-home-exit .nav-code { background: #fff; color: #0b0b0c; border-color: #fff; }
 .nav-item.nav-home-exit b { color: #fff; }
 .nav-item.nav-home-exit small { color: #b9bcc4; }
-.nav-item.nav-home-exit .nav-home-arrow { margin-inline-start: auto; flex: none; color: #d6d8dd; }
-.nav-item.nav-home-exit:hover .nav-home-arrow { color: #fff; transform: translateX(2px); transition: transform .16s ease; }
+.nav-item.nav-home-exit b { font-size: 14px; letter-spacing: -.01em; }
 
 /* --- hero watermark: the mark bleeds off the edge instead of sitting on top --- */
 .home-hero { position: relative; overflow: hidden; isolation: isolate; }
@@ -2310,6 +2320,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .unified-app.dark .presence-stat b { color: #f4f5f7; }
 
 .presence-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.presence-stack { display: grid; gap: 14px; align-content: start; }
 .presence-count {
   min-width: 26px; height: 26px; padding: 0 8px; display: grid; place-items: center;
   border-radius: 8px; font-size: 12px; font-weight: 900; color: #fff;
@@ -2357,6 +2368,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 1024px) { .presence-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .presence-groups { grid-template-columns: minmax(0,1fr); } }
 @media (max-width: 620px) { .presence-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Account-access screens need a clear break after the black brand/tabs panel. */
+.auth-card .auth-tabs + .auth-copy,
+.auth-card .auth-brand + .auth-copy { padding-top: 30px; }
 
 /* ================================================================
    PROJECT GROUP ROOMS
@@ -3178,6 +3193,14 @@ html, body { max-width: 100%; overflow-x: hidden; }
   padding: 10px 16px;
   cursor: pointer;
 }
+.org-add:disabled { opacity: .45; cursor: not-allowed; }
+.org-inline-create { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.org-inline-create input {
+  min-width: 210px; min-height: 42px; padding: 9px 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); font: inherit;
+}
+.org-team-create { margin: 16px 0 4px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.org-team-create .btn { min-height: 42px; }
 
 /* Teams read as cards; the grid keeps short and long teams from tearing the
    row apart the way a table would. */
