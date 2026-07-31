@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade } from "../lib/password";
 import {
   ArrowLeft,
   ArrowRight,
@@ -4647,7 +4647,7 @@ export default function Home() {
     setVerifyInfo("");
   };
 
-  const signIn = (event: FormEvent) => {
+  const signIn = async (event: FormEvent) => {
     event.preventDefault();
     const users = readStaffUsers();
     if (!users.length) {
@@ -4675,13 +4675,13 @@ export default function Home() {
         || (Boolean(account) && account === enteredLocal)
         || (Boolean(staffEmail) && staffEmail.split("@")[0] === enteredLocal);
     };
-    const user = loginMode === "pin"
-      ? users.find((row) => row.enabled !== false && Boolean(row.pin) && String(row.pin).trim() === enteredPin)
+    const pinUser = loginMode === "pin" ? await findByPin(users, enteredPin) : null; const user = loginMode === "pin"
+      ? pinUser
       : users.find((row) => row.enabled !== false
         && Boolean(row.password)
         && emailMatches(row)
-        && String(row.password).trim() === enteredPass);
-    if (!user) {
+        );
+    const credentialOk = user ? (loginMode === "pin" ? true : await verifyPassword(enteredPass, user.password)) : false; if (!user || !credentialOk) {
       // Separate the two failures so people stop retyping a correct password
       // against an address that simply has no account.
       const known = loginMode === "email" && users.some((row) => emailMatches(row));
@@ -4714,7 +4714,7 @@ export default function Home() {
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    completeSignIn(user, loginMode);
+    if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(user, loginMode);
   };
 
   const signOut = useCallback(() => {
@@ -10071,7 +10071,7 @@ function MySettings({
   const [guardCode, setGuardCode] = useState("");
   const [guardBusy, setGuardBusy] = useState(false);
 
-  const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => {
+  const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => { if (patch.password) patch = { ...patch, password: await hashPassword(patch.password) }; if (patch.pin) patch = { ...patch, pin: await hashPin(patch.pin) };
     const address = user?.email?.trim();
     if (!supabaseConfigured() || !address || mayManageAccess) {
       if (saveProfile(patch)) { setMessage(`${label} updated.`); done(); }
