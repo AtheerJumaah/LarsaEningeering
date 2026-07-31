@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal, readOrg } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
 import {
   ArrowLeft,
   ArrowRight,
@@ -108,7 +108,7 @@ type NativeView =
   | "performanceHistory"
   | "projects"
   | "notifications"
-  | "constructionFinancials";
+  | "constructionFinancials" | "orgStructure";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -618,7 +618,7 @@ const GROUPS: Group[] = [
   {
     label: "Administration",
     items: [
-      ACCESS_ITEM,
+      ACCESS_ITEM,      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },
       {
         id: "admin",
         label: "Admin Center",
@@ -787,7 +787,7 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
   {
     label: "Administration",
     items: [
-      ACCESS_ITEM,
+      ACCESS_ITEM,      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },
       ITEMS.find((item) => item.id === "staff-people")!,
       ITEMS.find((item) => item.id === "staff-rules")!,
       {
@@ -1369,7 +1369,7 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     const approvals = ITEMS.find((row) => row.id === "staff-approvals");
     return approvals ? hasItemPermission(user, approvals, action) : false;
   }
-  if (item.id === "live-presence") {
+  if (item.id === "org-structure") return canSeeOrgPortal(readOrg(), user);    if (item.id === "live-presence") {
     const live = ITEMS.find((row) => row.id === "staff-live");
     return live ? hasItemPermission(user, live, "view") : true;
   }
@@ -6818,7 +6818,7 @@ export default function Home() {
               decide={decideRequest}
             />
           </div>
-          <div className={active.native === "presence" ? "native active" : "native"}>
+          <div className={active.native === "orgStructure" ? "native active" : "native"}><OrgStructure viewer={sessionUser} users={accessUsers} onSaved={() => setStorageTick((tick) => tick + 1)} /></div><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
           <div className={active.native === "settings" ? "native active" : "native"}>
