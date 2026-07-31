@@ -7372,7 +7372,7 @@ function Overview({
           </div>
         )}
       </section>
-      {!quickAccess ? (<div className="quick-strip">{[{ id: "quick-clock", channel: "time" as const, label: "Clock In / Out", icon: Timer }, { id: "my-points", channel: "performance" as const, label: "Add My Points", icon: TrendingUp }].filter((row) => { const found = ITEMS.find((entry) => entry.id === row.id); return Boolean(found && canOpenInSession(user, found, method)); }).map((row) => { const Icon = row.icon; return (<button type="button" key={row.id} className="quick-chip" onClick={() => open(row.id, row.channel)}><Icon size={16} />{row.label}</button>); })}</div>) : null}        <section className={quickAccess ? "module-grid quick-grid" : "module-grid"} aria-label="Available work areas">
+              <section className={quickAccess ? "module-grid quick-grid" : "module-grid"} aria-label="Available work areas">
         {modules.map((module) => {
           const Icon = module.icon;
           return (
