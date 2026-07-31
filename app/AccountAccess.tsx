@@ -268,7 +268,7 @@ export function AccountAccess({
       return;
     }
     setStage("code");
-    setInfo("We sent a 6-digit code to " + address + ". It expires in 10 minutes.");
+    setInfo("Code sent to " + address + ". It expires in 10 minutes.");
   }
 
   async function submitCode(event: FormEvent) {
@@ -331,7 +331,7 @@ export function AccountAccess({
         );
         return;
       }
-      setInfo("Your account is ready. Sign in with your work email and the password you just chose.");
+      setInfo("Account ready. Sign in with your new password.");
       window.setTimeout(() => { if (onCancel) onCancel(); }, 2200);
       return;
     }
@@ -354,7 +354,7 @@ export function AccountAccess({
       if (onResetComplete) onResetComplete(list[index]);
       return;
     }
-    setInfo("Password updated. Sign in with your new password.");
+    setInfo("Password updated. Sign in again.");
     window.setTimeout(() => { if (onCancel) onCancel(); }, 2000);
   }
 
@@ -418,10 +418,10 @@ export function AccountAccess({
         <h1>{heading}</h1>
         <p>
           {mode === "signup"
-            ? "Use your Larsa work email. We will send a code to confirm it is yours."
+            ? "We will email you a code to confirm it is yours."
             : mode === "forgot"
-              ? "Enter your work email and we will send a code so you can set a new password."
-              : "For your first sign-in, choose a password only you know."}
+              ? "We will email you a code to set a new password."
+              : "Choose a password only you know."}
         </p>
       </div>
 
@@ -479,8 +479,8 @@ export function AccountAccess({
 
           {mode === "signup" && (
             <p className="auth-hint">
-              Accounts on a larsaeng.com address go live as soon as you confirm your email. Any other address needs an
-              administrator to approve it first.
+              A larsaeng.com address activates straight away. Anything else needs an
+              administrator to approve it.
             </p>
           )}
 
