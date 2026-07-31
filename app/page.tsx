@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
 import {
   ArrowLeft,
   ArrowRight,
@@ -206,7 +206,7 @@ type StaffUser = {
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
   phoneAlt?: string;
-  emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean;
+  emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean; devices?: TrustedDevice[];
 };
 type Item = {
   id: string;
@@ -4615,7 +4615,7 @@ export default function Home() {
     const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
     setVerifyBusy(false);
     if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
-    persistEmailVerified(verifyStage.user.id, true);
+    persistEmailVerified(verifyStage.user.id, true); try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === verifyStage.user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* Remembering the device is a convenience; sign-in must not fail on it. */ }
     const verifiedUser = { ...verifyStage.user, emailVerified: true };
     const rememberedEmail = verifyStage.email;
     setVerifyStage(null);
@@ -4695,7 +4695,7 @@ export default function Home() {
     if (loginMode === "email") {
       migrateEmailVerification();
       const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      if (supabaseConfigured() && refreshed.email && refreshed.emailVerified !== true) {
+      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || deviceNeedsVerification(refreshed, getDeviceId()))) {
         setVerifyError("");
         setVerifyInfo("Sending your verification code…");
         setVerifyBusy(true);
