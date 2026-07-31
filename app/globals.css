@@ -3448,3 +3448,50 @@ html, body { max-width: 100%; overflow-x: hidden; }
    set rather than a ragged edge. */
 .module-grid:not(.quick-grid) { align-items: stretch; }
 .module-grid:not(.quick-grid) > * { min-height: 200px; height: 100%; }
+
+
+/* The two daily actions, above the work areas ---------------------------- */
+
+/* Clocking and adding points are what most people open the app to do. On a PIN
+   sign-in they were already the whole screen; this puts them within one tap of
+   an email sign-in too, without turning them into another pair of big tiles
+   that would compete with the six work areas below. */
+.quick-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.quick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  color: #fff;
+  background: #17181b;
+  border: 1px solid #17181b;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform .12s ease, opacity .12s ease;
+}
+.quick-chip:hover { opacity: .9; }
+.quick-chip:active { transform: translateY(1px); }
+.quick-chip svg { flex: 0 0 auto; }
+
+/* The second one is the quieter of the two -- adding points is deliberate,
+   clocking is reflexive -- so it reads as an outline rather than a slab. */
+.quick-chip + .quick-chip {
+  color: #17181b;
+  background: #fff;
+  border-color: #dfe1e5;
+}
+.quick-chip + .quick-chip:hover { background: #f7f7f5; opacity: 1; }
+
+@media (max-width: 599px) {
+  .quick-strip { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .quick-chip { justify-content: center; }
+}
