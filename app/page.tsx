@@ -7022,7 +7022,7 @@ export default function Home() {
             <div className="auth-copy">
               <span className="eyebrow">Larsa Engineering</span>
               <h1 id="sign-in-title">Welcome back</h1>
-              <p>Choose the easiest way to continue.</p>
+              
             </div>
             <div className="auth-tabs" role="tablist" aria-label="Sign-in method">
               <button
@@ -7044,9 +7044,9 @@ export default function Home() {
                 tabIndex={loginMode === "email" ? 0 : -1}
                 className={loginMode === "email" ? "active" : ""}
                 onClick={() => { setLoginMode("email"); setLoginError(""); setAccessMode(null); }}
-              >Email + Password</button><button type="button" role="tab" id="auth-tab-new" aria-selected={accessMode === "signup"} aria-controls="auth-panel" tabIndex={accessMode === "signup" ? 0 : -1} className={accessMode === "signup" ? "active" : ""} onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button>
+              >Email</button>
             </div>
-            {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { if (next !== "reset") setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}{!accessMode && loginMode === "email" ? (<div className="rowActions" style={{ justifyContent: "center" }}><button type="button" className="btn small" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot your password?</button></div>) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
+            {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { if (next !== "reset") setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
               {loginMode === "email" ? (
                 <>
                   <label>Work Email<input type="email" name="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" placeholder="name@larsaeng.com" /></label>
@@ -7061,9 +7061,9 @@ export default function Home() {
                   </label>
                   <label className="auth-remember">
                     <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
-                    <span>Remember me on this device</span>
+                    <span>Keep me signed in</span>
                   </label>
-                  <p className="auth-hint">Your browser will offer to save the password itself — that keeps it locked behind your device, not stored in the app.</p>
+                  
                 </>
               ) : (
                 <>
@@ -7072,7 +7072,7 @@ export default function Home() {
                 </>
               )}
               <div className="auth-error" role="alert">{loginError}</div>
-              <button type="submit" className="auth-submit">Sign In</button>
+              <button type="submit" className="auth-submit">Sign In</button><p className="auth-secondary">{loginMode === "email" ? (<button type="button" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot password?</button>) : null}<button type="button" onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button></p>
             </form>
           </section>
         </div>
