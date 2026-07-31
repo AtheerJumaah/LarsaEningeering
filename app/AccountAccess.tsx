@@ -22,7 +22,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { sendMail } from "../lib/supabase/mail";
+import { sendMail } from "../lib/supabase/mail"; import { hashPassword } from "../lib/password";
 
 /* Only the fields these flows actually touch. page.tsx owns the full StaffUser
    shape; duplicating all of it here would just be a second copy to keep in
@@ -307,7 +307,7 @@ export function AccountAccess({
         username: usernameFor(address, list),
         email: address,
         phone: phone.trim(),
-        password,
+        password: await hashPassword(password),
         access: NEW_ACCOUNT_ACCESS,
         role: "Staff",
         department: "Unassigned",
@@ -346,7 +346,7 @@ export function AccountAccess({
       setError("That account could no longer be found. Ask an administrator for help.");
       return;
     }
-    list[index] = { ...list[index], password, emailVerified: true, mustResetPassword: false };
+    list[index] = { ...list[index], password: await hashPassword(password), emailVerified: true, mustResetPassword: false };
     writeStore(store);
     setBusy(false);
 
