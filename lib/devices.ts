@@ -26,19 +26,11 @@ export type TrustedDevice = {
   label: string;
   firstSeen: string;
   lastSeen: string;
-  /* When this device last passed an email code. Sign-in asks again once this
-     is older than SIGN_IN_MAX_DAYS. */
+  /* When this device last passed an email code. */
   lastVerified: string;
-  /* Accounting is held to a shorter leash than the rest of the app. */
+  /* Kept for records created by older releases. */
   lastAccountingVerified?: string;
 };
-
-/* Even a known device re-proves itself monthly, so a machine that quietly
-   changed hands cannot keep its access indefinitely. */
-export const SIGN_IN_MAX_DAYS = 30;
-
-/* Accounting holds the money, so a week rather than a month. */
-export const ACCOUNTING_MAX_DAYS = 7;
 
 function randomId(): string {
   try {
@@ -101,7 +93,28 @@ function daysSince(iso: string | undefined): number {
   return (Date.now() - then) / 86400000;
 }
 
-type DeviceHolder = { devices?: TrustedDevice[] };
+type DeviceHolder = {
+  devices?: TrustedDevice[];
+  access?: string;
+  role?: string;
+};
+
+/* Verification follows the person's access level instead of a single global
+   timeout. Finance and administrative accounts re-prove every 48 hours; the
+   remaining staff accounts (including engineers) re-prove every 72 hours. */
+export const SENSITIVE_ACCESS_HOURS = 48;
+export const STANDARD_ACCESS_HOURS = 72;
+
+export function verificationWindowHours(user: DeviceHolder | null | undefined): number {
+  const access = `${user?.access || ""} ${user?.role || ""}`.toLowerCase();
+  return access.includes("admin") || access.includes("account") || access.includes("finance")
+    ? SENSITIVE_ACCESS_HOURS
+    : STANDARD_ACCESS_HOURS;
+}
+
+function hoursSince(iso: string | undefined): number {
+  return daysSince(iso) * 24;
+}
 
 export function findDevice(user: DeviceHolder | null | undefined, deviceId: string): TrustedDevice | null {
   const list = user && Array.isArray(user.devices) ? user.devices : [];
@@ -113,7 +126,7 @@ export function findDevice(user: DeviceHolder | null | undefined, deviceId: stri
 export function deviceNeedsVerification(user: DeviceHolder | null | undefined, deviceId: string): boolean {
   const device = findDevice(user, deviceId);
   if (!device) return true;
-  return daysSince(device.lastVerified) > SIGN_IN_MAX_DAYS;
+  return hoursSince(device.lastVerified) >= verificationWindowHours(user);
 }
 
 /* Same question for the accounting screens, on their shorter interval. A
@@ -121,7 +134,22 @@ export function deviceNeedsVerification(user: DeviceHolder | null | undefined, d
 export function accountingNeedsVerification(user: DeviceHolder | null | undefined, deviceId: string): boolean {
   const device = findDevice(user, deviceId);
   if (!device) return true;
-  return daysSince(device.lastAccountingVerified) > ACCOUNTING_MAX_DAYS;
+  /* A code entered during sign-in also proves the current browser for the
+     accounting portal. This prevents the frustrating second-code prompt that
+     used to appear immediately after a successful sign-in. */
+  const lastProof = [device.lastVerified, device.lastAccountingVerified]
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  return hoursSince(lastProof) >= verificationWindowHours(user);
+}
+
+export function verificationRemainingMs(user: DeviceHolder | null | undefined, deviceId: string): number {
+  const device = findDevice(user, deviceId);
+  if (!device?.lastVerified) return 0;
+  const verifiedAt = new Date(device.lastVerified).getTime();
+  if (!Number.isFinite(verifiedAt)) return 0;
+  return Math.max(0, verifiedAt + verificationWindowHours(user) * 3600000 - Date.now());
 }
 
 /* Returns the updated list rather than writing it, so the caller can fold it
