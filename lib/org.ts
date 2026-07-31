@@ -226,10 +226,18 @@ export function isResponsibleForOthers(org: OrgChart, user: OrgUser | null | und
 
 /* Super Admin shapes the whole chart. A department head shapes their own
    department, so forming a team does not have to go through one person. */
-export function canEditDepartment(org: OrgChart, user: OrgUser | null | undefined, departmentId: string): boolean {
+export function canEditDepartment(
+  org: OrgChart,
+  user: OrgUser | null | undefined,
+  departmentId: string,
+  users: OrgUser[] = [],
+): boolean {
   if (isOrgAdmin(user)) return true;
   if (!user) return false;
-  return departmentsHeadedBy(org, user.id).some((row) => row.id === departmentId);
+  if (departmentsHeadedBy(org, user.id).some((row) => row.id === departmentId)) return true;
+  const directIds = new Set(directReportsOf(users, user).map((row) => row.id));
+  return org.teams.some((team) => team.departmentId === departmentId
+    && [...(team.memberIds || []), ...(team.leadIds || [])].some((id) => directIds.has(id)));
 }
 
 export function canCreateDepartments(user: OrgUser | null | undefined): boolean {
