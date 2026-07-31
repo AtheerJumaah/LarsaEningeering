@@ -441,7 +441,7 @@ export function AccountAccess({
                 />
               </label>
               <label>
-                Phone (optional)
+                Phone <span className="optional">optional</span>
                 <input
                   type="tel"
                   value={phone}
