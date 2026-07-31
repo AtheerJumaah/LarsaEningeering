@@ -28,7 +28,7 @@ import {
   newId,
   rolesOf,
   teamsContaining,
-  teamsVisibleTo,
+  staffIdsVisibleTo,  teamsVisibleTo,
   writeOrg,
 } from "../lib/org";
 import type { Department, OrgChart, OrgUser, Team } from "../lib/org";
@@ -178,7 +178,7 @@ export function OrgStructure({
           </div>
           <div>
             <span className="org-label">Reports to</span>
-            <Chips ids={myManagers} empty="Not set" />
+            <Chips ids={myManagers} empty="Not set" />          </div>          <div>            <span className="org-label">Teammates</span>            {(() => { const ids = [...new Set(myTeams.flatMap((team) => [...(team.leadIds || []), ...(team.memberIds || [])]))].filter((id) => !viewer || id !== viewer.id); return ids.length ? (<span className="org-chiprow">{ids.map((id) => <span className="org-name" key={id}>{nameOf(id)}</span>)}</span>) : (<span className="org-none">None yet</span>); })()}
           </div>
           {myRoles.length ? (
             <div>
@@ -191,7 +191,7 @@ export function OrgStructure({
         </div>
       </section>
 
-      {note ? <p className="org-note">{note}</p> : null}
+      {note ? <p className="org-note">{note}</p> : null}      {manages ? (() => {        const ids = [...staffIdsVisibleTo(chart, viewer, users)].filter((id) => !viewer || id !== viewer.id);        if (!ids.length) return null;        return (          <section className="org-card">            <div className="org-headline">              <div>                <span className="org-eyebrow">You are responsible for</span>                <h3>{ids.length} {ids.length === 1 ? "person" : "people"}</h3>              </div>            </div>            <ul className="org-people">              {ids.map((id) => {                const person = users.find((row) => row.id === id);                const teams = teamsContaining(chart, id).map((team) => team.name).join(", ");                return (                  <li key={id}>                    <span>                      <b>{nameOf(id)}</b>                      <small>{[person && person.role, teams].filter(Boolean).join(" - ") || "No team yet"}</small>                    </span>                  </li>                );              })}            </ul>          </section>        );      })() : null}
 
       {manages ? (
         <>
