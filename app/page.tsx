@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade } from "../lib/password";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9373,7 +9373,7 @@ function AccessCenter({
     });
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (isNew ? !canCreate : !canEdit) {
       setFormError("Your account has view-only access to this user.");
@@ -9381,7 +9381,7 @@ function AccessCenter({
     }
     if (!draft?.permissionProfile) return;
     const email = draft.email?.trim().toLowerCase() || "";
-    const pin = draft.pin?.replace(/\D/g, "") || "";
+    const pinAlreadyStored = isHashed(draft.pin); const pin = pinAlreadyStored ? String(draft.pin) : (draft.pin?.replace(/\D/g, "") || "");
     if (!draft.name.trim() || !email || !draft.password || !pin) {
       setFormError("Name, work email, password, and PIN are required.");
       return;
@@ -9390,15 +9390,15 @@ function AccessCenter({
       setFormError("Enter a valid work email.");
       return;
     }
-    if (pin.length < 4 || pin.length > 8) {
+    if (!pinAlreadyStored && (pin.length < 4 || pin.length > 8)) {
       setFormError("PIN must contain 4 to 8 digits.");
       return;
     }
     const duplicate = users.find((user) =>
       user.id !== draft.id &&
-      (user.email?.trim().toLowerCase() === email || user.pin === pin),
+      (user.email?.trim().toLowerCase() === email),
     );
-    if (duplicate) {
+    const pinClash = pinAlreadyStored ? false : await pinTakenByOther(users, pin, draft.id); if (duplicate || pinClash) {
       setFormError("That email or PIN is already assigned to another user.");
       return;
     }
@@ -9414,9 +9414,9 @@ function AccessCenter({
       projectIds: protectedAccount ? [] : draft.projectIds || [],
       permissions: staffPermissionsForUser(draft),
     };
-    if (saveUser(nextUser, isNew)) {
+    const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
       setSelectedId(nextUser.id);
-      setDraft(nextUser);
+      setDraft(securedUser);
       setIsNew(false);
       setFormError("");
     }
@@ -9534,13 +9534,13 @@ function AccessCenter({
                 <label>
                   Password
                   <span className="password-field access-password">
-                    <input type={showSecret ? "text" : "password"} value={draft.password || ""} onChange={(event) => updateDraft("password", event.target.value)} />
+                    <input type={showSecret ? "text" : "password"} value={isHashed(draft.password) ? "" : (draft.password || "")} onChange={(event) => updateDraft("password", event.target.value)} />
                     <button type="button" onClick={() => setShowSecret((value) => !value)} aria-label={showSecret ? "Hide password" : "Show password"}>
                       {showSecret ? <EyeOff size={17} /> : <Eye size={17} />}
                     </button>
                   </span>
                 </label>
-                <label>Employee PIN<input inputMode="numeric" value={draft.pin || ""} onChange={(event) => updateDraft("pin", event.target.value.replace(/\D/g, ""))} /></label>
+                <label>Employee PIN<input inputMode="numeric" value={isHashed(draft.pin) ? "" : (draft.pin || "")} onChange={(event) => updateDraft("pin", event.target.value.replace(/\D/g, ""))} /></label>
                 <label>Job Role<input value={draft.role || ""} onChange={(event) => updateDraft("role", event.target.value)} placeholder="Accountant, Engineer, HR…" /></label>
                 <label>Department<input value={draft.department || ""} onChange={(event) => updateDraft("department", event.target.value)} /></label>
                 <label>
