@@ -10228,7 +10228,7 @@ function MySettings({
               }
               if (!Object.keys(patch).length) { setMessage("Nothing to change."); return; }
               guardedSave(patch, "Sign-in details", () => setSecret({ password: "", confirm: "", pin: "" }));
-            }} disabled={guardBusy}><Save size={15} /> Update sign-in</button>
+            }} disabled={guardBusy}><Save size={15} /> Update sign-in</button>{(() => { const rows = (((parseStore("larsaStaffV8") as { users?: StaffUser[] } | null)?.users || []).find((row) => row.id === user?.id)?.devices) || []; if (!rows.length) return null; return (<div className="device-list"><h4>Signed-in devices</h4>{rows.map((device) => (<div className="device-row" key={device.id}><span><b>{device.label}</b>{device.id === getDeviceId() ? " — this device" : ""}<small>Used {describeWhen(device.lastSeen)} · Verified {describeWhen(device.lastVerified)}</small></span><button type="button" className="btn small" onClick={() => { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users) && user) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRemoved(deviceStore.users[seat].devices, device.id) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); setMessage("Device removed. It will ask for an email code next time."); } } } catch { setMessage("Could not remove that device."); } }}>Remove</button></div>))}</div>); })()}
           </div>
           {pending && (
             <div className="guard-box">
