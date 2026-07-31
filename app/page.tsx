@@ -3336,7 +3336,7 @@ export default function Home() {
   const [loginMode, setLoginMode] = useState<SignInMethod>("email");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPass, setLoginPass] = useState("");
-  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null);
+  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null); const [accountingGate, setAccountingGate] = useState<Item | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   // Email verification gate: only engaged when Supabase is configured (it's
   // what actually sends the code) and the account hasn't verified its email
@@ -4924,7 +4924,7 @@ export default function Home() {
       notify("You do not have access to this area.");
       return;
     }
-    setNavChannel(item.id === "overview" ? "home" : channel);
+    if (item.engine === "accounting" && sessionUserRef.current && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);
@@ -6988,7 +6988,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {sessionUser && sessionUser.mustResetPassword ? (<AccountAccess mode="reset" currentUser={sessionUser} onResetComplete={() => { const refreshed = readStaffUsers().find((row) => row.id === sessionUser.id); if (refreshed) completeSignIn(refreshed, sessionMethod || "email"); else setSessionUser((prev) => (prev ? { ...prev, mustResetPassword: false } : prev)); }} />) : null}{!sessionUser && verifyStage && (
+      {accountingGate && sessionUser ? (<AccountAccess mode="confirm" currentUser={sessionUser} onCancel={() => setAccountingGate(null)} onConfirmed={() => { const pending = accountingGate; const nextDevices = withDeviceRecorded(sessionUser.devices, getDeviceId(), describeDevice(), { verified: true, accounting: true }); try { const gateStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (gateStore && Array.isArray(gateStore.users)) { const seat = gateStore.users.findIndex((row) => row.id === sessionUser.id); if (seat >= 0) { gateStore.users[seat] = { ...gateStore.users[seat], devices: nextDevices }; localStorage.setItem("larsaStaffV8", JSON.stringify(gateStore)); } } } catch { /* The check still passed; only the record of it failed. */ } const refreshedUser = { ...sessionUser, devices: nextDevices }; sessionUserRef.current = refreshedUser; setSessionUser(refreshedUser); setAccountingGate(null); if (pending) choose(pending); }} />) : null}{sessionUser && sessionUser.mustResetPassword ? (<AccountAccess mode="reset" currentUser={sessionUser} onResetComplete={() => { const refreshed = readStaffUsers().find((row) => row.id === sessionUser.id); if (refreshed) completeSignIn(refreshed, sessionMethod || "email"); else setSessionUser((prev) => (prev ? { ...prev, mustResetPassword: false } : prev)); }} />) : null}{!sessionUser && verifyStage && (
         <div className="auth-layer">
           <section className="auth-card" aria-labelledby="verify-title">
             <div className="auth-brand">
