@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
 import {
   ArrowLeft,
   ArrowRight,
@@ -440,12 +440,8 @@ const NOTIFY_STORE_KEY = "larsaNotificationsV1";
 const KEEP_SESSION_KEY = "larsa-control-session-keep";
 const REMEMBER_EMAIL_KEY = "larsa-control-remember-email";
 const PROJECT_CHAT_KEY = "larsaProjectRoomsV1";
-// Every event defaults push off until the person opts in from their own
-// notification settings — except admin.broadcast: an admin picking specific
-// people and sending a message expects it to actually reach them, not sit
-// unread until they happen to enable push for an event they've never seen.
-// People can still turn it off from the same Notification Preferences page
-// as any other event.
+// Notifications start enabled. Delivery still respects every channel switch:
+// when a person clears all three boxes for an event, nothing is sent.
 const EMAIL_DEFAULT_EVENTS = new Set([
     "leave.requested", "leave.decided", "clock.correction",
     "development.assigned", "development.reviewed",
@@ -454,7 +450,7 @@ const EMAIL_DEFAULT_EVENTS = new Set([
 const DEFAULT_NOTIFY_PREFS: NotifyPrefs = Object.fromEntries(
     NOTIFY_EVENTS.map((event) => [event.id, {
           inApp: true,
-          push: EMAIL_DEFAULT_EVENTS.has(event.id),
+          push: true,
           email: EMAIL_DEFAULT_EVENTS.has(event.id),
     }]),
   );
@@ -942,6 +938,7 @@ const EMBED_CSS: Record<Engine, string> = {
     body{padding-bottom:env(safe-area-inset-bottom)}
     #login{display:none!important}
     .sidebar,.mobileBar{display:none!important}
+    .v25-timebar{display:none!important}
     .app:not(.hidden){display:block!important;min-height:100vh}
     .main{min-height:100vh!important;width:100%!important}
     .topbar{top:0!important}.content{max-width:none!important;padding:18px!important}
@@ -4524,7 +4521,18 @@ export default function Home() {
         const currentUser = user?.id
           ? readStaffUsers().find((row) => row.id === user.id) || user
           : null;
-        if (currentUser?.id && currentUser.enabled !== false) completeSignIn(currentUser, method || "email");
+        if (currentUser?.id && currentUser.enabled !== false) {
+          const expiredEmailSession = method === "email"
+            && supabaseConfigured()
+            && Boolean(currentUser.email)
+            && (currentUser.emailVerified !== true || deviceNeedsVerification(currentUser, getDeviceId()));
+          if (expiredEmailSession) {
+            sessionStorage.removeItem("larsa-control-session");
+            try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
+          } else {
+            completeSignIn(currentUser, method || "email");
+          }
+        }
       } catch {
         sessionStorage.removeItem("larsa-control-session");
         try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
@@ -4615,8 +4623,20 @@ export default function Home() {
     const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
     setVerifyBusy(false);
     if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
-    persistEmailVerified(verifyStage.user.id, true); try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === verifyStage.user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* Remembering the device is a convenience; sign-in must not fail on it. */ }
-    const verifiedUser = { ...verifyStage.user, emailVerified: true };
+    persistEmailVerified(verifyStage.user.id, true);
+    let nextDevices = withDeviceRecorded(verifyStage.user.devices, getDeviceId(), describeDevice(), { verified: true });
+    try {
+      const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null;
+      if (deviceStore && Array.isArray(deviceStore.users)) {
+        const seat = deviceStore.users.findIndex((row) => row.id === verifyStage.user.id);
+        if (seat >= 0) {
+          nextDevices = withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true });
+          deviceStore.users[seat] = { ...deviceStore.users[seat], emailVerified: true, devices: nextDevices };
+          localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore));
+        }
+      }
+    } catch { /* Remembering the device is a convenience; sign-in must not fail on it. */ }
+    const verifiedUser = { ...verifyStage.user, emailVerified: true, devices: nextDevices };
     const rememberedEmail = verifyStage.email;
     setVerifyStage(null);
     setVerifyCode("");
@@ -4739,6 +4759,15 @@ export default function Home() {
       // The outer sign-in remains authoritative if an embedded view is reloading.
     }
   }, []);
+
+  /* A kept browser session ends with the same verification window as a fresh
+     sign-in. When it expires, the next screen is the normal email + code flow. */
+  useEffect(() => {
+    if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
+    const remaining = verificationRemainingMs(sessionUser, getDeviceId());
+    const timer = window.setTimeout(signOut, Math.max(0, Math.min(remaining, 2147483647)));
+    return () => window.clearTimeout(timer);
+  }, [sessionMethod, sessionUser, signOut]);
 
   const clickWhenReady = useCallback(
     (find: () => HTMLButtonElement | null, missingMessage: string) => {
@@ -6684,10 +6713,9 @@ export default function Home() {
                       {isHome ? <span className="larsa-mark" aria-hidden="true" /> : <Icon size={16} strokeWidth={2.15} />}
                     </span>
                     <span>
-                      <b>{leaving ? "Back to Home" : item.label}</b>
-                      <small>{leaving ? "Leave this work area" : item.description}</small>
+                      <b>{isHome ? "Home" : item.label}</b>
+                      <small>{leaving ? "Main workspace" : item.description}</small>
                     </span>
-                    {leaving && <ArrowRight className="nav-home-arrow" size={15} />}
                   </button>
                 );
               })}
@@ -6726,8 +6754,8 @@ export default function Home() {
               <button type="button" onClick={endAccessPreview}>Exit Preview</button>
             </div>}
             {!previewOwner && <div className="clocks">
-              <span><b>Baghdad / Mosul</b>{clock.baghdad}</span>
-              <span><b>Texas</b>{clock.texas}</span>
+              <span><b>Iraq</b>{clock.baghdad}</span>
+              <span><b>US Central</b>{clock.texas}</span>
             </div>}
             {sessionUser && (
               <button type="button" className="theme notif-button" onClick={() => choose(SETTINGS_ITEM, "home")} aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications and settings"}>
@@ -6818,7 +6846,9 @@ export default function Home() {
               decide={decideRequest}
             />
           </div>
-          <div className={active.native === "orgStructure" ? "native active" : "native"}><OrgStructure viewer={sessionUser} users={accessUsers} onSaved={() => setStorageTick((tick) => tick + 1)} /></div><div className={active.native === "presence" ? "native active" : "native"}>
+          <div className={active.native === "orgStructure" ? "native active" : "native"}>
+            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} />
+          </div><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
           <div className={active.native === "settings" ? "native active" : "native"}>
@@ -7081,6 +7111,92 @@ export default function Home() {
   );
 }
 
+function EngineeringManagementPortal({
+  viewer, users, sessions, rows, targets, go, onSaved,
+}: {
+  viewer: StaffUser | null;
+  users: StaffUser[];
+  sessions: ClockSession[];
+  rows: PerformanceRow[];
+  targets: Record<string, number>;
+  go: (id: string) => void;
+  onSaved: () => void;
+}) {
+  const org = effectiveOrg(users);
+  const manages = isResponsibleForOthers(org, viewer, users);
+  const [tab, setTab] = useState<"structure" | "time" | "performance">("structure");
+  const today = dateInputValue(new Date());
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const [from, setFrom] = useState(dateInputValue(start));
+  const [to, setTo] = useState(today);
+  const visibleIds = manages ? staffIdsVisibleTo(org, viewer, users) : new Set(viewer ? [viewer.id] : []);
+  const visibleUsers = users.filter((user) => user.enabled !== false && visibleIds.has(user.id));
+  const filteredSessions = sessions.filter((session) => visibleIds.has(session.uid) && withinDates(session.clockIn.slice(0, 10), from, to));
+  const filteredRows = rows.filter((row) => visibleIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
+  const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
+    const end = new Date();
+    const begin = new Date(end);
+    if (period === "week") begin.setDate(begin.getDate() - 6);
+    if (period === "month") begin.setDate(begin.getDate() - 29);
+    if (period === "sixMonths") begin.setMonth(begin.getMonth() - 6);
+    if (period === "year") begin.setFullYear(begin.getFullYear() - 1);
+    setFrom(dateInputValue(begin));
+    setTo(dateInputValue(end));
+  };
+  const startMs = new Date(`${from}T00:00:00`).getTime();
+  const endMs = new Date(`${to}T23:59:59`).getTime();
+  const weeks = Math.max(1, (endMs - startMs + 1) / (7 * 86400000));
+  const summaries = visibleUsers.map((user) => {
+    const mineSessions = filteredSessions.filter((session) => session.uid === user.id);
+    const mineRows = filteredRows.filter((row) => rowUserId(row, users) === user.id);
+    const hours = mineSessions.reduce((sum, row) => sum + row.hours, 0);
+    const submitted = mineRows.reduce((sum, row) => sum + finiteNumber(row["Submitted Points"]), 0);
+    const approved = mineRows.reduce((sum, row) => sum + finiteNumber(row["Approved Points"]), 0);
+    const target = Math.round((finiteNumber(targets[user.id]) || 50) * weeks);
+    return { user, sessions: mineSessions.length, hours, entries: mineRows.length, submitted, approved, target };
+  });
+
+  return (
+    <div className="native-scroll org-management-scroll">
+      <section className="overview-hero home-hero">
+        <span className="home-hero-mark" aria-hidden="true" />
+        <div><span className="eyebrow">Teams</span><h2>Engineering Management</h2><p>Structure and team reports in one place.</p></div>
+        {manages && <span className="access-pill"><Network size={16} /> Manager view</span>}
+      </section>
+      <div className="org-tabs" role="tablist" aria-label="Engineering management sections">
+        <button type="button" role="tab" aria-selected={tab === "structure"} className={tab === "structure" ? "active" : ""} onClick={() => setTab("structure")}>Structure</button>
+        {manages && <button type="button" role="tab" aria-selected={tab === "time"} className={tab === "time" ? "active" : ""} onClick={() => setTab("time")}>Timesheets</button>}
+        {manages && <button type="button" role="tab" aria-selected={tab === "performance"} className={tab === "performance" ? "active" : ""} onClick={() => setTab("performance")}>Performance</button>}
+        {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
+      </div>
+      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
+      {manages && tab !== "structure" && <>
+        <div className="period-presets" aria-label="Team report period">
+          <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
+        </div>
+        <section className="filter-toolbar history-filters">
+          <label><span>From</span><input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label>
+          <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
+          <span className="filter-summary">{visibleUsers.length} people</span>
+        </section>
+        <section className="report-panel">
+          <div className="section-head"><div><span className="eyebrow">{tab === "time" ? "Team time" : "Team performance"}</span><h3>{from} to {to}</h3></div></div>
+          <div className="data-table-wrap"><table className="data-table"><thead>{tab === "time"
+            ? <tr><th>Employee</th><th>Department</th><th>Sessions</th><th>Hours</th></tr>
+            : <tr><th>Employee</th><th>Department</th><th>Entries</th><th>Submitted</th><th>Approved</th><th>Target</th><th>Progress</th></tr>}
+          </thead><tbody>
+            {summaries.map((row) => tab === "time"
+              ? <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.sessions}</td><td><b>{row.hours.toFixed(2)}</b></td></tr>
+              : <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.entries}</td><td>{row.submitted}</td><td><b>{row.approved}</b></td><td>{row.target}</td><td>{row.target ? Math.round((row.approved / row.target) * 100) : 0}%</td></tr>)}
+            {!summaries.length && <tr><td colSpan={tab === "time" ? 4 : 7}><div className="empty compact">No team data in this period.</div></td></tr>}
+          </tbody></table></div>
+        </section>
+      </>}
+    </div>
+  );
+}
+
 function Overview({
   choose,
   user,
@@ -7111,11 +7227,11 @@ function Overview({
     .map((id) => ITEMS.find((item) => item.id === id))
     .find((item): item is Item => Boolean(item && canOpenInSession(user, item, method)));
   const fullModules = [
-    { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clocking, timesheets, leave, requests and schedules", icon: Timer, color: "green" },
-    { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance & Workboard", text: "Points, targets, approvals, progress and reports", icon: TrendingUp, color: "violet" },
-    { id: "org-structure", channel: "home" as const, title: "Engineering Management", text: "Departments, teams and access", icon: Network, color: "blue" },      { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, credentials and employee records", icon: UserRoundSearch, color: "rose" },
-    { id: accountingLanding?.id || "acc-dashboard", channel: "accounting" as const, title: "Accounting", text: "Finance, projects, payroll, clients and reports", icon: BadgeDollarSign, color: "amber" },
-    { id: "admin", channel: "admin" as const, title: "Administration", text: "Users, access, rules and protected data", icon: Settings, color: "slate" },
+    { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clock, schedule, leave", icon: Timer, color: "green" },
+    { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance", text: "Points, targets, approvals", icon: TrendingUp, color: "violet" },
+    { id: "org-structure", channel: "home" as const, title: "Engineering Management", text: "Departments, teams, reports", icon: Network, color: "blue" },      { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, records", icon: UserRoundSearch, color: "rose" },
+    { id: accountingLanding?.id || "acc-dashboard", channel: "accounting" as const, title: "Accounting", text: "Finance, payroll, projects", icon: BadgeDollarSign, color: "amber" },
+    { id: "admin", channel: "admin" as const, title: "Administration", text: "Users, access, data", icon: Settings, color: "slate" },
   ];
   const pinModules = [
     { id: "quick-clock", channel: "time" as const, title: "Clock In / Out", text: "Record your attendance in one tap", icon: Timer, color: "green" },
@@ -7133,6 +7249,7 @@ function Overview({
   const scope = DATA_SCOPES.find((row) => row.id === (user?.permissionProfile?.scope || defaultScopeForPreset(user?.access || "Engineer")));
   const quickCandidateIds = [
     "quick-clock",
+    "my-points",
     "my-requests",
     "performance-center",
     "staff-development",
@@ -7166,9 +7283,7 @@ function Overview({
         <div>
           <span className="eyebrow">{quickAccess ? "Quick access" : "Larsa Engineering"}</span>
           <h2>{greeting()}, {firstName}</h2>
-          <p>{quickAccess
-            ? "Choose what you need. PIN access covers your attendance, your points, and your development activities."
-            : "Choose a work area. Only the areas allowed by your permissions are shown below."}</p>
+          <p>{quickAccess ? "Attendance, points, and development." : "Your work areas and actions."}</p>
         </div>
         <span className="access-pill"><ShieldCheck size={16} /> {quickAccess ? "PIN access" : user?.access || user?.role}</span>
       </section>
@@ -7272,8 +7387,7 @@ function Overview({
       </section>
       {quickActions.length > 0 && <section className="home-quick-actions">
         <div className="section-head">
-          <div><span className="eyebrow">Quick actions</span><h3>Start with one tap</h3></div>
-          <span className="black-badge">Based on your access</span>
+          <h3>Quick actions</h3>
         </div>
         <div className="quick-action-row">
           {quickActions.map((item) => {
@@ -7640,8 +7754,8 @@ function PerformanceCenter({
       <section className="overview-hero performance-hero">
         <div>
           <span className="eyebrow">Weekly performance</span>
-          <h2>Points & targets at a glance</h2>
-          <p>Compare each employee with their weekly target, review submitted work, and keep the detailed workboard one step away.</p>
+          <h2>Performance</h2>
+          <p>Weekly points, targets, and approvals.</p>
         </div>
         <div className="hero-actions">
           {canExport && <button type="button" onClick={exportSummary}><FileSpreadsheet size={16} /> Export Week</button>}
@@ -7843,19 +7957,17 @@ function PerformanceCenter({
         <div className="data-table-wrap">
           <table className="data-table points-review-table">
             <thead>
-              <tr><th>Date</th><th>Employee</th><th>Job</th><th>Hours</th><th>Assigned</th><th>Total</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
+              <tr><th>Date</th><th>Employee</th><th>Job</th><th>Assigned</th><th>Total</th><th>Approved</th><th>Status</th>{canApprove && <th>Review</th>}</tr>
             </thead>
             <tbody>
               {weekRows.map((row) => {
                 const submitted = finiteNumber(row["Submitted Points"]);
-                const hours = finiteNumber(row["Hours Spent"]);
                 const status = String(row.Status || "Draft");
                 return (
                   <tr key={row.id}>
                     <td>{rowDate(row) || "—"}</td>
                     <td><b>{row.Engineer || "Unknown"}</b><small>{row.Department || ""}</small></td>
                     <td><b>{String(row["Job Number"] || row.Project || "General")}</b><small>{String(row["Work Category"] || "")}</small></td>
-                    <td>{hours ? `${hours} h` : "—"}</td>
                     <td>{finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]) || "—"}</td>
                     <td>{submitted}</td>
                     <td>{finiteNumber(row["Approved Points"])}</td>
@@ -8185,6 +8297,7 @@ function PerformanceHistory({
 }) {
   const [editing, setEditing] = useState<{ uid: string; clockIn: string } | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [reportKind, setReportKind] = useState<"time" | "performance">("time");
   const mayAdjust = Boolean(viewer && (() => {
     const item = ITEMS.find((row) => row.id === "staff-clock");
     return item ? hasItemPermission(viewer, item, "manage") : false;
@@ -8260,40 +8373,43 @@ function PerformanceHistory({
   const canOpenAdvanced = Boolean(
     viewer && canOpen(viewer, ITEMS.find((item) => item.id === "staff-reports")!),
   );
+  const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
+    const end = new Date();
+    const start = new Date(end);
+    if (period === "week") start.setDate(start.getDate() - 6);
+    if (period === "month") start.setDate(start.getDate() - 29);
+    if (period === "sixMonths") start.setMonth(start.getMonth() - 6);
+    if (period === "year") start.setFullYear(start.getFullYear() - 1);
+    setFrom(dateInputValue(start));
+    setTo(dateInputValue(end));
+  };
   const exportHistory = () => {
-    // Time rows and output rows share one sheet but fill different columns, so
-    // both must line up against the same header.
-    downloadRows(`larsa-productivity-${from}-to-${to}.csv`, [
-      ["Record Type", "Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Job Number", "Assigned Points", "Total Points", "Approved Points", "Mode", "Status"],
-      ...filteredSessions.map((session) => [
-        "Clock Session",
+    if (reportKind === "time") {
+      downloadRows(`larsa-timesheets-${from}-to-${to}.csv`, [
+        ["Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Mode", "Status"],
+        ...filteredSessions.map((session) => [
         session.clockIn.slice(0, 10),
         session.employee,
         users.find((user) => user.id === session.uid)?.department || "",
         session.hours.toFixed(2),
         session.presenceHours.toFixed(2),
         session.breakHours.toFixed(2),
-        "", "", "", "",
         session.mode,
         session.open ? "Open" : "Closed",
-      ]),
+        ]),
+      ]);
+      return;
+    }
+    downloadRows(`larsa-performance-${from}-to-${to}.csv`, [
+      ["Date", "Employee", "Department", "Job Number", "Assigned Points", "Total Points", "Approved Points", "Status"],
       ...filteredRows.map((row) => [
-        "Performance Points",
         rowDate(row),
         row.Engineer || "",
         row.Department || "",
-        // Hours the engineer recorded against this specific job -- this column
-        // used to be blank for point rows, which made it impossible to compare
-        // effort with output in the exported sheet.
-        finiteNumber(row["Hours Spent"]) || "",
-        // A point row has no clocked span, so the presence and break columns
-        // stay empty rather than shifting every column after them.
-        "", "",
         row["Job Number"] || row.Project || "",
         finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]),
         finiteNumber(row["Submitted Points"]),
         finiteNumber(row["Approved Points"]),
-        "",
         row.Status || "",
       ]),
     ]);
@@ -8303,9 +8419,9 @@ function PerformanceHistory({
     <div className="native-scroll history-scroll">
       <section className="overview-hero history-hero">
         <div>
-          <span className="eyebrow">Flexible reporting</span>
-          <h2>Productivity History</h2>
-          <p>Hours worked set against points and jobs delivered, for whichever population and period you choose.</p>
+          <span className="eyebrow">Reports</span>
+          <h2>Time & Performance</h2>
+          <p>Choose one report, a team, and a period.</p>
         </div>
         <div className="hero-actions">
           {canExport && <button type="button" onClick={exportHistory}><FileSpreadsheet size={16} /> Export Records</button>}
@@ -8321,6 +8437,20 @@ function PerformanceHistory({
         setDepartment("all");
       }} />
 
+      <div className="settings-tabs history-kind" role="tablist" aria-label="Report type">
+        <button type="button" role="tab" aria-selected={reportKind === "time"} className={reportKind === "time" ? "active" : ""} onClick={() => setReportKind("time")}><Timer size={16} /> Timesheets</button>
+        <button type="button" role="tab" aria-selected={reportKind === "performance"} className={reportKind === "performance" ? "active" : ""} onClick={() => setReportKind("performance")}><TrendingUp size={16} /> Performance</button>
+      </div>
+
+      <div className="period-presets" aria-label="Report period">
+        <button type="button" onClick={() => setPeriod("today")}>Today</button>
+        <button type="button" onClick={() => setPeriod("week")}>7 days</button>
+        <button type="button" onClick={() => setPeriod("month")}>30 days</button>
+        <button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button>
+        <button type="button" onClick={() => setPeriod("year")}>Year</button>
+        <span>Custom</span>
+      </div>
+
       <section className="filter-toolbar history-filters">
         <label><span>From</span><input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label>
         <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
@@ -8332,32 +8462,44 @@ function PerformanceHistory({
         )}
       </section>
 
-      <section className="metric-grid">
-        <article><span><Timer size={19} /></span><small>Total hours</small><b>{totalHours.toFixed(1)}</b><p>{filteredSessions.length} sessions</p></article>
-        <article><span><TrendingUp size={19} /></span><small>Submitted points</small><b>{totalSubmitted.toLocaleString()}</b><p>{filteredRows.length} entries</p></article>
-        <article><span><Award size={19} /></span><small>Approved points</small><b>{totalApproved.toLocaleString()}</b><p>{totalTarget ? Math.round((totalApproved / totalTarget) * 100) : 0}% of target</p></article>
-        <article><span><ClipboardCheck size={19} /></span><small>Jobs delivered</small><b>{totalJobs.toLocaleString()}</b><p>{totalHours ? `${(totalApproved / totalHours).toFixed(1)} points per hour` : "No hours recorded"}</p></article>
-        <article><span><UsersRound size={19} /></span><small>Employees</small><b>{selectedUsers.length}</b><p>{weeksInPeriod.toFixed(2).replace(/\.00$/, "")} target week{weeksInPeriod === 1 ? "" : "s"}</p></article>
-      </section>
+      {reportKind === "time" ? (
+        <section className="metric-grid">
+          <article><span><Timer size={19} /></span><small>Total hours</small><b>{totalHours.toFixed(1)}</b><p>{filteredSessions.length} sessions</p></article>
+          <article><span><FileClock size={19} /></span><small>Sessions</small><b>{filteredSessions.length}</b><p>{filteredSessions.filter((row) => row.open).length} open now</p></article>
+          <article><span><UsersRound size={19} /></span><small>Employees</small><b>{selectedUsers.length}</b><p>{from} to {to}</p></article>
+        </section>
+      ) : (
+        <section className="metric-grid">
+          <article><span><TrendingUp size={19} /></span><small>Submitted points</small><b>{totalSubmitted.toLocaleString()}</b><p>{filteredRows.length} entries</p></article>
+          <article><span><Award size={19} /></span><small>Approved points</small><b>{totalApproved.toLocaleString()}</b><p>{totalTarget ? Math.round((totalApproved / totalTarget) * 100) : 0}% of target</p></article>
+          <article><span><ClipboardCheck size={19} /></span><small>Jobs delivered</small><b>{totalJobs.toLocaleString()}</b><p>{selectedUsers.length} employees</p></article>
+        </section>
+      )}
 
       <section className="report-panel">
         <div className="section-head"><div><span className="eyebrow">Period summary</span><h3>All selected employees together</h3></div><span className="black-badge">{from} to {to}</span></div>
         <div className="data-table-wrap">
           <table className="data-table">
-            <thead><tr><th>Employee</th><th>Department</th><th>Hours</th><th>Jobs</th><th>Total</th><th>Approved</th><th>Period Target</th><th>Completion</th></tr></thead>
+            <thead>{reportKind === "time"
+              ? <tr><th>Employee</th><th>Department</th><th>Hours</th><th>Sessions</th></tr>
+              : <tr><th>Employee</th><th>Department</th><th>Jobs</th><th>Total</th><th>Approved</th><th>Period Target</th><th>Completion</th></tr>}
+            </thead>
             <tbody>
               {summaries.map((row) => {
                 const completion = row.target ? Math.round((row.approved / row.target) * 100) : 0;
-                return <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.hours.toFixed(2)}</td><td>{row.jobs}</td><td>{row.submitted}</td><td><b>{row.approved}</b></td><td>{row.target}</td><td><div className="progress-cell"><div role="progressbar" aria-valuenow={completion} aria-valuemin={0} aria-valuemax={100} aria-label={`${row.user.name} period completion`}><span style={{ width: `${Math.min(100, completion)}%` }} /></div><b>{completion}%</b></div></td></tr>;
+                const sessionCount = filteredSessions.filter((session) => session.uid === row.user.id).length;
+                return reportKind === "time"
+                  ? <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td><b>{row.hours.toFixed(2)}</b></td><td>{sessionCount}</td></tr>
+                  : <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.jobs}</td><td>{row.submitted}</td><td><b>{row.approved}</b></td><td>{row.target}</td><td><div className="progress-cell"><div role="progressbar" aria-valuenow={completion} aria-valuemin={0} aria-valuemax={100} aria-label={`${row.user.name} period completion`}><span style={{ width: `${Math.min(100, completion)}%` }} /></div><b>{completion}%</b></div></td></tr>;
               })}
-              {!summaries.length && <tr><td colSpan={8}><div className="empty compact">No employees match these filters.</div></td></tr>}
+              {!summaries.length && <tr><td colSpan={reportKind === "time" ? 4 : 7}><div className="empty compact">No employees match these filters.</div></td></tr>}
             </tbody>
           </table>
         </div>
       </section>
 
       <section className="history-detail-grid">
-        <article className="report-panel">
+        {reportKind === "time" && <article className="report-panel">
           <div className="section-head"><div><span className="eyebrow">Attendance detail</span><h3>Clock sessions</h3></div><span className="black-badge">{filteredSessions.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
@@ -8388,19 +8530,19 @@ function PerformanceHistory({
               </tbody>
             </table>
           </div>
-        </article>
-        <article className="report-panel">
+        </article>}
+        {reportKind === "performance" && <article className="report-panel">
           <div className="section-head"><div><span className="eyebrow">Performance detail</span><h3>Point records</h3></div><span className="black-badge">{filteredRows.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Job</th><th>Hours</th><th>Total</th><th>Approved</th><th>Status</th></tr></thead>
+              <thead><tr><th>Date</th><th>Employee</th><th>Job</th><th>Total</th><th>Approved</th><th>Status</th></tr></thead>
               <tbody>
-                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{String(row["Job Number"] || row.Project || "General")}</td><td>{finiteNumber(row["Hours Spent"]) ? `${finiteNumber(row["Hours Spent"])} h` : "—"}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
-                {!filteredRows.length && <tr><td colSpan={7}><div className="empty compact">No point records in this period.</div></td></tr>}
+                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{String(row["Job Number"] || row.Project || "General")}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
+                {!filteredRows.length && <tr><td colSpan={6}><div className="empty compact">No point records in this period.</div></td></tr>}
               </tbody>
             </table>
           </div>
-        </article>
+        </article>}
       </section>
     </div>
   );
@@ -9760,6 +9902,31 @@ function LivePresence({
   const counts = Object.fromEntries(GROUPS_LIVE.map((group) => [group.id, state.filter((row) => row.tone === group.id).length]));
   const activeNow = state.filter((row) => row.isIn).length;
   const expectedToday = state.filter((row) => !["OFF", "STB"].includes(row.planned)).length;
+  const renderPresenceGroup = (group: (typeof GROUPS_LIVE)[number]) => {
+    const rows = state.filter((row) => row.tone === group.id)
+      .sort((a, b) => a.user.name.localeCompare(b.user.name));
+    return (
+      <article className="report-panel presence-column" key={group.id}>
+        <div className="section-head">
+          <h3>{group.label}</h3>
+          <span className={`presence-count tone-${group.tone}`}>{rows.length}</span>
+        </div>
+        <div className="presence-list">
+          {rows.map((row) => (
+            <div className={`presence-row${row.user.id === viewer?.id ? " is-me" : ""}`} key={row.user.id}>
+              <i className={`presence-dot tone-${row.tone}`} aria-hidden="true" />
+              <span>
+                <b>{row.user.name}{row.user.id === viewer?.id ? " (you)" : ""}</b>
+                <small>{row.user.department || row.user.role || ""}</small>
+              </span>
+              <span className="presence-meta"><em>{group.id === "off" ? "Not clocked in" : group.label.replace(/^In the |^On /, "")}</em></span>
+            </div>
+          ))}
+          {!rows.length && <div className="empty compact">Nobody right now.</div>}
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div className="native-scroll presence-scroll">
@@ -9768,7 +9935,7 @@ function LivePresence({
         <div>
           <span className="eyebrow">Right now</span>
           <h2>Live Presence</h2>
-          <p>Green is in the office, blue is online, black is on site. Updates as people clock in and out.</p>
+          <p>Office, online, and site status at a glance.</p>
         </div>
         <div className="hero-actions">
           <button type="button" onClick={() => go("quick-clock")}>Clock In / Out</button>
@@ -9789,35 +9956,8 @@ function LivePresence({
       </section>
 
       <section className="presence-groups">
-        {GROUPS_LIVE.map((group) => {
-          const rows = state.filter((row) => row.tone === group.id)
-            .sort((a, b) => a.user.name.localeCompare(b.user.name));
-          return (
-            <article className="report-panel presence-column" key={group.id}>
-              <div className="section-head">
-                <div><span className="eyebrow">{group.hint}</span><h3>{group.label}</h3></div>
-                <span className={`presence-count tone-${group.tone}`}>{rows.length}</span>
-              </div>
-              <div className="presence-list">
-                {rows.map((row) => (
-                  <div className={`presence-row${row.user.id === viewer?.id ? " is-me" : ""}`} key={row.user.id}>
-                    <i className={`presence-dot tone-${row.tone}`} aria-hidden="true" />
-                    <span>
-                      <b>{row.user.name}{row.user.id === viewer?.id ? " (you)" : ""}</b>
-                      <small>{row.user.department || row.user.role || ""}</small>
-                    </span>
-                    <span className="presence-meta">
-                      {row.isIn
-                        ? <><em>{row.mode}</em><small>{row.hours ? `${row.hours.toFixed(1)} h` : new Date(row.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></>
-                        : <><em>{row.planned === "OFF" ? "Rest day" : row.planned}</em><small>{row.since ? `Last seen ${new Date(row.since).toLocaleDateString()}` : "No record"}</small></>}
-                    </span>
-                  </div>
-                ))}
-                {!rows.length && <div className="empty compact">Nobody right now.</div>}
-              </div>
-            </article>
-          );
-        })}
+        <div className="presence-stack">{renderPresenceGroup(GROUPS_LIVE[0])}{renderPresenceGroup(GROUPS_LIVE[2])}</div>
+        <div className="presence-stack">{renderPresenceGroup(GROUPS_LIVE[1])}{renderPresenceGroup(GROUPS_LIVE[3])}</div>
       </section>
     </div>
   );
@@ -10228,7 +10368,7 @@ function MySettings({
               }
               if (!Object.keys(patch).length) { setMessage("Nothing to change."); return; }
               guardedSave(patch, "Sign-in details", () => setSecret({ password: "", confirm: "", pin: "" }));
-            }} disabled={guardBusy}><Save size={15} /> Update sign-in</button>{(() => { const rows = (((parseStore("larsaStaffV8") as { users?: StaffUser[] } | null)?.users || []).find((row) => row.id === user?.id)?.devices) || []; if (!rows.length) return null; return (<div className="device-list"><h4>Signed-in devices</h4>{rows.map((device) => (<div className="device-row" key={device.id}><span><b>{device.label}</b>{device.id === getDeviceId() ? " — this device" : ""}<small>Used {describeWhen(device.lastSeen)} · Verified {describeWhen(device.lastVerified)}</small></span><button type="button" className="btn small" onClick={() => { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users) && user) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRemoved(deviceStore.users[seat].devices, device.id) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); setMessage("Device removed. It will ask for an email code next time."); } } } catch { setMessage("Could not remove that device."); } }}>Remove</button></div>))}</div>); })()}
+            }} disabled={guardBusy}><Save size={15} /> Update sign-in</button>{(() => { const rows = (((parseStore("larsaStaffV8") as { users?: StaffUser[] } | null)?.users || []).find((row) => row.id === user?.id)?.devices) || []; return (<div className="device-list"><h4>Signed-in devices</h4><p className="builder-note">Verification renews every {verificationWindowHours(user)} hours.</p>{rows.map((device) => (<div className="device-row" key={device.id}><span><b>{device.label}</b>{device.id === getDeviceId() ? " — this device" : ""}<small>Used {describeWhen(device.lastSeen)} · Verified {describeWhen(device.lastVerified)}</small></span><button type="button" className="btn small" onClick={() => { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users) && user) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRemoved(deviceStore.users[seat].devices, device.id) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); setMessage("Device removed. It will ask for an email code next time."); } } } catch { setMessage("Could not remove that device."); } }}>Remove</button></div>))}{!rows.length && <div className="empty compact">No verified devices yet.</div>}</div>); })()}
           </div>
           {pending && (
             <div className="guard-box">
