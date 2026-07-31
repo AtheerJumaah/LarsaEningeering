@@ -7046,7 +7046,7 @@ export default function Home() {
                 onClick={() => { setLoginMode("email"); setLoginError(""); setAccessMode(null); }}
               >Email</button>
             </div>
-            {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { if (next !== "reset") setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
+            {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { if (next === "signup" || next === "forgot") setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
               {loginMode === "email" ? (
                 <>
                   <label>Work Email<input type="email" name="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" placeholder="name@larsaeng.com" /></label>
