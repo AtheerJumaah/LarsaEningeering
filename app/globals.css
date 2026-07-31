@@ -3107,3 +3107,27 @@ html, body { max-width: 100%; overflow-x: hidden; }
   text-underline-offset: 3px;
 }
 .auth-secondary button:hover { color: inherit; }
+
+
+/* The devices this account has signed in from, shown under the sign-in
+   details so somebody can spot a machine they do not recognise. */
+.device-list { margin-top: 18px; }
+.device-list h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.device-row span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.device-row b { font-size: 14px; font-weight: 600; }
+.device-row small { font-size: 12px; color: var(--muted); }
