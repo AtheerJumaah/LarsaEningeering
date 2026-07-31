@@ -3423,3 +3423,28 @@ html, body { max-width: 100%; overflow-x: hidden; }
   color: #9aa1ad;
   text-transform: none;
 }
+
+
+/* Work-area cards: six identical tiles, three across ---------------------- */
+
+/* Two things were making these uneven. The grid is two columns by default, and
+   a rule stretched the final card across the full width whenever the count was
+   odd -- so the row breaks moved about and one tile ended up twice the size of
+   its neighbours. Three equal columns, no stretching, equal heights. */
+@media (min-width: 900px) {
+  .module-grid:not(.quick-grid) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 600px) and (max-width: 899px) {
+  .module-grid:not(.quick-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 599px) {
+  .module-grid:not(.quick-grid) { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* No tile spans the row, whatever the count. */
+.module-grid:not(.quick-grid) > *:last-child:nth-child(odd) { grid-column: auto; }
+
+/* Same height whether the label is one word or three, so the row reads as a
+   set rather than a ragged edge. */
+.module-grid:not(.quick-grid) { align-items: stretch; }
+.module-grid:not(.quick-grid) > * { min-height: 200px; height: 100%; }
