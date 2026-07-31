@@ -15,7 +15,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";import { PERIOD_LABELS, emptyMetrics, formatHours, metricsFor, rangeFor } from "../lib/teamMetrics";import type { Period } from "../lib/teamMetrics";
 import {
   assignableTo,
   canCreateDepartments,
@@ -43,7 +43,7 @@ export function OrgStructure({
   onSaved?: () => void;
 }) {
   const [saved, setSaved] = useState<OrgChart | null>(null);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState("");  const [period, setPeriod] = useState<Period>("week");  const [openJobs, setOpenJobs] = useState("");
   const [newDepartmentName, setNewDepartmentName] = useState("");
   const [teamDraftFor, setTeamDraftFor] = useState("");
   const [newTeamName, setNewTeamName] = useState("");
@@ -191,7 +191,7 @@ export function OrgStructure({
         </div>
       </section>
 
-      {note ? <p className="org-note">{note}</p> : null}      {manages ? (() => {        const ids = [...staffIdsVisibleTo(chart, viewer, users)].filter((id) => !viewer || id !== viewer.id);        if (!ids.length) return null;        return (          <section className="org-card">            <div className="org-headline">              <div>                <span className="org-eyebrow">You are responsible for</span>                <h3>{ids.length} {ids.length === 1 ? "person" : "people"}</h3>              </div>            </div>            <ul className="org-people">              {ids.map((id) => {                const person = users.find((row) => row.id === id);                const teams = teamsContaining(chart, id).map((team) => team.name).join(", ");                return (                  <li key={id}>                    <span>                      <b>{nameOf(id)}</b>                      <small>{[person && person.role, teams].filter(Boolean).join(" - ") || "No team yet"}</small>                    </span>                  </li>                );              })}            </ul>          </section>        );      })() : null}
+      {note ? <p className="org-note">{note}</p> : null}      {manages ? (() => {        const ids = [...staffIdsVisibleTo(chart, viewer, users)].filter((id) => !viewer || id !== viewer.id);        if (!ids.length) return null;        const bounds = rangeFor(period);        const report = metricsFor(ids, bounds.from, bounds.to);        return (          <section className="org-card">            <div className="org-headline">              <div>                <span className="org-eyebrow">You are responsible for</span>                <h3>{ids.length} {ids.length === 1 ? "person" : "people"}</h3>              </div>              <select className="org-select" value={period} onChange={(event) => setPeriod(event.target.value as Period)}>                {PERIOD_LABELS.filter((row) => row.id !== "custom").map((row) => (<option key={row.id} value={row.id}>{row.label}</option>))}              </select>              <div style={{ display: "none" }}>              </div>            </div>            <ul className="org-people">              {ids.map((id) => {                const person = users.find((row) => row.id === id);                const teams = teamsContaining(chart, id).map((team) => team.name).join(", ");                const stats = report.get(id) || emptyMetrics(id);                return (                  <li key={id}>                    <span>                      <b>{nameOf(id)}</b>                      <small>{[person && person.role, teams].filter(Boolean).join(" - ") || "No team yet"}</small>                    </span>                    <span className="org-metrics">                      <span><b>{formatHours(stats.hours)}</b><small>hours</small></span>                      <span><b>{stats.sessions}</b><small>sessions</small></span>                      <span><b>{stats.approvedPoints || stats.submittedPoints}</b><small>points</small></span>                      <span>                        <b>{stats.jobs}</b>                        {stats.jobNumbers.length ? (<button type="button" className="org-joblink" onClick={() => setOpenJobs(openJobs === id ? "" : id)}>{openJobs === id ? "hide jobs" : "jobs"}</button>) : <small>jobs</small>}                      </span>                    </span>                    {openJobs === id ? (<span className="org-joblist">{stats.jobNumbers.map((job) => <span className="org-name" key={job}>{job}</span>)}</span>) : null}                  </li>                );              })}            </ul>          </section>        );      })() : null}
 
       {manages ? (
         <>
