@@ -3386,3 +3386,40 @@ html, body { max-width: 100%; overflow-x: hidden; }
   border: 1px solid var(--line);
   border-radius: 14px;
 }
+
+
+/* Auth cards: rhythm ----------------------------------------------------- */
+
+/* The brand slab is solid black, so anything sitting directly beneath it reads
+   as stuck to it. The greeting used to provide that gap through its own top
+   padding, which meant the gap vanished on the Create account and Reset
+   screens where the greeting is hidden. Put the space on the slab itself so it
+   holds no matter what follows. */
+.auth-brand { margin-bottom: 20px; }
+.auth-card .auth-copy { padding-top: 0; }
+
+/* One rhythm for every field, instead of each element bringing its own
+   margin. Keeps the six-field Create account form even rather than bunching
+   some rows and spreading others. */
+.auth-card form {
+  display: grid;
+  gap: 14px;
+}
+.auth-card form > * { margin-top: 0; margin-bottom: 0; }
+
+/* The error slot is always in the markup and usually empty; without this it
+   spends a full row and the form looks like it has a hole in it. */
+.auth-card .auth-error:empty { display: none; }
+
+.auth-card .auth-hint { margin: 0; }
+.auth-card .rowActions { margin: 2px 0 0; }
+.auth-secondary { margin: 4px 0 0; }
+
+/* Small print inside a label should not shout like the label does. */
+.auth-card label .optional {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: #9aa1ad;
+  text-transform: none;
+}
