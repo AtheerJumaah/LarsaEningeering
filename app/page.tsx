@@ -7113,7 +7113,7 @@ function Overview({
   const fullModules = [
     { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clocking, timesheets, leave, requests and schedules", icon: Timer, color: "green" },
     { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance & Workboard", text: "Points, targets, approvals, progress and reports", icon: TrendingUp, color: "violet" },
-    { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, credentials and employee records", icon: UserRoundSearch, color: "rose" },
+    { id: "org-structure", channel: "home" as const, title: "Engineering Management", text: "Departments, teams and access", icon: Network, color: "blue" },      { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, credentials and employee records", icon: UserRoundSearch, color: "rose" },
     { id: accountingLanding?.id || "acc-dashboard", channel: "accounting" as const, title: "Accounting", text: "Finance, projects, payroll, clients and reports", icon: BadgeDollarSign, color: "amber" },
     { id: "admin", channel: "admin" as const, title: "Administration", text: "Users, access, rules and protected data", icon: Settings, color: "slate" },
   ];
