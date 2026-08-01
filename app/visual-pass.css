@@ -492,3 +492,31 @@ html[data-mode="light"] .native-scroll,
 html[data-mode="light"] .app-main,
 html[data-mode="light"] main { background: var(--larsa-surface, transparent); }
 html[data-mode="light"] body { background: var(--larsa-surface, var(--bg)); }
+
+/* --------------------------------------------------------------------------
+   Text on the accent
+
+   With pale accents now on offer, anything sitting on an accent fill has to
+   switch to ink or it vanishes. CardTools works out which from the accent\u2019s
+   luminance and publishes it here, so a white accent gives dark text and a
+   navy one gives white.
+   -------------------------------------------------------------------------- */
+
+:root { --larsa-on-accent: #ffffff; }
+
+.access-pill,
+.hier-badge-you,
+.struct-count,
+.struct-chip em,
+.org-tabs button.active,
+.cardtools-density button.is-on,
+.auth-submit,
+.org-add,
+button.primary,
+.btn.primary { color: var(--larsa-on-accent) !important; }
+
+/* A pale accent needs an edge or it disappears against a white card. */
+.access-pill,
+.hier-badge-you,
+.struct-count,
+.struct-chip em { border: 1px solid rgba(23, 24, 27, 0.16); }
