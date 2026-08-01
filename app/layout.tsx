@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import "./globals.css"; import "./visual-pass.css";
+import "./globals.css"; import "./visual-pass.css"; import { CardTools } from "./CardTools";
 
 export const metadata: Metadata = {
   title: "Larsa Control",
@@ -51,7 +51,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
-      <body>{children}</body>
+      <body>{children}<CardTools /></body>
     </html>
   );
 }
