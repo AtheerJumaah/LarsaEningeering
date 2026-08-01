@@ -238,3 +238,54 @@ button[aria-label="Back to home"] svg {
 }
 .org-portal dt { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
 .org-portal dd { margin: 0 12px 0 0; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------------------
+   Structure tab: departments as cards, not a list.
+   -------------------------------------------------------------------------- */
+
+.struct { display: grid; gap: 14px; padding-bottom: 28px; }
+.struct-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.struct-add { margin-left: auto; }
+.struct-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.struct-empty { font-size: 12.5px; color: var(--muted); }
+
+.struct-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: start; }
+
+.struct-dep { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; display: grid; gap: 10px; }
+.struct-dep.is-dragging { opacity: 0.45; }
+.struct-dep.is-over { outline: 2px dashed rgba(23, 24, 27, 0.35); outline-offset: 3px; }
+.struct-dep-head { display: flex; align-items: center; gap: 8px; }
+.struct-dep-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.struct-dep-title b { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.struct-dep-title small { font-size: 11.5px; color: var(--muted); }
+.struct-x { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); cursor: pointer; }
+.struct-x:hover { color: #b91c1c; border-color: rgba(185, 28, 28, 0.4); }
+
+/* Headcount as a share of the biggest department. */
+.struct-share { display: block; height: 6px; border-radius: 999px; background: rgba(23, 24, 27, 0.08); overflow: hidden; }
+.struct-share i { display: block; height: 100%; border-radius: 999px; background: #17181b; }
+
+.struct-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.struct-label { flex: none; min-width: 58px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+
+.struct-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.struct-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; font-size: 12.5px; font-weight: 550; background: var(--soft); border: 1px solid var(--line); border-radius: 999px; }
+.struct-chip em { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: 0.02em; color: #fff; background: #17181b; border-radius: 50%; }
+.struct-chip button { display: inline-flex; padding: 0; border: 0; background: none; color: #a2a8b3; cursor: pointer; }
+.struct-chip button:hover { color: #b91c1c; }
+
+.struct-select { font: inherit; font-size: 12.5px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); }
+
+.struct-team { border: 1px solid var(--line); border-radius: 12px; background: var(--soft); padding: 9px 11px; display: grid; gap: 7px; }
+.struct-team.is-dragging { opacity: 0.45; }
+.struct-team.is-over { outline: 2px dashed rgba(23, 24, 27, 0.35); outline-offset: 2px; }
+.struct-team-head { display: flex; align-items: center; gap: 7px; }
+.struct-team-head b { font-size: 13.5px; font-weight: 650; }
+.struct-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 6px; font-size: 11px; font-weight: 700; color: #fff; background: #17181b; border-radius: 999px; }
+
+.struct-addteam { justify-self: start; display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 12px; border: 1px dashed var(--line); border-radius: 10px; background: #fff; color: var(--muted); cursor: pointer; }
+.struct-addteam:hover { color: var(--ink); border-color: #b9bec7; }
+
+.struct-unassigned { grid-column: 1 / -1; }
+
+@media (max-width: 640px) { .struct-grid { grid-template-columns: minmax(0, 1fr); } }
