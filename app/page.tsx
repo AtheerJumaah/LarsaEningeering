@@ -7170,7 +7170,7 @@ function EngineeringManagementPortal({
         {manages && <button type="button" role="tab" aria-selected={tab === "performance"} className={tab === "performance" ? "active" : ""} onClick={() => setTab("performance")}>Performance</button>}
         {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
       </div>
-      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
+      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
       {manages && (tab === "time" || tab === "performance") && <><TeamCharts summaries={summaries} mode={tab} />
         <div className="period-presets" aria-label="Team report period">
           <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
