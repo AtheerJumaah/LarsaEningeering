@@ -47,7 +47,7 @@ export function OrgStructure({
   const [note, setNote] = useState("");
   const [dragDep, setDragDep] = useState("");
   const [overDep, setOverDep] = useState("");
-  const [dragTeam, setDragTeam] = useState("");
+  const [dragTeam, setDragTeam] = useState(""); const [dragPerson, setDragPerson] = useState("");
   const [overTeam, setOverTeam] = useState("");
 
   const chart = useMemo(() => effectiveOrg(users), [users, tick]);
@@ -143,12 +143,12 @@ export function OrgStructure({
     save({ departments: chart.departments.filter((row) => row.id !== department.id), teams: chart.teams.filter((row) => row.departmentId !== department.id) }, "Department removed.");
   }
 
-  function Chips({ ids, onRemove, empty }: { ids: string[]; onRemove?: (id: string) => void; empty: string }) {
+  function moveMember(team: Team, fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = (team.memberIds || []).slice();    const from = list.indexOf(fromId);    const to = list.indexOf(toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    setTeamField(team, "memberIds", list);    setDragPerson("");  }  function Chips({ ids, onRemove, empty, onReorder }: { ids: string[]; onRemove?: (id: string) => void; empty: string; onReorder?: (fromId: string, toId: string) => void }) {
     if (!ids.length) return <span className="struct-empty">{empty}</span>;
     return (
       <span className="struct-chips">
         {ids.map((id) => (
-          <span className="struct-chip" key={id} title={nameOf(id)}>
+          <span className={"struct-chip" + (onReorder ? " is-movable" : "")} key={id} title={nameOf(id)} draggable={Boolean(onReorder)} onDragStart={onReorder ? (event) => { event.stopPropagation(); setDragPerson(id); } : undefined} onDragOver={onReorder ? (event) => { event.preventDefault(); event.stopPropagation(); } : undefined} onDrop={onReorder ? (event) => { event.preventDefault(); event.stopPropagation(); onReorder(dragPerson, id); } : undefined}>
             <em>{initials(nameOf(id))}</em>
             {nameOf(id)}
             {onRemove ? (
@@ -263,7 +263,7 @@ export function OrgStructure({
                     <span className="struct-label">Members</span>
                     <Chips
                       ids={team.memberIds || []}
-                      empty="Nobody yet"
+                      empty="Nobody yet"                      onReorder={editable ? (fromId, toId) => moveMember(team, fromId, toId) : undefined}
                       onRemove={editable ? (id) => setTeamField(team, "memberIds", (team.memberIds || []).filter((row) => row !== id)) : undefined}
                     />
                     {editable ? (
