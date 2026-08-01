@@ -1,37 +1,38 @@
 "use client";
 
-/* Engineering Management.
+/* Structure: the shape of the company, drawn rather than listed.
  *
- * Open to everybody, because the first question most people have is simply
- * "which department and team am I on, and who do I report to" -- that is the
- * top card and it needs no permission at all. The half below it, where the
- * structure is shaped, only renders for people who are actually responsible
- * for somebody.
+ * The old version was a scrolling list of names with four numbers each, which
+ * is what the Dashboard already does better. This tab answers a different
+ * question -- how is the company arranged -- so it shows departments as cards
+ * sized by headcount, with their teams and people as chips. Per-person figures
+ * deliberately do not appear here.
  *
- * People are added from a dropdown and shown as removable chips rather than a
- * wall of checkboxes: with twenty-six staff a checkbox grid is a wall of text
- * that hides who is actually on the team, which is the one thing the screen
- * exists to show.
+ * Everything is drag to reorder: departments among themselves, teams within
+ * their department. Order is stored in the chart, so it is the same order for
+ * everyone.
  */
 
 import { useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";import { PERIOD_LABELS, emptyMetrics, formatHours, metricsFor, rangeFor } from "../lib/teamMetrics";import type { Period } from "../lib/teamMetrics";
+import { GripVertical, Plus, X } from "lucide-react";
 import {
   assignableTo,
   canCreateDepartments,
   canEditDepartment,
-  departmentsContaining,
   effectiveOrg,
   isOrgAdmin,
-  isResponsibleForOthers,
-  managersOf,
   newId,
-  rolesOf,
-  teamsContaining,
-  staffIdsVisibleTo,  teamsVisibleTo,
+  teamsVisibleTo,
   writeOrg,
 } from "../lib/org";
 import type { Department, OrgChart, OrgUser, Team } from "../lib/org";
+
+function initials(name: string): string {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 export function OrgStructure({
   viewer,
@@ -42,15 +43,15 @@ export function OrgStructure({
   users: OrgUser[];
   onSaved?: () => void;
 }) {
-  const [saved, setSaved] = useState<OrgChart | null>(null);
-  const [note, setNote] = useState("");  const [period, setPeriod] = useState<Period>("week");  const [openJobs, setOpenJobs] = useState("");
-  const [newDepartmentName, setNewDepartmentName] = useState("");
-  const [teamDraftFor, setTeamDraftFor] = useState("");
-  const [newTeamName, setNewTeamName] = useState("");
+  const [tick, setTick] = useState(0);
+  const [note, setNote] = useState("");
+  const [dragDep, setDragDep] = useState("");
+  const [overDep, setOverDep] = useState("");
+  const [dragTeam, setDragTeam] = useState("");
+  const [overTeam, setOverTeam] = useState("");
 
-  /* The saved chart once anything has been edited this session, otherwise the
-     one derived from the staff list. */
-  const chart = useMemo(() => saved || effectiveOrg(users), [saved, users]);
+  const chart = useMemo(() => effectiveOrg(users), [users, tick]);
+  const active = useMemo(() => users.filter((row) => row.enabled !== false), [users]);
 
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
@@ -58,16 +59,9 @@ export function OrgStructure({
     return (id: string) => map.get(id) || "Unknown";
   }, [users]);
 
-  const manages = isResponsibleForOthers(chart, viewer, users);
-  const myDepartments = viewer ? departmentsContaining(chart, viewer.id) : [];
-  const myTeams = viewer ? teamsContaining(chart, viewer.id) : [];
-  const myManagers = viewer ? managersOf(chart, viewer.id, users) : [];
-  const myRoles = viewer ? rolesOf(chart, viewer) : [];
-  const managedTeams = teamsVisibleTo(chart, viewer);
-
   function save(next: OrgChart, message: string) {
-    setSaved(next);
     if (writeOrg(next)) {
+      setTick((value) => value + 1);
       setNote(message);
       if (onSaved) onSaved();
     } else {
@@ -75,62 +69,90 @@ export function OrgStructure({
     }
   }
 
+  const visibleTeams = teamsVisibleTo(chart, viewer);
+  const visibleTeamIds = new Set(visibleTeams.map((row) => row.id));
+  const departments = chart.departments.filter(
+    (row) => isOrgAdmin(viewer) || visibleTeams.some((team) => team.departmentId === row.id),
+  );
+
+  function membersOf(team: Team): string[] {
+    return [...new Set((team.leadIds || []).concat(team.memberIds || []))];
+  }
+  function peopleIn(department: Department): string[] {
+    const ids = new Set<string>();
+    chart.teams
+      .filter((team) => team.departmentId === department.id)
+      .forEach((team) => membersOf(team).forEach((id) => ids.add(id)));
+    return [...ids];
+  }
+
+  const placed = new Set<string>();
+  chart.teams.forEach((team) => membersOf(team).forEach((id) => placed.add(id)));
+  const unassigned = active.filter((row) => !placed.has(row.id));
+  const largest = Math.max(1, ...departments.map((row) => peopleIn(row).length));
+
+  function moveDepartment(fromId: string, toId: string) {
+    if (!fromId || !toId || fromId === toId) return;
+    const list = chart.departments.slice();
+    const from = list.findIndex((row) => row.id === fromId);
+    const to = list.findIndex((row) => row.id === toId);
+    if (from < 0 || to < 0) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    save({ departments: list, teams: chart.teams }, "Order saved.");
+    setDragDep("");
+    setOverDep("");
+  }
+
+  function moveTeam(fromId: string, toId: string) {
+    if (!fromId || !toId || fromId === toId) return;
+    const list = chart.teams.slice();
+    const from = list.findIndex((row) => row.id === fromId);
+    const to = list.findIndex((row) => row.id === toId);
+    if (from < 0 || to < 0) return;
+    if (list[from].departmentId !== list[to].departmentId) { setDragTeam(""); setOverTeam(""); return; }
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    save({ departments: chart.departments, teams: list }, "Order saved.");
+    setDragTeam("");
+    setOverTeam("");
+  }
+
   function addDepartment() {
-    const name = newDepartmentName.trim();
-    if (!name) return;
-    save({ ...chart, departments: [...chart.departments, { id: newId("dep"), name, headIds: [] }] }, "Department added.");
-    setNewDepartmentName("");
+    const name = window.prompt("Department name");
+    if (!name || !name.trim()) return;
+    save({ ...chart, departments: [...chart.departments, { id: newId("dep"), name: name.trim(), headIds: [] }] }, "Department added.");
   }
-
   function addTeam(departmentId: string) {
-    const name = newTeamName.trim();
-    if (!name) return;
-    save(
-      { ...chart, teams: [...chart.teams, { id: newId("team"), departmentId, name, leadIds: [], memberIds: [] }] },
-      "Team added.",
-    );
-    setTeamDraftFor("");
-    setNewTeamName("");
+    const name = window.prompt("Team name");
+    if (!name || !name.trim()) return;
+    save({ ...chart, teams: [...chart.teams, { id: newId("team"), departmentId, name: name.trim(), leadIds: [], memberIds: [] }] }, "Team added.");
   }
-
   function setHeads(department: Department, headIds: string[]) {
-    save(
-      { ...chart, departments: chart.departments.map((row) => (row.id === department.id ? { ...row, headIds } : row)) },
-      "Saved.",
-    );
+    save({ ...chart, departments: chart.departments.map((row) => (row.id === department.id ? { ...row, headIds } : row)) }, "Saved.");
   }
-
   function setTeamField(team: Team, field: "leadIds" | "memberIds", ids: string[]) {
     save({ ...chart, teams: chart.teams.map((row) => (row.id === team.id ? { ...row, [field]: ids } : row)) }, "Saved.");
   }
-
   function removeTeam(team: Team) {
     if (!window.confirm("Remove " + team.name + "?")) return;
     save({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id) }, "Team removed.");
   }
-
   function removeDepartment(department: Department) {
     if (!window.confirm("Remove " + department.name + " and its teams?")) return;
-    save(
-      {
-        departments: chart.departments.filter((row) => row.id !== department.id),
-        teams: chart.teams.filter((row) => row.departmentId !== department.id),
-      },
-      "Department removed.",
-    );
+    save({ departments: chart.departments.filter((row) => row.id !== department.id), teams: chart.teams.filter((row) => row.departmentId !== department.id) }, "Department removed.");
   }
 
   function Chips({ ids, onRemove, empty }: { ids: string[]; onRemove?: (id: string) => void; empty: string }) {
-    if (!ids.length) return <span className="org-none">{empty}</span>;
+    if (!ids.length) return <span className="struct-empty">{empty}</span>;
     return (
-      <span className="org-chiprow">
+      <span className="struct-chips">
         {ids.map((id) => (
-          <span className="org-name" key={id}>
+          <span className="struct-chip" key={id} title={nameOf(id)}>
+            <em>{initials(nameOf(id))}</em>
             {nameOf(id)}
             {onRemove ? (
-              <button type="button" aria-label={"Remove " + nameOf(id)} onClick={() => onRemove(id)}>
-                <X size={13} />
-              </button>
+              <button type="button" aria-label={"Remove " + nameOf(id)} onClick={() => onRemove(id)}><X size={12} /></button>
             ) : null}
           </span>
         ))}
@@ -142,168 +164,137 @@ export function OrgStructure({
     const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
     if (!options.length) return null;
     return (
-      <select
-        className="org-select"
-        value=""
-        onChange={(event) => {
-          if (event.target.value) onAdd(event.target.value);
-        }}
-      >
+      <select className="struct-select" value="" onChange={(event) => { if (event.target.value) onAdd(event.target.value); }}>
         <option value="">{label}</option>
-        {options.map((row) => (
-          <option key={row.id} value={row.id}>{row.name}</option>
-        ))}
+        {options.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
       </select>
     );
   }
 
   return (
-    <div className="org-portal">
-      <section className="org-card org-me">
-        <span className="org-eyebrow">Your place</span>
-        <div className="org-me-grid">
-          <div>
-            <span className="org-label">Department</span>
-            <Chips ids={myDepartments.map((row) => row.id)} empty="Not assigned" />
-          </div>
-          <div>
-            <span className="org-label">Teams</span>
-            {myTeams.length ? (
-              <span className="org-chiprow">
-                {myTeams.map((team) => <span className="org-name" key={team.id}>{team.name}</span>)}
-              </span>
-            ) : (
-              <span className="org-none">Not assigned</span>
-            )}
-          </div>
-          <div>
-            <span className="org-label">Reports to</span>
-            <Chips ids={myManagers} empty="Not set" />          </div>          <div>            <span className="org-label">Teammates</span>            {(() => { const ids = [...new Set(myTeams.flatMap((team) => [...(team.leadIds || []), ...(team.memberIds || [])]))].filter((id) => !viewer || id !== viewer.id); return ids.length ? (<span className="org-chiprow">{ids.map((id) => <span className="org-name" key={id}>{nameOf(id)}</span>)}</span>) : (<span className="org-none">None yet</span>); })()}
-          </div>
-          {myRoles.length ? (
-            <div>
-              <span className="org-label">Role</span>
-              <span className="org-chiprow">
-                {myRoles.map((role) => <span className="org-name" key={role}>{role}</span>)}
-              </span>
-            </div>
-          ) : null}
-        </div>
+    <div className="struct">
+      <section className="struct-summary">
+        <span className="hier-stat"><small>Departments</small><b>{departments.length}</b></span>
+        <span className="hier-stat"><small>Teams</small><b>{visibleTeams.length}</b></span>
+        <span className="hier-stat"><small>People</small><b>{placed.size}</b></span>
+        <span className="hier-stat"><small>Unassigned</small><b>{unassigned.length}</b></span>
+        {canCreateDepartments(viewer) ? (
+          <button type="button" className="org-add struct-add" onClick={addDepartment}><Plus size={15} /> Department</button>
+        ) : null}
       </section>
 
-      {note ? <p className="org-note">{note}</p> : null}      {manages ? (() => {        const ids = [...staffIdsVisibleTo(chart, viewer, users)].filter((id) => !viewer || id !== viewer.id);        if (!ids.length) return null;        const bounds = rangeFor(period);        const report = metricsFor(ids, bounds.from, bounds.to);        return (          <section className="org-card">            <div className="org-headline">              <div>                <span className="org-eyebrow">You are responsible for</span>                <h3>{ids.length} {ids.length === 1 ? "person" : "people"}</h3>              </div>              <select className="org-select" value={period} onChange={(event) => setPeriod(event.target.value as Period)}>                {PERIOD_LABELS.filter((row) => row.id !== "custom").map((row) => (<option key={row.id} value={row.id}>{row.label}</option>))}              </select>              <div style={{ display: "none" }}>              </div>            </div>            <ul className="org-people">              {ids.map((id) => {                const person = users.find((row) => row.id === id);                const teams = teamsContaining(chart, id).map((team) => team.name).join(", ");                const stats = report.get(id) || emptyMetrics(id);                return (                  <li key={id}>                    <span>                      <b>{nameOf(id)}</b>                      <small>{[person && person.role, teams].filter(Boolean).join(" - ") || "No team yet"}</small>                    </span>                    <span className="org-metrics">                      <span><b>{formatHours(stats.hours)}</b><small>hours</small></span>                      <span><b>{stats.sessions}</b><small>sessions</small></span>                      <span><b>{stats.approvedPoints || stats.submittedPoints}</b><small>points</small></span>                      <span>                        <b>{stats.jobs}</b>                        {stats.jobNumbers.length ? (<button type="button" className="org-joblink" onClick={() => setOpenJobs(openJobs === id ? "" : id)}>{openJobs === id ? "hide jobs" : "jobs"}</button>) : <small>jobs</small>}                      </span>                    </span>                    {openJobs === id ? (<span className="org-joblist">{stats.jobNumbers.map((job) => <span className="org-name" key={job}>{job}</span>)}</span>) : null}                  </li>                );              })}            </ul>          </section>        );      })() : null}
+      {note ? <p className="struct-note">{note}</p> : null}
 
-      {manages ? (
-        <>
-          <div className="org-headline">
-            <h2>Structure</h2>
-            {canCreateDepartments(viewer) ? (
-              <form className="org-inline-create" onSubmit={(event) => { event.preventDefault(); addDepartment(); }}>
-                <input value={newDepartmentName} onChange={(event) => setNewDepartmentName(event.target.value)} placeholder="Department name" aria-label="New department name" />
-                <button type="submit" className="org-add" disabled={!newDepartmentName.trim()}><Plus size={15} /> Add</button>
-              </form>
-            ) : null}
-          </div>
-
-          {chart.departments.length === 0 ? <p className="org-none">No departments yet.</p> : null}
-
-          {chart.departments.map((department) => {
-            const editable = canEditDepartment(chart, viewer, department.id, users);
-            const teams = chart.teams.filter((row) => row.departmentId === department.id);
-            const mine = managedTeams.some((team) => team.departmentId === department.id);
-            if (!editable && !mine) return null;
-            const pool = assignableTo(chart, viewer, users, department.id);
-
-            return (
-              <section className="org-card" key={department.id}>
-                <div className="org-headline">
-                  <div>
-                    <span className="org-eyebrow">Department</span>
-                    <h3>{department.name}</h3>
-                  </div>
-                  {editable ? (
-                    <div className="org-actions">
-                      <button type="button" className="btn small" onClick={() => { setTeamDraftFor(department.id); setNewTeamName(""); }}><Plus size={14} /> Team</button>
-                      {isOrgAdmin(viewer) ? (
-                        <button type="button" className="btn small" onClick={() => removeDepartment(department)}>Remove</button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                {editable && teamDraftFor === department.id ? (
-                  <form className="org-inline-create org-team-create" onSubmit={(event) => { event.preventDefault(); addTeam(department.id); }}>
-                    <input value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} placeholder="Team name" aria-label={`New team in ${department.name}`} autoFocus />
-                    <button type="submit" className="org-add" disabled={!newTeamName.trim()}><Plus size={14} /> Add team</button>
-                    <button type="button" className="btn small" onClick={() => setTeamDraftFor("")}>Cancel</button>
-                  </form>
+      <div className="struct-grid">
+        {departments.map((department) => {
+          const editable = canEditDepartment(chart, viewer, department.id);
+          const teams = chart.teams.filter(
+            (team) => team.departmentId === department.id && (isOrgAdmin(viewer) || visibleTeamIds.has(team.id)),
+          );
+          const headcount = peopleIn(department).length;
+          const pool = assignableTo(chart, viewer, users, department.id);
+          return (
+            <section
+              className={"struct-dep" + (dragDep === department.id ? " is-dragging" : "") + (overDep === department.id ? " is-over" : "")}
+              key={department.id}
+              draggable
+              onDragStart={() => setDragDep(department.id)}
+              onDragEnd={() => { setDragDep(""); setOverDep(""); }}
+              onDragOver={(event) => { event.preventDefault(); if (overDep !== department.id) setOverDep(department.id); }}
+              onDrop={(event) => { event.preventDefault(); moveDepartment(dragDep, department.id); }}
+            >
+              <header className="struct-dep-head">
+                <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={15} /></span>
+                <span className="struct-dep-title">
+                  <b>{department.name}</b>
+                  <small>{teams.length} {teams.length === 1 ? "team" : "teams"} {"\u00b7"} {headcount} {headcount === 1 ? "person" : "people"}</small>
+                </span>
+                {editable && isOrgAdmin(viewer) ? (
+                  <button type="button" className="struct-x" title="Remove department" onClick={() => removeDepartment(department)}><X size={14} /></button>
                 ) : null}
+              </header>
 
-                <div className="org-field">
-                  <span className="org-label">Heads</span>
-                  <Chips
-                    ids={department.headIds || []}
-                    empty="No head"
-                    onRemove={isOrgAdmin(viewer) ? (id) => setHeads(department, (department.headIds || []).filter((row) => row !== id)) : undefined}
-                  />
-                  {isOrgAdmin(viewer) ? (
-                    <AddPerson
-                      pool={users.filter((row) => row.enabled !== false)}
-                      chosen={department.headIds || []}
-                      label="Add head"
-                      onAdd={(id) => setHeads(department, [...(department.headIds || []), id])}
-                    />
-                  ) : null}
-                </div>
+              <span className="struct-share" aria-hidden="true">
+                <i style={{ width: Math.max(4, (headcount / largest) * 100) + "%" }} />
+              </span>
 
-                {teams.map((team) => (
-                  <div className="org-team" key={team.id}>
-                    <div className="org-headline">
-                      <h4>{team.name}</h4>
-                      {editable ? (
-                        <button type="button" className="btn small" onClick={() => removeTeam(team)}>Remove</button>
-                      ) : null}
-                    </div>
+              <div className="struct-field">
+                <span className="struct-label">Head</span>
+                <Chips
+                  ids={department.headIds || []}
+                  empty="No head"
+                  onRemove={isOrgAdmin(viewer) ? (id) => setHeads(department, (department.headIds || []).filter((row) => row !== id)) : undefined}
+                />
+                {isOrgAdmin(viewer) ? (
+                  <AddPerson pool={active} chosen={department.headIds || []} label="Add head" onAdd={(id) => setHeads(department, [...(department.headIds || []), id])} />
+                ) : null}
+              </div>
 
-                    <div className="org-field">
-                      <span className="org-label">Lead</span>
-                      <Chips
-                        ids={team.leadIds || []}
-                        empty="No lead"
-                        onRemove={editable ? (id) => setTeamField(team, "leadIds", (team.leadIds || []).filter((row) => row !== id)) : undefined}
-                      />
-                      {editable ? (
-                        <AddPerson
-                          pool={pool}
-                          chosen={team.leadIds || []}
-                          label="Add lead"
-                          onAdd={(id) => setTeamField(team, "leadIds", [...(team.leadIds || []), id])}
-                        />
-                      ) : null}
-                    </div>
-
-                    <div className="org-field">
-                      <span className="org-label">Members</span>
-                      <Chips
-                        ids={team.memberIds || []}
-                        empty="Nobody yet"
-                        onRemove={editable ? (id) => setTeamField(team, "memberIds", (team.memberIds || []).filter((row) => row !== id)) : undefined}
-                      />
-                      {editable ? (
-                        <AddPerson
-                          pool={pool}
-                          chosen={team.memberIds || []}
-                          label="Add member"
-                          onAdd={(id) => setTeamField(team, "memberIds", [...(team.memberIds || []), id])}
-                        />
-                      ) : null}
-                    </div>
+              {teams.map((team) => (
+                <div
+                  className={"struct-team" + (dragTeam === team.id ? " is-dragging" : "") + (overTeam === team.id ? " is-over" : "")}
+                  key={team.id}
+                  draggable
+                  onDragStart={(event) => { event.stopPropagation(); setDragTeam(team.id); }}
+                  onDragEnd={() => { setDragTeam(""); setOverTeam(""); }}
+                  onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); if (overTeam !== team.id) setOverTeam(team.id); }}
+                  onDrop={(event) => { event.preventDefault(); event.stopPropagation(); moveTeam(dragTeam, team.id); }}
+                >
+                  <div className="struct-team-head">
+                    <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={13} /></span>
+                    <b>{team.name}</b>
+                    <span className="struct-count">{membersOf(team).length}</span>
+                    {editable ? (
+                      <button type="button" className="struct-x" title="Remove team" onClick={() => removeTeam(team)}><X size={13} /></button>
+                    ) : null}
                   </div>
-                ))}
-              </section>
-            );
-          })}
-        </>
+                  <div className="struct-field">
+                    <span className="struct-label">Lead</span>
+                    <Chips
+                      ids={team.leadIds || []}
+                      empty="No lead"
+                      onRemove={editable ? (id) => setTeamField(team, "leadIds", (team.leadIds || []).filter((row) => row !== id)) : undefined}
+                    />
+                    {editable ? (
+                      <AddPerson pool={pool} chosen={team.leadIds || []} label="Add lead" onAdd={(id) => setTeamField(team, "leadIds", [...(team.leadIds || []), id])} />
+                    ) : null}
+                  </div>
+                  <div className="struct-field">
+                    <span className="struct-label">Members</span>
+                    <Chips
+                      ids={team.memberIds || []}
+                      empty="Nobody yet"
+                      onRemove={editable ? (id) => setTeamField(team, "memberIds", (team.memberIds || []).filter((row) => row !== id)) : undefined}
+                    />
+                    {editable ? (
+                      <AddPerson pool={pool} chosen={team.memberIds || []} label="Add member" onAdd={(id) => setTeamField(team, "memberIds", [...(team.memberIds || []), id])} />
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+
+              {editable ? (
+                <button type="button" className="struct-addteam" onClick={() => addTeam(department.id)}><Plus size={14} /> Team</button>
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+
+      {unassigned.length && isOrgAdmin(viewer) ? (
+        <section className="struct-dep struct-unassigned">
+          <header className="struct-dep-head">
+            <span className="struct-dep-title">
+              <b>Not on a team</b>
+              <small>{unassigned.length} {unassigned.length === 1 ? "person" : "people"}</small>
+            </span>
+          </header>
+          <Chips ids={unassigned.map((row) => row.id)} empty="Everyone is placed" />
+        </section>
+      ) : null}
+
+      {departments.length === 0 ? (
+        <p className="struct-empty">No departments to show yet.</p>
       ) : null}
     </div>
   );
