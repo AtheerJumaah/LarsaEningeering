@@ -4525,12 +4525,12 @@ export default function Home() {
           const expiredEmailSession = method === "email"
             && supabaseConfigured()
             && Boolean(currentUser.email)
-            && (currentUser.emailVerified !== true || deviceNeedsVerification(currentUser, getDeviceId()));
+            && false; /* the server check added below decides; the local device list is wiped whenever the blob is overwritten, so judging by it signed everyone out */
           if (expiredEmailSession) {
             sessionStorage.removeItem("larsa-control-session");
             try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
           } else {
-            completeSignIn(currentUser, method || "email");
+            completeSignIn(currentUser, method || "email"); if (method === "email" && supabaseConfigured() && currentUser.email) { checkVerification({ id: currentUser.id, access: currentUser.access, role: currentUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) { sessionStorage.removeItem("larsa-control-session"); try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ } sessionUserRef.current = null; setSessionUser(null); setLoginError("For security, please sign in and verify your email again."); } }); }
           }
         }
       } catch {
@@ -4734,7 +4734,7 @@ export default function Home() {
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(user, loginMode);
+    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(user, loginMode);
   };
 
   const signOut = useCallback(() => {
