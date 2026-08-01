@@ -400,3 +400,12 @@ select:focus-visible { outline-color: var(--larsa-accent); }
   transform: translateY(-50%) !important;
   margin: 0 !important;
 }
+
+/* Page background, chosen per person. Applied to the page surface only, not
+   to cards: the contrast between a tinted page and white cards is what makes
+   the layout readable, so cards stay white. */
+body { background: var(--larsa-surface, var(--bg)); }
+.native, .native-scroll, .app-main, main { background: var(--larsa-surface, transparent); }
+
+.cardtools-tone { border: 1px solid var(--line) !important; color: #17181b; }
+.cardtools-tone.is-on { border-color: #17181b !important; }
