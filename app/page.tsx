@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
@@ -4620,7 +4620,7 @@ export default function Home() {
     setVerifyError("");
     const client = getSupabaseClient();
     if (!client) { setVerifyBusy(false); setVerifyError("Verification is unavailable right now."); return; }
-    const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
+    const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code, userId: verifyStage.user.id } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
     setVerifyBusy(false);
     if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
     persistEmailVerified(verifyStage.user.id, true);
@@ -4715,7 +4715,7 @@ export default function Home() {
     if (loginMode === "email") {
       migrateEmailVerification();
       const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || deviceNeedsVerification(refreshed, getDeviceId()))) {
+      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || periodicDue)) {
         setVerifyError("");
         setVerifyInfo("Sending your verification code…");
         setVerifyBusy(true);
