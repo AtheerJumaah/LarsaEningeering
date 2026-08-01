@@ -193,7 +193,7 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
     }
 
     prepare();
-    const observer = new MutationObserver(() => prepare());
+    const observer = new MutationObserver(() => prepare());    const modePoll = window.setInterval(prepare, 900);
     observer.observe(document.body, { childList: true, subtree: true });
 
     document.addEventListener("dragstart", onDragStart);
@@ -201,7 +201,7 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
     document.addEventListener("drop", onDrop);
     document.addEventListener("dragend", onDragEnd);
     return () => {
-      observer.disconnect();
+      observer.disconnect();      window.clearInterval(modePoll);
       document.removeEventListener("dragstart", onDragStart);
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
