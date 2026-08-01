@@ -86,7 +86,7 @@ export function CardTools() {
   const [open, setOpen] = useState(false);
   const [accent, setAccent] = useState("#17181b");
   const [canOrder, setCanOrder] = useState(false);
-  const [canColour, setCanColour] = useState(false);
+  const [canColour, setCanColour] = useState(false);  const [surface, setSurface] = useState("");
 
   useEffect(() => {
     let stored = "";
@@ -95,13 +95,13 @@ export function CardTools() {
     } catch {
       stored = "";
     }
-    if (stored) {
+    let tone = "";    try { tone = localStorage.getItem(storageKey("surface")) || ""; } catch { tone = ""; }    if (tone) { setSurface(tone); document.documentElement.style.setProperty("--larsa-surface", tone); }    if (stored) {
       setAccent(stored);
       document.documentElement.style.setProperty("--larsa-accent", stored);
     }
   }, []);
 
-  function chooseAccent(value: string) {
+const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm", label: "Warm", value: "#faf7f2" }, { id: "cool", label: "Cool", value: "#f4f7fb" }, { id: "mint", label: "Mint", value: "#f3f9f5" }, { id: "rose", label: "Rose", value: "#fbf5f6" }, { id: "grey", label: "Grey", value: "#f2f3f5" } ];  function chooseSurface(value: string) {    setSurface(value);    if (value) document.documentElement.style.setProperty("--larsa-surface", value);    else document.documentElement.style.removeProperty("--larsa-surface");    try { if (value) localStorage.setItem(storageKey("surface"), value); else localStorage.removeItem(storageKey("surface")); } catch { /* ignore */ }  }  function chooseAccent(value: string) {
     setAccent(value);
     document.documentElement.style.setProperty("--larsa-accent", value);
     try {
@@ -250,7 +250,7 @@ export function CardTools() {
               </button>
             ))}
           </div>
-          <label className="cardtools-custom">
+          <span className="cardtools-title">Background</span>          <div className="cardtools-swatches">            {SURFACES.map((row) => (              <button key={row.id} type="button" title={row.label} aria-label={row.label} className={"cardtools-swatch cardtools-tone" + (surface === row.value ? " is-on" : "")} style={{ background: row.value || "#ffffff" }} onClick={() => chooseSurface(row.value)}>{surface === row.value ? <Check size={13} /> : null}</button>            ))}          </div>          <label className="cardtools-custom">
             <span>Custom</span>
             <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />
           </label>
