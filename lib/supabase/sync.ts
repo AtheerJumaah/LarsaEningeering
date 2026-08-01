@@ -77,7 +77,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   // The last JSON text this module itself wrote, per key — lets both the
   // push side and the realtime side tell "a change from elsewhere" apart
   // from "the echo of our own write" without a real diff.
-  const lastKnown = new Map<string, string>();
+  const lastKnown = new Map<string, string>();  /* The updated_at this device last saw for each key. Without it, a browser     that has been open since yesterday cannot tell that the shared copy has     moved on, and its next write silently replaces work done elsewhere. That     is how a full set of hashed passwords and contact details reverted to a     morning-old copy. */  const lastSeenAt = new Map<string, string>();
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
 
@@ -96,12 +96,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   async function pushKey(key: SyncedKey) {
     const raw = localStorage.getItem(key);
     if (raw === lastKnown.get(key)) return; // nothing new since our last push
-    lastKnown.set(key, raw ?? "");
-    let parsed: unknown = {};
+    lastKnown.set(key, raw ?? "");    /* Refuse to publish work computed from a stale copy. If the shared row has       moved since this device last saw it, take the newer copy instead of       flattening it. The local edit is dropped, which is the right way round:       it was derived from data that is no longer true, and a lost keystroke is       recoverable in a way that a reverted staff table is not. */    const seenAt = lastSeenAt.get(key);    const { data: current } = await supabase      .from("app_state")      .select("data, updated_at")      .eq("store_key", key)      .maybeSingle();    if (current && current.updated_at && seenAt && String(current.updated_at) > seenAt) {      console.warn("[larsa-sync] " + key + " changed elsewhere; taking the newer copy instead of overwriting it");      try {        originalSetItem(key, JSON.stringify(current.data));        lastKnown.set(key, JSON.stringify(current.data));        lastSeenAt.set(key, String(current.updated_at));        options.onRemoteChange?.(key);      } catch {        // Leaving local as it is only means this device stays behind.      }      return;    }
+    const stamp = new Date().toISOString();    let parsed: unknown = {};
     try { parsed = raw ? JSON.parse(raw) : {}; } catch { return; }
     await supabase
       .from("app_state")
-      .upsert({ store_key: key, data: parsed, updated_at: new Date().toISOString() }, { onConflict: "store_key" });
+      .upsert({ store_key: key, data: parsed, updated_at: stamp }, { onConflict: "store_key" });    lastSeenAt.set(key, stamp);
   }
 
   function schedulePush(key: SyncedKey) {
@@ -132,14 +132,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       await Promise.all(SYNCED_KEYS.map(async (key) => {
         const { data: row, error: selectError } = await supabase
           .from("app_state")
-          .select("data")
+          .select("data, updated_at")
           .eq("store_key", key)
           .maybeSingle();
         if (selectError) {
           console.error(`[larsa-sync] select failed for "${key}":`, selectError);
           throw selectError;
         }
-        const remote = row?.data;
+        if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));        const remote = row?.data;
         const local = readLocal(key);
         if (hasContent(remote)) {
           const text = JSON.stringify(remote);
