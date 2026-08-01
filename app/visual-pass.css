@@ -192,3 +192,49 @@ button[aria-label="Back to home"] svg {
 .hier-drag:hover { color: var(--muted); background: rgba(15, 23, 42, 0.05); }
 .hier-department.is-dragging { opacity: 0.45; }
 .hier-department.is-over { outline: 2px dashed rgba(37, 99, 235, 0.5); outline-offset: 3px; }
+
+/* --------------------------------------------------------------------------
+   Larsa palette: mono by default, colour only where it carries meaning.
+
+   Hours and headcount are quantities, not verdicts - a long bar is not good
+   news, it is just a long bar, so those are black and grey. Quota keeps red /
+   amber / green because there the colour IS the information: behind, close,
+   met. Presence dots keep their hues for the same reason.
+   -------------------------------------------------------------------------- */
+
+.chart-fill-hours { background: #17181b; }
+.hier-bar i.hier-bar-present { background: #6b7280; }
+.chart-target { background: #17181b; }
+.chart-fill-none { background: #d4d8de; }
+
+/* Neutral tracks, so the fill is the only ink that moves. */
+.chart-track,
+.hier-barline .hier-bar,
+.hier-person > .hier-bar { background: rgba(23, 24, 27, 0.08); }
+
+/* --------------------------------------------------------------------------
+   Structure tab: the rows were tall enough to fit a paragraph and carried four
+   numbers. Bring the name and its figures onto one line.
+   -------------------------------------------------------------------------- */
+
+.org-portal .org-people li,
+.org-portal .org-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 9px 0;
+}
+.org-portal .org-people li > *,
+.org-portal .org-row > * { margin: 0; }
+.org-portal dl,
+.org-portal .org-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  margin: 0;
+}
+.org-portal dt { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.org-portal dd { margin: 0 12px 0 0; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
