@@ -582,3 +582,23 @@ body:has(.unified-app:not(.dark)) { background: var(--larsa-surface, var(--bg)) 
 aside.sidebar { border-radius: 0 20px 20px 0; }
 .unified-app iframe { border-radius: 14px; }
 table { border-radius: 12px; overflow: hidden; }
+
+/* --------------------------------------------------------------------------
+   Sidebar contrast
+
+   The rail is always black, so everything written on it must be light. The
+   Home item had kept the black text from its old white-pill design after the
+   pill went translucent -- black on black. Forced light here, with !important
+   because the original component styles are more specific.
+   -------------------------------------------------------------------------- */
+
+aside.sidebar .nav-item,
+aside.sidebar .nav-item b,
+aside.sidebar .nav-item span { color: #eceef2 !important; }
+aside.sidebar .nav-item small { color: #a7adb8 !important; }
+aside.sidebar .nav-item svg { color: #cfd3da; }
+
+/* The active item sits on a translucent accent wash, still dark: stay light. */
+aside.sidebar .nav-item.active,
+aside.sidebar .nav-item.active b,
+aside.sidebar .nav-item.active small { color: #ffffff !important; }
