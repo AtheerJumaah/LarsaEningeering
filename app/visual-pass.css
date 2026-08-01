@@ -1,0 +1,60 @@
+/* ---------------------------------------------------------------------------
+   Larsa Control - visual pass
+
+   Appearance only. Nothing in this file changes behaviour, calculations,
+   permissions, wording of data, or any existing feature. It is kept separate
+   from globals.css so a styling change never risks a 180 KB edit to the file
+   the whole app depends on.
+   --------------------------------------------------------------------------- */
+
+/* Six work areas, three to a row, every card the same size. They were spanning
+   unequal column counts, which produced a 2 / 3 / 1 staircase instead of two
+   balanced rows. Markup order already puts Time, Performance and Engineering
+   Management first. */
+.module-grid:not(.quick-grid):not(.accounting-grid) {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  align-items: stretch;
+}
+.module-grid:not(.quick-grid):not(.accounting-grid) > * {
+  grid-column: auto !important;
+  min-width: 0;
+}
+@media (max-width: 1180px) {
+  .module-grid:not(.quick-grid):not(.accounting-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 700px) {
+  .module-grid:not(.quick-grid):not(.accounting-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Home is where every route starts, so it should read as the anchor of the
+   sidebar rather than one more row in a list. */
+.nav-item.nav-home-exit {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+.nav-item.nav-home-exit:hover { background: rgba(255, 255, 255, 0.12); }
+.nav-item.nav-home-exit b { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.nav-item.nav-home-exit small { font-size: 11.5px; opacity: 0.72; }
+.nav-item.nav-home-exit .nav-code { width: 30px; height: 30px; }
+
+/* Auth cards: the black brand bar, the method tabs, the title and the first
+   field were stacking with almost no air between them. */
+.auth-card .auth-brand { margin-bottom: 24px; }
+.auth-card h1, .auth-card h2 { margin-bottom: 4px; }
+.auth-card .auth-tabs,
+.auth-card [role="tablist"] { margin: 18px 0 20px; }
+.auth-card form { gap: 14px; }
+.auth-card .auth-submit { margin-top: 6px; }
+.auth-card .auth-secondary { margin-top: 14px; }
+
+/* A long name or address should wrap rather than run into a card edge. */
+.org-card,
+.hier-person,
+.hier-head,
+.ps-row { overflow-wrap: anywhere; }
