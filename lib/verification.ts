@@ -25,7 +25,7 @@ export type VerificationPolicy = {
   enabled: boolean;
   engineer_hours: number | null;
   privileged_hours: number | null;
-  force_relogin: boolean;
+  force_relogin: boolean; self_signup_enabled: boolean; signup_requires_approval: boolean; initial_verification_required: boolean;
 };
 
 export type VerificationStatus = {
@@ -40,7 +40,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   enabled: true,
   engineer_hours: 72,
   privileged_hours: 24,
-  force_relogin: true,
+  force_relogin: true, self_signup_enabled: true, signup_requires_approval: false, initial_verification_required: true,
 };
 
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
