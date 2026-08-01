@@ -298,3 +298,30 @@ button[aria-label="Back to home"] svg {
 .struct-dep { break-inside: avoid; -webkit-column-break-inside: avoid; margin: 0 0 12px; }
 .struct-unassigned { break-inside: avoid; }
 @media (max-width: 700px) { .struct-grid { columns: 1; } }
+
+/* --------------------------------------------------------------------------
+   Accent: one variable drives every neutral bar. Quota keeps its own scale.
+   -------------------------------------------------------------------------- */
+
+.chart-fill-hours,
+.struct-share i,
+.struct-chip em,
+.struct-count { background: var(--larsa-accent, #17181b); }
+.hier-bar i.hier-bar-present { background: color-mix(in srgb, var(--larsa-accent, #17181b) 62%, #ffffff); }
+.chart-target { background: var(--larsa-accent, #17181b); }
+.hier-badge-you { background: var(--larsa-accent, #17181b); border-color: var(--larsa-accent, #17181b); }
+
+/* Appearance control. */
+.cardtools { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.cardtools-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--ink); box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14); cursor: pointer; }
+.cardtools-btn:hover { border-color: #b9bec7; }
+.cardtools-panel { order: -1; width: 250px; padding: 14px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16); display: grid; gap: 9px; }
+.cardtools-title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.cardtools-swatches { display: flex; flex-wrap: wrap; gap: 7px; }
+.cardtools-swatch { width: 28px; height: 28px; border: 2px solid transparent; border-radius: 50%; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: #fff; }
+.cardtools-swatch.is-on { border-color: #17181b; box-shadow: 0 0 0 2px #fff inset; }
+.cardtools-note { margin: 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.cardtools-reset { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); cursor: pointer; }
+.cardtools-reset:hover { border-color: #b9bec7; }
+
+@media print { .cardtools { display: none; } }
