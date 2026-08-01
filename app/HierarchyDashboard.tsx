@@ -64,7 +64,7 @@ function percent(approved: number, target: number): number | null {
   return Math.round((approved / target) * 100);
 }
 
-function membersOf(team: Team): string[] {
+/* Today\u2019s shift codes come from the same synced blob the schedule screen   writes, so the dashboard never needs its own copy or its own prop. */function readSchedule(): Record<string, Record<string, { code?: string }[]>> {  try {    const raw = localStorage.getItem("larsaStaffV8");    const parsed = raw ? JSON.parse(raw) : null;    const schedule = parsed && typeof parsed === "object" ? parsed.schedule : null;    return schedule && typeof schedule === "object" ? schedule : {};  } catch {    return {};  }}function membersOf(team: Team): string[] {
   return [...new Set((team.leadIds || []).concat(team.memberIds || []))];
 }
 
@@ -73,7 +73,7 @@ export function HierarchyDashboard({
   users,
   summaries,
   sessions,
-  store,
+
   toneOf,
   periodLabel,
 }: {
@@ -81,7 +81,7 @@ export function HierarchyDashboard({
   users: OrgUser[];
   summaries: Summary[];
   sessions: Session[];
-  store: Record<string, unknown> | null;
+
   toneOf: (value: unknown) => string;
   periodLabel: string;
 }) {
@@ -120,7 +120,7 @@ export function HierarchyDashboard({
 
   const expectedToday = useMemo(() => {
     const today = WEEKDAYS[new Date().getDay()];
-    const schedule = (store && store.schedule ? store.schedule : {}) as Record<
+    const schedule = readSchedule() as Record<
       string,
       Record<string, { code?: string }[]>
     >;
@@ -129,7 +129,7 @@ export function HierarchyDashboard({
       const code = (day || []).map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
       return NOT_EXPECTED.indexOf(code) < 0;
     };
-  }, [store]);
+  }, []);
 
   /* Membership of a team is what puts somebody in a branch. A team with nobody
      visible in it is not drawn, which is how scope shapes the tree. */
