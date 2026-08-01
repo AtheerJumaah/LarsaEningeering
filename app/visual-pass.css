@@ -409,3 +409,34 @@ body { background: var(--larsa-surface, var(--bg)); }
 
 .cardtools-tone { border: 1px solid var(--line) !important; color: #17181b; }
 .cardtools-tone.is-on { border-color: #17181b !important; }
+
+/* --------------------------------------------------------------------------
+   Compact density
+
+   Trims padding and row height across the app so a long list fits on one
+   screen. Font sizes move only slightly: shrinking text is how compact modes
+   become unreadable, so the space comes out of the padding instead.
+   -------------------------------------------------------------------------- */
+
+[data-density="compact"] .org-card,
+[data-density="compact"] .struct-dep,
+[data-density="compact"] .chart-card { padding: 10px 12px; }
+[data-density="compact"] .hier-person { padding: 6px 9px; }
+[data-density="compact"] .hier-head { padding: 10px 12px; }
+[data-density="compact"] .hier-head-team { padding: 8px 10px; }
+[data-density="compact"] .hier-people { gap: 4px; }
+[data-density="compact"] .hier { gap: 8px; }
+[data-density="compact"] .struct { gap: 9px; }
+[data-density="compact"] .struct-dep { gap: 7px; }
+[data-density="compact"] .struct-team { padding: 7px 9px; gap: 5px; }
+[data-density="compact"] .chart-rows { gap: 4px; }
+[data-density="compact"] .chart-track { height: 13px; }
+[data-density="compact"] .hier-stat { padding: 4px 8px; min-width: 54px; }
+[data-density="compact"] .module-grid { gap: 10px; }
+[data-density="compact"] .ps-row { padding: 8px 10px; }
+[data-density="compact"] .org-people li { padding: 5px 0; }
+[data-density="compact"] .struct-chip { padding: 2px 7px 2px 2px; }
+
+.cardtools-density { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cardtools-density button { font: inherit; font-size: 12px; font-weight: 600; padding: 7px 6px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); cursor: pointer; }
+.cardtools-density button.is-on { color: #fff; background: var(--larsa-accent, #17181b); border-color: var(--larsa-accent, #17181b); }
