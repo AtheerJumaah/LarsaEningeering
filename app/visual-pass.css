@@ -329,8 +329,8 @@ button[aria-label="Back to home"] svg {
 /* The visible grip on a reorderable card: six dots, faint until hovered. */
 .grip-dots {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 50%; transform: translateY(-50%);
+  left: 8px;
   width: 11px;
   height: 16px;
   border-radius: 4px;
