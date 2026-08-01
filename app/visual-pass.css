@@ -532,5 +532,22 @@ button.primary,
    was only reaching part of the screen.
    -------------------------------------------------------------------------- */
 
-html[data-mode="light"] aside.sidebar { background: var(--larsa-sidebar, #000); }
+/* Sidebar stays Larsa black in every theme -- it carries the brand. */
 html[data-mode="light"] .unified-app { background: var(--larsa-surface, transparent); }
+
+/* --------------------------------------------------------------------------
+   Night mode is black, and it wins
+
+   In dark mode the page goes black regardless of which background tint the
+   person picked in light mode. The tint is not discarded, only set aside:
+   switch back to day and their colour returns.
+   -------------------------------------------------------------------------- */
+
+html[data-mode="dark"] body,
+html[data-mode="dark"] .unified-app,
+html[data-mode="dark"] .native,
+html[data-mode="dark"] .native-scroll,
+html[data-mode="dark"] main { background: #000 !important; }
+
+/* The rail never changes: black in day, black at night. */
+aside.sidebar { background: #000 !important; }
