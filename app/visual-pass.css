@@ -325,3 +325,23 @@ button[aria-label="Back to home"] svg {
 .cardtools-reset:hover { border-color: #b9bec7; }
 
 @media print { .cardtools { display: none; } }
+
+/* The visible grip on a reorderable card: six dots, faint until hovered. */
+.grip-dots {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 11px;
+  height: 16px;
+  border-radius: 4px;
+  background-image: radial-gradient(currentColor 1.15px, transparent 1.25px);
+  background-size: 5px 5px;
+  color: #9aa1ad;
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+*:hover > .grip-dots { opacity: 1; color: var(--larsa-accent, #17181b); }
+
+.cardtools-custom { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 600; }
+.cardtools-custom input { width: 46px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; }
