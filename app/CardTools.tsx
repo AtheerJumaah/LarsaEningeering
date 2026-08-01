@@ -85,7 +85,7 @@ function applyOrder(container: HTMLElement, key: string) {
 }
 
 export function CardTools() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false);  const [canOrder, setCanOrder] = useState(false);  const [canColour, setCanColour] = useState(false);
   const [accent, setAccent] = useState("#17181b");
 
   useEffect(() => {
@@ -138,7 +138,7 @@ export function CardTools() {
             el.draggable = true;
             el.style.cursor = "grab";            if (getComputedStyle(el).position === "static") el.style.position = "relative";            if (!el.querySelector(":scope > .grip-dots")) {              const grip = document.createElement("span");              grip.className = "grip-dots";              grip.setAttribute("aria-hidden", "true");              grip.title = "Drag to reorder";              el.appendChild(grip);            }
           });
-          applyOrder(container, grid.key);
+          applyOrder(container, grid.key);        });      });      const signedOut = Boolean(document.getElementById("auth-panel"));      const grids = GRIDS.some((grid) => document.querySelector(grid.selector));      const tinted = Boolean(document.querySelector(".chart-track, .hier-bar, .struct-share, .access-pill, .org-tabs, .hier-stat"));      setCanOrder(!signedOut && grids);      setCanColour(!signedOut && (grids || tinted));      if (false) { }        GRIDS.forEach((grid) => {          document.querySelectorAll<HTMLElement>(grid.selector).forEach((container) => {
         });
       });
     }
@@ -211,7 +211,7 @@ export function CardTools() {
   }
 
   return (
-    <div className="cardtools">
+    !canColour ? null :     <div className="cardtools">
       <button type="button" className="cardtools-btn" onClick={() => setOpen(!open)} title="Colour and card order" aria-expanded={open}>
         <Palette size={17} />
       </button>
@@ -234,7 +234,7 @@ export function CardTools() {
             ))}
           </div>
           <label className="cardtools-custom">            <span>Custom</span>            <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />          </label>          <p className="cardtools-note">Quota stays red, amber and green — there the colour is the reading.</p>
-          <button type="button" className="cardtools-reset" onClick={resetOrder}>
+          {canOrder ? <button type="button" className="cardtools-reset" onClick={resetOrder}>
             <RotateCcw size={13} /> Reset card order
           </button>
           <p className="cardtools-note">Drag any card to reorder it. Saved for you on this device.</p>
