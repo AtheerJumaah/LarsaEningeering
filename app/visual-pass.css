@@ -289,3 +289,12 @@ button[aria-label="Back to home"] svg {
 .struct-unassigned { grid-column: 1 / -1; }
 
 @media (max-width: 640px) { .struct-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Department cards pack upward instead of sitting in fixed rows. A grid aligns
+   every card in a row to the tallest one, which is where the empty space under
+   the short departments was coming from. Columns let each card start directly
+   under the one above it. */
+.struct-grid { display: block; columns: 330px 3; column-gap: 12px; }
+.struct-dep { break-inside: avoid; -webkit-column-break-inside: avoid; margin: 0 0 12px; }
+.struct-unassigned { break-inside: avoid; }
+@media (max-width: 700px) { .struct-grid { columns: 1; } }
