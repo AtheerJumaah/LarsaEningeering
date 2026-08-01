@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
@@ -7171,7 +7171,7 @@ function EngineeringManagementPortal({
         {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
       </div>
       {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
-      {manages && (tab === "time" || tab === "performance") && <>
+      {manages && (tab === "time" || tab === "performance") && <><TeamCharts summaries={summaries} mode={tab} />
         <div className="period-presets" aria-label="Team report period">
           <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
         </div>
