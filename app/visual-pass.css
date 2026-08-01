@@ -150,3 +150,10 @@ button[aria-label="Back to home"] svg {
   margin-left: auto;
   align-self: center;
 }
+
+/* The generic bar fill in globals.css is .hier-bar i, which outranks the tone
+   classes on their own and left every bar grey. Same specificity, tone wins. */
+.hier-bar i.hier-bar-good { background: #16a34a; }
+.hier-bar i.hier-bar-warn { background: #d97706; }
+.hier-bar i.hier-bar-low { background: #dc2626; }
+.hier-bar i.hier-bar-present { background: #2563eb; }
