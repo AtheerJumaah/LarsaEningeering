@@ -58,3 +58,95 @@
 .hier-person,
 .hier-head,
 .ps-row { overflow-wrap: anywhere; }
+
+
+/* ---------------------------------------------------------------------------
+   Bars
+
+   A number tells you 10 points. A bar tells you 10 out of 650, which is the
+   thing a manager is actually reading for. Bars sit under the figures at every
+   level - company, department, team, person - so the same shape means the same
+   thing wherever you are in the tree.
+   --------------------------------------------------------------------------- */
+
+.hier-bars {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+.hier-barline {
+  display: grid;
+  grid-template-columns: 46px 1fr auto;
+  align-items: center;
+  gap: 9px;
+}
+.hier-barline small {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hier-barline b {
+  min-width: 42px;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--muted);
+}
+.hier-barline .hier-bar {
+  flex: none;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.07);
+  overflow: hidden;
+}
+.hier-barline .hier-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+.hier-bar-present { background: #2563eb; }
+
+/* The person row already had a bar; give it the same weight as the new ones. */
+.hier-person > .hier-bar { height: 6px; margin-top: 2px; background: rgba(15, 23, 42, 0.07); }
+
+/* ---------------------------------------------------------------------------
+   Home and Back to Home
+
+   Every route out of a work area lands on one of these, so they should all look
+   like the same control instead of three different buttons that happen to say
+   Home.
+   --------------------------------------------------------------------------- */
+
+.nav-item.nav-home-exit,
+.back-home,
+.home-exit,
+button[title="Choose a work area"],
+button[title="Back to home"],
+button[aria-label="Back to home"] {
+  align-items: center;
+}
+.back-home,
+.home-exit,
+button[title="Back to home"],
+button[aria-label="Back to home"] {
+  display: inline-flex;
+  gap: 9px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+/* An arrow belongs on the same line as the words, not stranded beneath them. */
+.back-home svg,
+.home-exit svg,
+button[title="Back to home"] svg,
+button[aria-label="Back to home"] svg {
+  flex: none;
+  margin-left: auto;
+  align-self: center;
+}
