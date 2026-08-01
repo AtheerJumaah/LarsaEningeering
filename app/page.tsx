@@ -6847,7 +6847,7 @@ export default function Home() {
             />
           </div>
           <div className={active.native === "orgStructure" ? "native active" : "native"}>
-            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} store={staffStore} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} />
+            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} />
           </div><div className={active.native === "platformSettings" ? "native active" : "native"}><PlatformSettings viewer={sessionUser} users={accessUsers} /></div><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
@@ -6923,7 +6923,7 @@ export default function Home() {
               rows={pointsRows}
               sessions={clockSessions}
               targets={growthStore.pointTargets}
-              store={staffStore}              openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
+              openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
               trimSession={trimSession}
               resetSession={resetSession}
             />
@@ -7112,13 +7112,13 @@ export default function Home() {
 }
 
 function EngineeringManagementPortal({
-  viewer, users, sessions, rows, targets, store, go, onSaved,
+  viewer, users, sessions, rows, targets, go, onSaved,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
   sessions: ClockSession[];
   rows: PerformanceRow[];
-  targets: Record<string, number>; store: Record<string, unknown> | null;
+  targets: Record<string, number>;
   go: (id: string) => void;
   onSaved: () => void;
 }) {
@@ -7170,7 +7170,7 @@ function EngineeringManagementPortal({
         {manages && <button type="button" role="tab" aria-selected={tab === "performance"} className={tab === "performance" ? "active" : ""} onClick={() => setTab("performance")}>Performance</button>}
         {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
       </div>
-      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} store={store} toneOf={modeTone} periodLabel={from + " to " + to} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
+      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
       {manages && tab !== "structure" && <>
         <div className="period-presets" aria-label="Team report period">
           <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
@@ -7666,7 +7666,7 @@ function PerformanceCenter({
   viewer: StaffUser | null;
   users: StaffUser[];
   rows: PerformanceRow[];
-  targets: Record<string, number>; store: Record<string, unknown> | null;
+  targets: Record<string, number>;
   saveTarget: (userId: string, target: number) => boolean;
   reviewRow: (rowId: string, status: "Approved" | "Returned", approvedPoints?: number) => boolean;
   openWorkboard: () => void;
@@ -8290,7 +8290,7 @@ function PerformanceHistory({
   users: StaffUser[];
   rows: PerformanceRow[];
   sessions: ClockSession[];
-  targets: Record<string, number>; store: Record<string, unknown> | null;
+  targets: Record<string, number>;
   openAdvanced: () => void;
   trimSession: (uid: string, clockIn: string, newClockOut: string) => boolean;
   resetSession: (uid: string, clockIn: string) => boolean;
