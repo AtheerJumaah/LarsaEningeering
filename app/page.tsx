@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
@@ -108,7 +108,7 @@ type NativeView =
   | "performanceHistory"
   | "projects"
   | "notifications"
-  | "constructionFinancials" | "orgStructure";
+  | "constructionFinancials" | "orgStructure" | "platformSettings";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -206,7 +206,7 @@ type StaffUser = {
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
   phoneAlt?: string;
-  emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean; devices?: TrustedDevice[];
+  emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean; devices?: TrustedDevice[]; platformAdmin?: boolean;
 };
 type Item = {
   id: string;
@@ -623,8 +623,8 @@ const GROUPS: Group[] = [
         native: "admin",
       },
       {
-        id: "data",
-        label: "Data Center",
+        id: "platform-settings", label: "Platform Settings", description: "Signup, verification policy, and platform owners", code: "PS", native: "platformSettings" }, {      {        id: "data",
+        id: "data", label: "Data Center",
         description: "Scoped backup, restore, and staff sync",
         code: "DC",
         native: "data",
@@ -1366,7 +1366,7 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     const approvals = ITEMS.find((row) => row.id === "staff-approvals");
     return approvals ? hasItemPermission(user, approvals, action) : false;
   }
-  if (item.id === "org-structure") return canSeeOrgPortal();    if (item.id === "live-presence") {
+  if (item.id === "org-structure") return canSeeOrgPortal();    if (item.id === "platform-settings") return Boolean(user.platformAdmin);    if (item.id === "live-presence") {
     const live = ITEMS.find((row) => row.id === "staff-live");
     return live ? hasItemPermission(user, live, "view") : true;
   }
@@ -3333,7 +3333,7 @@ export default function Home() {
   const [loginMode, setLoginMode] = useState<SignInMethod>("email");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPass, setLoginPass] = useState("");
-  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null); const [accountingGate, setAccountingGate] = useState<Item | null>(null);
+  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null); const [accountingGate, setAccountingGate] = useState<Item | null>(null); useEffect(() => { const u = sessionUser; if (!u || !u.email || u.platformAdmin !== undefined) return; (async () => { const client = getSupabaseClient(); if (!client) return; try { const { data } = await client.functions.invoke("auth-policy", { body: { op: "amPlatformAdmin", email: u.email } }); const admin = Boolean(data && (data as { admin?: boolean }).admin); setSessionUser((prev) => { const next = prev && prev.id === u.id ? { ...prev, platformAdmin: admin } : prev; if (next) sessionUserRef.current = next; return next; }); } catch { /* the entry just stays hidden */ } })(); }, [sessionUser]);
   const [showPassword, setShowPassword] = useState(false);
   // Email verification gate: only engaged when Supabase is configured (it's
   // what actually sends the code) and the account hasn't verified its email
@@ -6848,7 +6848,7 @@ export default function Home() {
           </div>
           <div className={active.native === "orgStructure" ? "native active" : "native"}>
             <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} />
-          </div><div className={active.native === "presence" ? "native active" : "native"}>
+          </div><div className={active.native === "platformSettings" ? "native active" : "native"}><PlatformSettings viewer={sessionUser} users={accessUsers} /></div><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
           <div className={active.native === "settings" ? "native active" : "native"}>
