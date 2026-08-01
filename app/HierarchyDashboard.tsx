@@ -20,7 +20,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Building2, ChevronDown, ChevronRight, Users } from "lucide-react";
+import { Building2, ChevronDown, ChevronRight, GripVertical, Users } from "lucide-react";
 import {
   departmentsHeadedBy,
   effectiveOrg,
@@ -28,7 +28,7 @@ import {
   managersOf,
   teamsContaining,
   teamsLedBy,
-  teamsVisibleTo,
+  teamsVisibleTo, writeOrg,
 } from "../lib/org";
 import type { OrgUser, Team } from "../lib/org";
 import { formatHours } from "../lib/teamMetrics";
@@ -75,7 +75,7 @@ export function HierarchyDashboard({
   sessions,
 
   toneOf,
-  periodLabel,
+  periodLabel, from, to, onPeriod, onFrom, onTo,
 }: {
   viewer: OrgUser | null;
   users: OrgUser[];
@@ -83,9 +83,9 @@ export function HierarchyDashboard({
   sessions: Session[];
 
   toneOf: (value: unknown) => string;
-  periodLabel: string;
+  periodLabel: string; from: string; to: string; onPeriod: (period: "today" | "week" | "month" | "sixMonths" | "year") => void; onFrom: (value: string) => void; onTo: (value: string) => void;
 }) {
-  const org = useMemo(() => effectiveOrg(users), [users]);
+  const [orderTick, setOrderTick] = useState(0);  const org = useMemo(() => effectiveOrg(users), [users, orderTick]);
   const byId = useMemo(() => {
     const map = new Map<string, Summary>();
     summaries.forEach((row) => map.set(row.user.id, row));
@@ -160,7 +160,7 @@ export function HierarchyDashboard({
   );
 
   const [openDepartments, setOpenDepartments] = useState<Record<string, boolean>>({});
-  const [openTeams, setOpenTeams] = useState<Record<string, boolean>>({});
+  const [openTeams, setOpenTeams] = useState<Record<string, boolean>>({});  const [dragId, setDragId] = useState("");  const [overId, setOverId] = useState("");  /* Departments are drawn in the order they are stored, so reordering is just     moving one entry in that array and saving the chart back. */  function moveDepartment(fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = org.departments.slice();    const from = list.findIndex((row) => row.id === fromId);    const to = list.findIndex((row) => row.id === toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    if (writeOrg({ departments: list, teams: org.teams })) setOrderTick((value) => value + 1);    setDragId("");    setOverId("");  }
 
   const myTeams = viewer ? teamsContaining(org, viewer.id).concat(teamsLedBy(org, viewer.id)) : [];
   const myTeamIds = new Set(myTeams.map((team) => team.id));
@@ -312,7 +312,7 @@ export function HierarchyDashboard({
 
   return (
     <div className="hier">
-      <section className="org-card hier-place">
+      <div className="hier-period">        <span className="hier-period-presets">          <button type="button" onClick={() => onPeriod("today")}>Day</button>          <button type="button" onClick={() => onPeriod("week")}>Week</button>          <button type="button" onClick={() => onPeriod("month")}>Month</button>          <button type="button" onClick={() => onPeriod("sixMonths")}>6 months</button>          <button type="button" onClick={() => onPeriod("year")}>Year</button>        </span>        <span className="hier-period-range">          <label>From <input type="date" value={from} onChange={(event) => onFrom(event.target.value)} /></label>          <label>To <input type="date" value={to} onChange={(event) => onTo(event.target.value)} /></label>        </span>      </div>      <section className="org-card hier-place">
         <span className="org-eyebrow">Your place</span>
         <div className="hier-place-grid">
           <div>
@@ -356,7 +356,7 @@ export function HierarchyDashboard({
             const isOpen = departmentOpen(department.id);
             const heads = (department.headIds || []).filter((id) => byId.has(id) || nameOf(id) !== "Unknown");
             return (
-              <section className="org-card hier-department" key={department.id}>
+              <section className={"org-card hier-department" + (dragId === department.id ? " is-dragging" : "") + (overId === department.id ? " is-over" : "")} key={department.id} draggable onDragStart={() => setDragId(department.id)} onDragEnd={() => { setDragId(""); setOverId(""); }} onDragOver={(event) => { event.preventDefault(); if (overId !== department.id) setOverId(department.id); }} onDrop={(event) => { event.preventDefault(); moveDepartment(dragId, department.id); }}>
                 <button
                   type="button"
                   className="hier-head"
@@ -364,7 +364,7 @@ export function HierarchyDashboard({
                   onClick={() => setOpenDepartments((current) => ({ ...current, [department.id]: !isOpen }))}
                 >
                   <span className="hier-head-title">
-                    {isOpen ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                    <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={15} /></span>                    {isOpen ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
                     <span>
                       <b>{department.name}</b>
                       <small>
