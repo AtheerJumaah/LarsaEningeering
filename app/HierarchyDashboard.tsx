@@ -59,7 +59,7 @@ const TONE_LABEL: Record<string, string> = {
   off: "Not clocked in",
 };
 
-function percent(approved: number, target: number): number | null {
+function Bars({ approved, target, present, people }: { approved: number; target: number; present: number; people: number }) {  const done = target ? Math.round((approved / target) * 100) : null;  const inNow = people ? Math.round((present / people) * 100) : null;  if (done === null && inNow === null) return null;  const tone = done === null ? "low" : done >= 100 ? "good" : done >= 60 ? "warn" : "low";  return (    <span className="hier-bars" aria-hidden="true">      {done === null ? null : (        <span className="hier-barline">          <small>Quota</small>          <span className="hier-bar"><i className={"hier-bar-" + tone} style={{ width: Math.min(100, Math.max(0, done)) + "%" }} /></span>          <b>{done}%</b>        </span>      )}      {inNow === null ? null : (        <span className="hier-barline">          <small>In now</small>          <span className="hier-bar"><i className="hier-bar-present" style={{ width: Math.min(100, Math.max(0, inNow)) + "%" }} /></span>          <b>{present}/{people}</b>        </span>      )}    </span>  );}function percent(approved: number, target: number): number | null {
   if (!target) return null;
   return Math.round((approved / target) * 100);
 }
@@ -293,7 +293,7 @@ export function HierarchyDashboard({
             <Stat label="Approved" value={String(totals.approved)} />
             <Stat label="Done" value={quotaText(totals.approved, totals.target)} tone={quotaTone(totals.approved, totals.target)} />
             <Stat label="Hours" value={formatHours(totals.hours)} />
-            <Stat label="In now" value={totals.present + " / " + totals.people} />
+            <Stat label="In now" value={totals.present + " / " + totals.people} /> <Bars approved={totals.approved} target={totals.target} present={totals.present} people={totals.people} />
           </span>
         </button>
         {isOpen ? (
@@ -345,7 +345,7 @@ export function HierarchyDashboard({
                 <Stat label="Done" value={quotaText(company.approved, company.target)} tone={quotaTone(company.approved, company.target)} />
                 <Stat label="Hours" value={formatHours(company.hours)} />
                 <Stat label="In now" value={String(company.present)} />
-                <Stat label="Absent" value={String(company.absent)} />
+                <Stat label="Absent" value={String(company.absent)} /> <Bars approved={company.approved} target={company.target} present={company.present} people={company.people} />
               </div>
             </section>
           ) : null}
@@ -382,7 +382,7 @@ export function HierarchyDashboard({
                     <Stat label="Done" value={quotaText(totals.approved, totals.target)} tone={quotaTone(totals.approved, totals.target)} />
                     <Stat label="Hours" value={formatHours(totals.hours)} />
                     <Stat label="Present" value={String(totals.present)} tone="good" />
-                    <Stat label="Absent" value={String(totals.absent)} tone={totals.absent ? "low" : undefined} />
+                    <Stat label="Absent" value={String(totals.absent)} tone={totals.absent ? "low" : undefined} /> <Bars approved={totals.approved} target={totals.target} present={totals.present} people={totals.people} />
                   </span>
                 </button>
                 {isOpen ? (
