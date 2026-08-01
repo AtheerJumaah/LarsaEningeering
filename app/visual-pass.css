@@ -157,3 +157,38 @@ button[aria-label="Back to home"] svg {
 .hier-bar i.hier-bar-warn { background: #d97706; }
 .hier-bar i.hier-bar-low { background: #dc2626; }
 .hier-bar i.hier-bar-present { background: #2563eb; }
+
+/* --------------------------------------------------------------------------
+   Ranked bar charts above the Timesheets and Performance tables.
+   -------------------------------------------------------------------------- */
+
+.chart-card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; }
+.chart-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.chart-head h3 { margin: 2px 0 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.chart-kpis { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chart-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.chart-rows li { display: grid; grid-template-columns: minmax(120px, 1.35fr) minmax(0, 4fr) auto auto; align-items: center; gap: 10px; }
+.chart-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-track { position: relative; height: 16px; border-radius: 999px; background: rgba(15, 23, 42, 0.06); overflow: hidden; }
+.chart-track i { display: block; height: 100%; border-radius: 999px; transition: width 0.35s ease; }
+.chart-fill-hours { background: #2563eb; }
+.chart-fill-good { background: #16a34a; }
+.chart-fill-warn { background: #d97706; }
+.chart-fill-low { background: #dc2626; }
+.chart-fill-none { background: #cbd5e1; }
+.chart-target { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(15, 23, 42, 0.45); border-radius: 2px; }
+.chart-value { min-width: 74px; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+.chart-sub { min-width: 62px; font-size: 11.5px; color: var(--muted); text-align: right; }
+.chart-note { margin: 12px 0 0; font-size: 11.5px; color: var(--muted); }
+
+@media (max-width: 720px) {
+  .chart-rows li { grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) auto; }
+  .chart-sub { display: none; }
+}
+
+/* Drag handle for reordering departments. */
+.hier-drag { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 26px; margin-right: 2px; color: #b4bac4; cursor: grab; border-radius: 6px; }
+.hier-drag:hover { color: var(--muted); background: rgba(15, 23, 42, 0.05); }
+.hier-department.is-dragging { opacity: 0.45; }
+.hier-department.is-over { outline: 2px dashed rgba(37, 99, 235, 0.5); outline-offset: 3px; }
