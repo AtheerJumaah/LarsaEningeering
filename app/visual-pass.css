@@ -551,3 +551,34 @@ html[data-mode="dark"] main { background: #000 !important; }
 
 /* The rail never changes: black in day, black at night. */
 aside.sidebar { background: #000 !important; }
+
+/* --------------------------------------------------------------------------
+   Day and night, decided by the class the app itself sets.
+
+   The toggle puts .dark on .unified-app -- that is the single source of
+   truth, so these rules key off it directly. No detection, no polling.
+   Every earlier data-mode rule in this file is superseded by these.
+
+   Night: page, cards and rail all go black, whatever tint was chosen.
+   Day: the chosen background tint paints the page.
+   -------------------------------------------------------------------------- */
+
+.unified-app.dark,
+.unified-app.dark .native,
+.unified-app.dark .native-scroll,
+.unified-app.dark main,
+body:has(.unified-app.dark) { background: #000 !important; }
+.unified-app.dark .org-card,
+.unified-app.dark .struct-dep,
+.unified-app.dark .chart-card { background: #101114 !important; border-color: #26272b; }
+
+.unified-app:not(.dark) { background: var(--larsa-surface, #f7f7f5) !important; }
+.unified-app:not(.dark) .native,
+.unified-app:not(.dark) .native-scroll,
+.unified-app:not(.dark) main { background: var(--larsa-surface, transparent) !important; }
+body:has(.unified-app:not(.dark)) { background: var(--larsa-surface, var(--bg)) !important; }
+
+/* No sharp angles: soften the last square edges. */
+aside.sidebar { border-radius: 0 20px 20px 0; }
+.unified-app iframe { border-radius: 14px; }
+table { border-radius: 12px; overflow: hidden; }
