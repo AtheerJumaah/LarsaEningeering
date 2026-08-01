@@ -3652,3 +3652,126 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .platform-settings .org-people li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .platform-settings .org-people li:first-child { border-top: 0; }
+
+
+/* ---------------------------------------------------------------------------
+   Engineering Management dashboard
+
+   A tree, not a table. Indentation and nesting carry the reporting line:
+   department, then team, then the people on it. The same figures sit on the
+   right of every row at every level, so a number means the same thing whether
+   you are reading one engineer or a whole department.
+   --------------------------------------------------------------------------- */
+
+.hier { display: grid; gap: 12px; padding-bottom: 28px; }
+.hier .org-card { padding: 0; overflow: hidden; }
+.hier-place, .hier-company { padding: 16px 18px !important; }
+
+.hier-place-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-top: 10px; }
+.hier-place-grid > div { display: flex; flex-direction: column; gap: 3px; }
+.hier-place-grid b { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+
+.hier-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  margin: 0;
+  padding: 15px 18px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.hier-head:hover { background: var(--soft); }
+.hier-head:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.hier-head-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hier-head-title > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hier-head-title b { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.hier-head-title small { font-size: 12.5px; color: var(--muted); }
+.hier-head svg { flex: none; color: var(--muted); }
+
+.hier-head-team { padding: 11px 14px; }
+.hier-head-team .hier-head-title b { font-size: 14px; font-weight: 600; }
+
+.hier-head-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hier-company-stats { margin-top: 12px; }
+
+.hier-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 62px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.hier-stat small { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.hier-stat b { font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.hier-stat-good { border-color: rgba(22, 163, 74, 0.35); background: rgba(22, 163, 74, 0.07); }
+.hier-stat-good b { color: #15803d; }
+.hier-stat-warn { border-color: rgba(217, 119, 6, 0.35); background: rgba(217, 119, 6, 0.07); }
+.hier-stat-warn b { color: #b45309; }
+.hier-stat-low { border-color: rgba(220, 38, 38, 0.3); background: rgba(220, 38, 38, 0.06); }
+.hier-stat-low b { color: #b91c1c; }
+
+.hier-teams { padding: 0 14px 14px 30px; display: grid; gap: 10px; }
+.hier-team { border: 1px solid var(--line); border-radius: 13px; background: var(--soft); overflow: hidden; }
+.hier-team .hier-head:hover { background: #fff; }
+
+.hier-people { list-style: none; margin: 0; padding: 0 12px 10px 12px; display: grid; gap: 6px; }
+.hier-department > .hier-people { padding: 0 18px 16px; }
+
+.hier-person {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+}
+.hier-person-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.hier-person-who > span:last-child { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.hier-person-who b { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+.hier-person-who small { font-size: 12px; color: var(--muted); }
+.hier-person-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.hier-badge {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.hier-badge-you { color: #fff; background: #17181b; border-color: #17181b; }
+
+.hier-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #9ca3af; }
+.hier-dot-office { background: var(--mode-office, #2563eb); }
+.hier-dot-online { background: var(--mode-online, #16a34a); }
+.hier-dot-site { background: var(--mode-site, #d97706); }
+.hier-dot-off { background: #d1d5db; }
+
+.hier-bar { flex: 1 1 100%; height: 4px; border-radius: 999px; background: var(--soft); overflow: hidden; }
+.hier-bar i { display: block; height: 100%; border-radius: 999px; background: #9ca3af; }
+.hier-bar-good { background: #16a34a; }
+.hier-bar-warn { background: #d97706; }
+.hier-bar-low { background: #dc2626; }
+
+@media (max-width: 720px) {
+  .hier-teams { padding-left: 14px; }
+  .hier-head-stats, .hier-person-stats { width: 100%; }
+}
