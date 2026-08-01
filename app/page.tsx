@@ -791,7 +791,7 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
         label: "Staff CSV & Import Tools",
         description: "Import staff CSV files and use staff-specific export or print tools",
       },
-      NOTIFICATIONS_ITEM,
+      NOTIFICATIONS_ITEM, ITEMS.find((item) => item.id === "platform-settings")!,
       ITEMS.find((item) => item.id === "data")!,
     ],
   },
@@ -1366,7 +1366,7 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     const approvals = ITEMS.find((row) => row.id === "staff-approvals");
     return approvals ? hasItemPermission(user, approvals, action) : false;
   }
-  if (item.id === "org-structure") return canSeeOrgPortal();    if (item.id === "platform-settings") return Boolean(user.platformAdmin);    if (item.id === "live-presence") {
+  if (item.id === "org-structure") return canSeeOrgPortal();    if (item.id === "platform-settings") return Boolean(user.platformAdmin) || hasItemPermission(user, item, "view");    if (item.id === "live-presence") {
     const live = ITEMS.find((row) => row.id === "staff-live");
     return live ? hasItemPermission(user, live, "view") : true;
   }
@@ -6923,7 +6923,7 @@ export default function Home() {
               rows={pointsRows}
               sessions={clockSessions}
               targets={growthStore.pointTargets}
-              openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
+              store={staffStore}              openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
               trimSession={trimSession}
               resetSession={resetSession}
             />
