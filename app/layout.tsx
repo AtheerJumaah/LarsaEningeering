@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import "./globals.css";
+import "./globals.css"; import "./visual-pass.css";
 
 export const metadata: Metadata = {
   title: "Larsa Control",
