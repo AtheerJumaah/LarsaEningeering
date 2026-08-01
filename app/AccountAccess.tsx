@@ -18,11 +18,11 @@
  * Texas a second later without anything extra here.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { sendMail } from "../lib/supabase/mail"; import { hashPassword } from "../lib/password";
+import { sendMail } from "../lib/supabase/mail"; import { hashPassword } from "../lib/password"; import { loadPolicy, DEFAULT_POLICY } from "../lib/verification";
 
 /* Only the fields these flows actually touch. page.tsx owns the full StaffUser
    shape; duplicating all of it here would just be a second copy to keep in
@@ -182,7 +182,7 @@ export function AccountAccess({
   onSwitchMode?: (next: AccessMode, email?: string) => void;
   onResetComplete?: (user: AccessUser) => void;  onConfirmed?: () => void;
 }) {
-  const [stage, setStage] = useState<"details" | "code">("details");
+  const [stage, setStage] = useState<"details" | "code">("details"); const [policy, setPolicy] = useState(DEFAULT_POLICY); useEffect(() => { let alive = true; loadPolicy().then((next) => { if (alive) setPolicy(next); }); return () => { alive = false; }; }, []); const skipInitial = mode === "signup" && policy.initial_verification_required === false;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -210,7 +210,7 @@ export function AccountAccess({
   }
 
   async function submitDetails(event: FormEvent) {
-    event.preventDefault();
+    if (event) event.preventDefault();
     setError("");
     setInfo("");
 
@@ -221,7 +221,7 @@ export function AccountAccess({
     }
 
     if (mode === "signup") {
-      if (!name.trim()) {
+      if (policy.self_signup_enabled === false) { setError("Account creation is turned off. Ask an administrator to create your account."); return; }    if (!name.trim()) {
         setError("Enter your full name.");
         return;
       }
@@ -261,7 +261,7 @@ export function AccountAccess({
 
     setBusy(true);
     const purpose = mode === "signup" || mode === "confirm" ? "verify" : "reset";
-    const result = await callAuthCode({ op: "send", email: address, purpose, name: name || currentUser?.name });
+    if (skipInitial) { setBusy(false); await submitCode(); return; } const result = await callAuthCode({ op: "send", email: address, purpose, name: name || currentUser?.name });
     setBusy(false);
     if (!result.ok) {
       setError(result.error || "Could not send the code. Try again.");
@@ -271,8 +271,8 @@ export function AccountAccess({
     setInfo("Code sent to " + address + ". It expires in 10 minutes.");
   }
 
-  async function submitCode(event: FormEvent) {
-    event.preventDefault();
+  async function submitCode(event?: FormEvent) {
+    if (event) event.preventDefault();
     setError("");
 
     /* On the recovery flow the new password is collected on this second screen,
@@ -289,7 +289,7 @@ export function AccountAccess({
     const address = normalise(email);
     const purpose = mode === "signup" || mode === "confirm" ? "verify" : "reset";
     setBusy(true);
-    const result = await callAuthCode({ op: "verify", email: address, purpose, code });
+    const result = skipInitial ? { ok: true, error: undefined as string | undefined } : await callAuthCode({ op: "verify", email: address, purpose, code });
     if (!result.ok) {
       setBusy(false);
       setError(result.error || "That code was not accepted.");
@@ -311,10 +311,10 @@ export function AccountAccess({
         access: NEW_ACCOUNT_ACCESS,
         role: "Staff",
         department: "Unassigned",
-        enabled: company,
+        enabled: company && policy.signup_requires_approval !== true,
         emailVerified: true,
         mustResetPassword: false,
-        pendingApproval: !company,
+        pendingApproval: !company || policy.signup_requires_approval === true,
         projectAccessMode: "none",
         projectIds: [],
         notes: company ? "" : "Self-registered from outside the company domain - awaiting approval.",
@@ -322,7 +322,7 @@ export function AccountAccess({
       list.push(created);
       writeStore(store);
       setBusy(false);
-      if (!company) {
+      if (!company || policy.signup_requires_approval === true) {
         notifyAdminsOfPendingAccount(created, list);
         setStage("details");
         setInfo("");
