@@ -623,8 +623,8 @@ const GROUPS: Group[] = [
         native: "admin",
       },
       {
-        id: "platform-settings", label: "Platform Settings", description: "Signup, verification policy, and platform owners", code: "PS", native: "platformSettings" }, {      {        id: "data",
-        id: "data", label: "Data Center",
+        id: "platform-settings", label: "Platform Settings", description: "Signup, verification policy, and platform owners", code: "PS", native: "platformSettings" },
+      { id: "data", label: "Data Center",
         description: "Scoped backup, restore, and staff sync",
         code: "DC",
         native: "data",
