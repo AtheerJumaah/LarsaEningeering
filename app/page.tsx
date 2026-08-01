@@ -4734,7 +4734,7 @@ export default function Home() {
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(user, loginMode);
+    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(readStaffUsers().find((row) => row.id === user.id) || user, loginMode);
   };
 
   const signOut = useCallback(() => {
@@ -4764,7 +4764,7 @@ export default function Home() {
      sign-in. When it expires, the next screen is the normal email + code flow. */
   useEffect(() => {
     if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
-    const remaining = verificationRemainingMs(sessionUser, getDeviceId());
+    const remaining = verificationRemainingMs(sessionUser, getDeviceId()); if (remaining <= 0) { checkVerification({ id: sessionUser.id, access: sessionUser.access, role: sessionUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) signOut(); }); return; }
     const timer = window.setTimeout(signOut, Math.max(0, Math.min(remaining, 2147483647)));
     return () => window.clearTimeout(timer);
   }, [sessionMethod, sessionUser, signOut]);
