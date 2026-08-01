@@ -160,7 +160,7 @@ export function HierarchyDashboard({
   );
 
   const [openDepartments, setOpenDepartments] = useState<Record<string, boolean>>({});
-  const [openTeams, setOpenTeams] = useState<Record<string, boolean>>({});  const [dragId, setDragId] = useState("");  const [overId, setOverId] = useState("");  /* Departments are drawn in the order they are stored, so reordering is just     moving one entry in that array and saving the chart back. */  function moveDepartment(fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = org.departments.slice();    const from = list.findIndex((row) => row.id === fromId);    const to = list.findIndex((row) => row.id === toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    if (writeOrg({ departments: list, teams: org.teams })) setOrderTick((value) => value + 1);    setDragId("");    setOverId("");  }
+  const [openTeams, setOpenTeams] = useState<Record<string, boolean>>({});  const [dragId, setDragId] = useState(""); const [dragTeam, setDragTeam] = useState(""); const [overTeam, setOverTeam] = useState("");  const [overId, setOverId] = useState("");  /* Departments are drawn in the order they are stored, so reordering is just     moving one entry in that array and saving the chart back. */  function moveTeam(fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = org.teams.slice();    const from = list.findIndex((row) => row.id === fromId);    const to = list.findIndex((row) => row.id === toId);    if (from < 0 || to < 0) return;    if (list[from].departmentId !== list[to].departmentId) { setDragTeam(""); setOverTeam(""); return; }    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    if (writeOrg({ departments: org.departments, teams: list })) setOrderTick((value) => value + 1);    setDragTeam("");    setOverTeam("");  }  function moveDepartment(fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = org.departments.slice();    const from = list.findIndex((row) => row.id === fromId);    const to = list.findIndex((row) => row.id === toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    if (writeOrg({ departments: list, teams: org.teams })) setOrderTick((value) => value + 1);    setDragId("");    setOverId("");  }
 
   const myTeams = viewer ? teamsContaining(org, viewer.id).concat(teamsLedBy(org, viewer.id)) : [];
   const myTeamIds = new Set(myTeams.map((team) => team.id));
@@ -271,7 +271,7 @@ export function HierarchyDashboard({
     const totals = rollup(leads.concat(members));
     const isOpen = teamOpen(team.id);
     return (
-      <div className="hier-team">
+      <div className={"hier-team" + (dragTeam === team.id ? " is-dragging" : "") + (overTeam === team.id ? " is-over" : "")} draggable onDragStart={(event) => { event.stopPropagation(); setDragTeam(team.id); }} onDragEnd={() => { setDragTeam(""); setOverTeam(""); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); if (overTeam !== team.id) setOverTeam(team.id); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); moveTeam(dragTeam, team.id); }}>
         <button
           type="button"
           className="hier-head hier-head-team"
@@ -279,7 +279,7 @@ export function HierarchyDashboard({
           onClick={() => setOpenTeams((current) => ({ ...current, [team.id]: !isOpen }))}
         >
           <span className="hier-head-title">
-            {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={13} /></span>            {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span>
               <b>{team.name}</b>
               <small>
