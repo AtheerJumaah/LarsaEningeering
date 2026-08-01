@@ -136,7 +136,7 @@ export function CardTools() {
             const el = child as HTMLElement;
             if (el.draggable) return;
             el.draggable = true;
-            el.style.cursor = "grab";
+            el.style.cursor = "grab";            if (getComputedStyle(el).position === "static") el.style.position = "relative";            if (!el.querySelector(":scope > .grip-dots")) {              const grip = document.createElement("span");              grip.className = "grip-dots";              grip.setAttribute("aria-hidden", "true");              grip.title = "Drag to reorder";              el.appendChild(grip);            }
           });
           applyOrder(container, grid.key);
         });
@@ -233,7 +233,7 @@ export function CardTools() {
               </button>
             ))}
           </div>
-          <p className="cardtools-note">Quota stays red, amber and green — there the colour is the reading.</p>
+          <label className="cardtools-custom">            <span>Custom</span>            <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />          </label>          <p className="cardtools-note">Quota stays red, amber and green — there the colour is the reading.</p>
           <button type="button" className="cardtools-reset" onClick={resetOrder}>
             <RotateCcw size={13} /> Reset card order
           </button>
