@@ -1,35 +1,33 @@
 "use client";
 
-/* Card tools: reorder any card grid by dragging, and pick the accent colour.
+/* Card tools: pick the accent colour, and reorder any card grid by dragging.
  *
- * Written as one layer mounted from the layout rather than as edits to every
- * screen. Two reasons. Card grids appear in a dozen places and adding drag
- * handlers to each would be a dozen chances to break a screen; and the app's
- * biggest file is 577 KB, where every targeted edit is a risk. This attaches
- * by delegation instead, so a new card grid added later gets both features for
- * free.
+ * One layer mounted from the layout rather than edits to every screen. Card
+ * grids appear in a dozen places and the app's biggest file is 577 KB, so
+ * attaching by delegation is both safer and reaches grids added later.
  *
- * Order is applied with the CSS order property, never by moving DOM nodes.
- * Moving nodes React owns would be undone on the next render; order is a style,
- * so it survives, and a MutationObserver puts it back if React replaces the
- * element outright.
+ * Order is applied with the CSS order property, never by moving DOM nodes:
+ * nodes React owns get put back on the next render, a style survives. A
+ * MutationObserver reapplies everything if React replaces an element outright.
  *
- * Both settings are per person and per device (localStorage). Syncing them to
- * the staff record is the better home, but that record rides in the shared blob
- * and the database trigger does not protect preference fields yet -- so this
- * stays local until it does.
+ * The control only appears where it can change something. On the sign-in card
+ * there is nothing to reorder and nothing tinted, so it stays hidden.
+ *
+ * Both settings are per person, per device. Syncing them to the staff record is
+ * the better home, but that record rides in the shared blob and the database
+ * trigger does not protect preference fields yet.
  */
 
 import { useEffect, useState } from "react";
 import { Check, Palette, RotateCcw } from "lucide-react";
 
-/* Containers whose children may be reordered. Each needs a stable key, because
-   the order is stored against it. */
 const GRIDS = [
   { selector: ".module-grid:not(.quick-grid)", key: "areas" },
   { selector: ".quick-action-row", key: "quick" },
   { selector: ".module-grid.quick-grid", key: "quickcards" },
 ];
+
+const TINTED = ".chart-track, .hier-bar, .struct-share, .access-pill, .org-tabs, .hier-stat";
 
 const ACCENTS = [
   { id: "ink", label: "Larsa black", value: "#17181b" },
@@ -69,8 +67,8 @@ function writeOrder(key: string, ids: string[]) {
   }
 }
 
-/* A card is identified by its own text, not its position: positions change the
-   moment somebody reorders, but the label on the card does not. */
+/* A card is identified by its label, not its position: positions change the
+   moment somebody reorders, the label does not. */
 function cardId(node: Element): string {
   return (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40);
 }
@@ -85,8 +83,10 @@ function applyOrder(container: HTMLElement, key: string) {
 }
 
 export function CardTools() {
-  const [open, setOpen] = useState(false);  const [canOrder, setCanOrder] = useState(false);  const [canColour, setCanColour] = useState(false);
+  const [open, setOpen] = useState(false);
   const [accent, setAccent] = useState("#17181b");
+  const [canOrder, setCanOrder] = useState(false);
+  const [canColour, setCanColour] = useState(false);
 
   useEffect(() => {
     let stored = "";
@@ -134,13 +134,28 @@ export function CardTools() {
         document.querySelectorAll<HTMLElement>(grid.selector).forEach((container) => {
           Array.from(container.children).forEach((child) => {
             const el = child as HTMLElement;
-            if (el.draggable) return;
-            el.draggable = true;
-            el.style.cursor = "grab";            if (getComputedStyle(el).position === "static") el.style.position = "relative";            if (!el.querySelector(":scope > .grip-dots")) {              const grip = document.createElement("span");              grip.className = "grip-dots";              grip.setAttribute("aria-hidden", "true");              grip.title = "Drag to reorder";              el.appendChild(grip);            }
+            if (!el.draggable) {
+              el.draggable = true;
+              el.style.cursor = "grab";
+            }
+            if (getComputedStyle(el).position === "static") el.style.position = "relative";
+            if (!el.querySelector(":scope > .grip-dots")) {
+              const grip = document.createElement("span");
+              grip.className = "grip-dots";
+              grip.setAttribute("aria-hidden", "true");
+              grip.title = "Drag to reorder";
+              el.appendChild(grip);
+            }
           });
-          applyOrder(container, grid.key);        });      });      const signedOut = Boolean(document.getElementById("auth-panel"));      const grids = GRIDS.some((grid) => document.querySelector(grid.selector));      const tinted = Boolean(document.querySelector(".chart-track, .hier-bar, .struct-share, .access-pill, .org-tabs, .hier-stat"));      setCanOrder(!signedOut && grids);      setCanColour(!signedOut && (grids || tinted));      if (false) { }        GRIDS.forEach((grid) => {          document.querySelectorAll<HTMLElement>(grid.selector).forEach((container) => {
+          applyOrder(container, grid.key);
         });
       });
+
+      const signedOut = Boolean(document.getElementById("auth-panel"));
+      const grids = GRIDS.some((grid) => document.querySelector(grid.selector));
+      const tinted = Boolean(document.querySelector(TINTED));
+      setCanOrder(!signedOut && grids);
+      setCanColour(!signedOut && (grids || tinted));
     }
 
     function onDragStart(event: DragEvent) {
@@ -210,9 +225,11 @@ export function CardTools() {
     setOpen(false);
   }
 
+  if (!canColour) return null;
+
   return (
-    !canColour ? null :     <div className="cardtools">
-      <button type="button" className="cardtools-btn" onClick={() => setOpen(!open)} title="Colour and card order" aria-expanded={open}>
+    <div className="cardtools">
+      <button type="button" className="cardtools-btn" onClick={() => setOpen(!open)} title="Appearance" aria-expanded={open}>
         <Palette size={17} />
       </button>
       {open ? (
@@ -233,11 +250,19 @@ export function CardTools() {
               </button>
             ))}
           </div>
-          <label className="cardtools-custom">            <span>Custom</span>            <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />          </label>          <p className="cardtools-note">Quota stays red, amber and green — there the colour is the reading.</p>
-          {canOrder ? <button type="button" className="cardtools-reset" onClick={resetOrder}>
-            <RotateCcw size={13} /> Reset card order
-          </button>
-          <p className="cardtools-note">Drag any card to reorder it. Saved for you on this device.</p>
+          <label className="cardtools-custom">
+            <span>Custom</span>
+            <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />
+          </label>
+          <p className="cardtools-note">Quota stays red, amber and green. There the colour is the reading.</p>
+          {canOrder ? (
+            <>
+              <button type="button" className="cardtools-reset" onClick={resetOrder}>
+                <RotateCcw size={13} /> Reset card order
+              </button>
+              <p className="cardtools-note">Drag any card by its dots to reorder it.</p>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
