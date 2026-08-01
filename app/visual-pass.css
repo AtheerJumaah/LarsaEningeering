@@ -476,3 +476,19 @@ body { background: var(--larsa-surface, var(--bg)); }
 [data-density="compact"] .struct-dep-title b { font-size: 14.5px; }
 [data-density="compact"] .overview-hero,
 [data-density="compact"] .home-hero { padding: 14px 18px; }
+
+/* --------------------------------------------------------------------------
+   Page tint, restored.
+
+   The app paints its own background over body, so tinting body alone was
+   invisible. The tint has to go on the app surfaces. Dark mode is respected
+   by only applying it when CardTools has marked the page as light: that
+   attribute is set from the shell\u2019s own computed background, so whichever
+   way the theme is toggled, the tint steps aside.
+   -------------------------------------------------------------------------- */
+
+html[data-mode="light"] .native,
+html[data-mode="light"] .native-scroll,
+html[data-mode="light"] .app-main,
+html[data-mode="light"] main { background: var(--larsa-surface, transparent); }
+html[data-mode="light"] body { background: var(--larsa-surface, var(--bg)); }
