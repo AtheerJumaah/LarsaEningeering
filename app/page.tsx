@@ -6596,7 +6596,7 @@ export default function Home() {
     { ...ITEMS.find((item) => item.id === "staff-people")!, label: "Employee Details", description: "Profiles, roles, departments, and notes" },
     { ...ITEMS.find((item) => item.id === "staff-rules")!, label: "Rules & Constraints" },
     ITEMS.find((item) => item.id === "data")!,
-    { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" },
+    { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" }, ITEMS.find((item) => item.id === "platform-settings")!,
   ];
   const quickGroup: Group = {
     label: "Quick Actions",
