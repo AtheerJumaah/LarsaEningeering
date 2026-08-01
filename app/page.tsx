@@ -4,7 +4,7 @@ import Image from "next/image";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, sendPush } from "../lib/supabase/push";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
@@ -3358,7 +3358,7 @@ export default function Home() {
       // Storage can be unavailable; the form simply starts empty.
     }
   }, []);
-  const [loginError, setLoginError] = useState("");
+  const [loginError, setLoginError] = useState(""); const [signupOpen, setSignupOpen] = useState(true); useEffect(() => { let alive = true; loadPolicy().then((next) => { if (alive) setSignupOpen(next.self_signup_enabled !== false); }).catch(() => {}); return () => { alive = false; }; }, []);
   const [hydrated, setHydrated] = useState(false);
   /* Read only after hydration: the server has no such global, and reading it
      during the first render would make the markup disagree with the client. */
@@ -7102,7 +7102,7 @@ export default function Home() {
                 </>
               )}
               <div className="auth-error" role="alert">{loginError}</div>
-              <button type="submit" className="auth-submit">Sign In</button><p className="auth-secondary">{loginMode === "email" ? (<button type="button" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot password?</button>) : null}<button type="button" onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button></p>
+              <button type="submit" className="auth-submit">Sign In</button><p className="auth-secondary">{loginMode === "email" ? (<button type="button" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot password?</button>) : null}{signupOpen ? (<button type="button" onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button>) : null}</p>
             </form>
           </section>
         </div>
@@ -9374,7 +9374,7 @@ function AccessCenter({
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<StaffUser | null>(null);
-  const [isNew, setIsNew] = useState(false);
+  const [isNew, setIsNew] = useState(false); const [skipInitialVerify, setSkipInitialVerify] = useState(false);
   const [query, setQuery] = useState("");
   const [permissionQuery, setPermissionQuery] = useState("");
   const [projectQuery, setProjectQuery] = useState("");
@@ -9557,7 +9557,7 @@ function AccessCenter({
       permissions: staffPermissionsForUser(draft),
     };
     const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
-      setSelectedId(nextUser.id);
+      if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = window.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
       setIsNew(false);
       setFormError("");
@@ -9840,7 +9840,7 @@ function AccessCenter({
             </section>
             </fieldset>
 
-            <div className="access-savebar">
+            {isNew && currentUser && currentUser.platformAdmin ? (<label className="ps-row" style={{ margin: "0 0 10px" }}><input type="checkbox" checked={skipInitialVerify} onChange={(event) => setSkipInitialVerify(event.target.checked)} /><span><b>Skip initial email verification</b><small>You confirm this address instead. They still follow the periodic policy.</small></span></label>) : null}            <div className="access-savebar">
               <div><span className="auth-error">{formError}</span><small>{canChangeDraft ? "Changes apply to menus and actions after saving." : "View-only access: preview is available, but changes are disabled."}</small></div>
               <button type="submit" className="primary icon-label" disabled={!canChangeDraft}><Save size={16} /> Save Access</button>
             </div>
