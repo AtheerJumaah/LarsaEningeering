@@ -520,3 +520,17 @@ button.primary,
 .hier-badge-you,
 .struct-count,
 .struct-chip em { border: 1px solid rgba(23, 24, 27, 0.16); }
+
+/* --------------------------------------------------------------------------
+   Sidebar follows the page
+
+   The rail keeps its dark weight, but takes the hue of the chosen background
+   rather than being flatly black, so a warm page reads with a warm sidebar.
+   Black stays the default and remains what dark mode uses.
+
+   .unified-app is the shell that paints over body, which is why the page tint
+   was only reaching part of the screen.
+   -------------------------------------------------------------------------- */
+
+html[data-mode="light"] aside.sidebar { background: var(--larsa-sidebar, #000); }
+html[data-mode="light"] .unified-app { background: var(--larsa-surface, transparent); }
