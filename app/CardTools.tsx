@@ -86,7 +86,7 @@ export function CardTools() {
   const [open, setOpen] = useState(false);
   const [accent, setAccent] = useState("#17181b");
   const [canOrder, setCanOrder] = useState(false);
-  const [canColour, setCanColour] = useState(false);  const [surface, setSurface] = useState("");
+  const [canColour, setCanColour] = useState(false);  const [surface, setSurface] = useState("");  const [dense, setDense] = useState(false);
 
   useEffect(() => {
     let stored = "";
@@ -95,13 +95,13 @@ export function CardTools() {
     } catch {
       stored = "";
     }
-    let tone = "";    try { tone = localStorage.getItem(storageKey("surface")) || ""; } catch { tone = ""; }    if (tone) { setSurface(tone); document.documentElement.style.setProperty("--larsa-surface", tone); }    if (stored) {
+    let tone = "";    try { tone = localStorage.getItem(storageKey("surface")) || ""; } catch { tone = ""; }    if (tone) { setSurface(tone); document.documentElement.style.setProperty("--larsa-surface", tone); }    let density = "";    try { density = localStorage.getItem(storageKey("density")) || ""; } catch { density = ""; }    if (density === "compact") { setDense(true); document.documentElement.setAttribute("data-density", "compact"); }    if (stored) {
       setAccent(stored);
       document.documentElement.style.setProperty("--larsa-accent", stored);
     }
   }, []);
 
-const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm", label: "Warm", value: "#faf7f2" }, { id: "cool", label: "Cool", value: "#f4f7fb" }, { id: "mint", label: "Mint", value: "#f3f9f5" }, { id: "rose", label: "Rose", value: "#fbf5f6" }, { id: "grey", label: "Grey", value: "#f2f3f5" }, { id: "sand", label: "Sand", value: "#ece3d5" }, { id: "stone", label: "Stone", value: "#e6e3dd" }, { id: "sky", label: "Sky", value: "#dfe9f6" }, { id: "sage", label: "Sage", value: "#dfe9e0" }, { id: "blush", label: "Blush", value: "#f2dfe2" }, { id: "steel", label: "Steel", value: "#dde2e9" }, { id: "lilac", label: "Lilac", value: "#e6e2f4" }, { id: "clay", label: "Clay", value: "#ecdfd8" }, { id: "slateblue", label: "Slate blue", value: "#d6dde7" }, { id: "graphite", label: "Graphite", value: "#d5d7db" } ];  function chooseSurface(value: string) {    setSurface(value);    if (value) document.documentElement.style.setProperty("--larsa-surface", value);    else document.documentElement.style.removeProperty("--larsa-surface");    try { if (value) localStorage.setItem(storageKey("surface"), value); else localStorage.removeItem(storageKey("surface")); } catch { /* ignore */ }  }  function chooseAccent(value: string) {
+const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm", label: "Warm", value: "#faf7f2" }, { id: "cool", label: "Cool", value: "#f4f7fb" }, { id: "mint", label: "Mint", value: "#f3f9f5" }, { id: "rose", label: "Rose", value: "#fbf5f6" }, { id: "grey", label: "Grey", value: "#f2f3f5" }, { id: "sand", label: "Sand", value: "#ece3d5" }, { id: "stone", label: "Stone", value: "#e6e3dd" }, { id: "sky", label: "Sky", value: "#dfe9f6" }, { id: "sage", label: "Sage", value: "#dfe9e0" }, { id: "blush", label: "Blush", value: "#f2dfe2" }, { id: "steel", label: "Steel", value: "#dde2e9" }, { id: "lilac", label: "Lilac", value: "#e6e2f4" }, { id: "clay", label: "Clay", value: "#ecdfd8" }, { id: "slateblue", label: "Slate blue", value: "#d6dde7" }, { id: "graphite", label: "Graphite", value: "#d5d7db" } ];function chooseDense(value: boolean) {    setDense(value);    if (value) document.documentElement.setAttribute("data-density", "compact");    else document.documentElement.removeAttribute("data-density");    try { if (value) localStorage.setItem(storageKey("density"), "compact"); else localStorage.removeItem(storageKey("density")); } catch { /* ignore */ }  }    function chooseSurface(value: string) {    setSurface(value);    if (value) document.documentElement.style.setProperty("--larsa-surface", value);    else document.documentElement.style.removeProperty("--larsa-surface");    try { if (value) localStorage.setItem(storageKey("surface"), value); else localStorage.removeItem(storageKey("surface")); } catch { /* ignore */ }  }  function chooseAccent(value: string) {
     setAccent(value);
     document.documentElement.style.setProperty("--larsa-accent", value);
     try {
@@ -254,7 +254,7 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
             <span>Custom</span>
             <input type="color" value={accent} onChange={(event) => chooseAccent(event.target.value)} />
           </label>
-          <p className="cardtools-note">Quota stays red, amber and green. There the colour is the reading.</p>
+          <p className="cardtools-note">Quota stays red, amber and green. There the colour is the reading.</p>          <span className="cardtools-title">Density</span>          <div className="cardtools-density">            <button type="button" className={dense ? "" : "is-on"} onClick={() => chooseDense(false)}>Comfortable</button>            <button type="button" className={dense ? "is-on" : ""} onClick={() => chooseDense(true)}>Compact</button>          </div>
           {canOrder ? (
             <>
               <button type="button" className="cardtools-reset" onClick={resetOrder}>
