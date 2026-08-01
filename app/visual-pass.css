@@ -405,7 +405,7 @@ select:focus-visible { outline-color: var(--larsa-accent); }
    to cards: the contrast between a tinted page and white cards is what makes
    the layout readable, so cards stay white. */
 body { background: var(--larsa-surface, var(--bg)); }
-.native, .native-scroll, .app-main, main { background: var(--larsa-surface, transparent); }
+/* removed: it overrode dark mode. Tint stays on body only. */
 
 .cardtools-tone { border: 1px solid var(--line) !important; color: #17181b; }
 .cardtools-tone.is-on { border-color: #17181b !important; }
@@ -440,3 +440,39 @@ body { background: var(--larsa-surface, var(--bg)); }
 .cardtools-density { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .cardtools-density button { font: inherit; font-size: 12px; font-weight: 600; padding: 7px 6px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); cursor: pointer; }
 .cardtools-density button.is-on { color: #fff; background: var(--larsa-accent, #17181b); border-color: var(--larsa-accent, #17181b); }
+
+/* Compact, made properly compact. The first pass trimmed too little to tell
+   apart from comfortable. This takes real height out of rows and headers and
+   tightens the gaps between cards, while leaving body text at a readable
+   size. */
+[data-density="compact"] .org-card,
+[data-density="compact"] .struct-dep,
+[data-density="compact"] .chart-card { padding: 7px 10px; }
+[data-density="compact"] .hier-person { padding: 3px 8px; gap: 6px; }
+[data-density="compact"] .hier-head { padding: 6px 10px; gap: 8px; }
+[data-density="compact"] .hier-head-team { padding: 5px 8px; }
+[data-density="compact"] .hier-people { gap: 2px; }
+[data-density="compact"] .hier { gap: 5px; }
+[data-density="compact"] .struct { gap: 6px; }
+[data-density="compact"] .struct-dep { gap: 5px; }
+[data-density="compact"] .struct-team { padding: 5px 7px; gap: 3px; }
+[data-density="compact"] .struct-grid { column-gap: 8px; }
+[data-density="compact"] .struct-dep { margin-bottom: 8px; }
+[data-density="compact"] .chart-rows { gap: 2px; }
+[data-density="compact"] .chart-rows li { gap: 7px; }
+[data-density="compact"] .chart-track { height: 10px; }
+[data-density="compact"] .chart-head { margin-bottom: 8px; }
+[data-density="compact"] .hier-stat { padding: 2px 7px; min-width: 48px; }
+[data-density="compact"] .hier-stat b { font-size: 13px; }
+[data-density="compact"] .hier-bars { gap: 2px; margin-top: 2px; }
+[data-density="compact"] .hier-barline .hier-bar { height: 5px; }
+[data-density="compact"] .module-grid { gap: 7px; }
+[data-density="compact"] .module-bubble { padding: 12px 14px; }
+[data-density="compact"] .ps-row { padding: 5px 9px; }
+[data-density="compact"] .org-people li { padding: 3px 0; }
+[data-density="compact"] .struct-chip { padding: 1px 6px 1px 1px; font-size: 12px; }
+[data-density="compact"] .struct-chip em { width: 17px; height: 17px; }
+[data-density="compact"] .hier-head-title b { font-size: 14.5px; }
+[data-density="compact"] .struct-dep-title b { font-size: 14.5px; }
+[data-density="compact"] .overview-hero,
+[data-density="compact"] .home-hero { padding: 14px 18px; }
