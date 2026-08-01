@@ -387,3 +387,16 @@ a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible { outline-color: var(--larsa-accent); }
+
+/* The card rules set position on their direct children, which outranked the
+   grip and left it sitting in normal flow at the bottom. Pin it explicitly:
+   left edge, centred vertically. */
+.grip-dots {
+  position: absolute !important;
+  top: 50% !important;
+  left: 9px !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: translateY(-50%) !important;
+  margin: 0 !important;
+}
