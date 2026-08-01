@@ -29,7 +29,7 @@ const GRIDS = [
 
 const TINTED = ".chart-track, .hier-bar, .struct-share, .access-pill, .org-tabs, .hier-stat";
 
-const ACCENTS = [
+const ACCENTS = [  { id: "emerald", label: "Emerald", value: "#047857" },  { id: "indigo", label: "Indigo", value: "#4338ca" },  { id: "crimson", label: "Crimson", value: "#be123c" },  { id: "orange", label: "Orange", value: "#c2410c" },  { id: "cyan", label: "Cyan", value: "#0e7490" },  { id: "plum", label: "Plum", value: "#86198f" },  { id: "olive", label: "Olive", value: "#4d7c0f" },  { id: "navy", label: "Navy", value: "#1e3a8a" },
   { id: "ink", label: "Larsa black", value: "#17181b" },
   { id: "slate", label: "Slate", value: "#475569" },
   { id: "blue", label: "Blue", value: "#2563eb" },
@@ -101,7 +101,7 @@ export function CardTools() {
     }
   }, []);
 
-const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm", label: "Warm", value: "#faf7f2" }, { id: "cool", label: "Cool", value: "#f4f7fb" }, { id: "mint", label: "Mint", value: "#f3f9f5" }, { id: "rose", label: "Rose", value: "#fbf5f6" }, { id: "grey", label: "Grey", value: "#f2f3f5" } ];  function chooseSurface(value: string) {    setSurface(value);    if (value) document.documentElement.style.setProperty("--larsa-surface", value);    else document.documentElement.style.removeProperty("--larsa-surface");    try { if (value) localStorage.setItem(storageKey("surface"), value); else localStorage.removeItem(storageKey("surface")); } catch { /* ignore */ }  }  function chooseAccent(value: string) {
+const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm", label: "Warm", value: "#faf7f2" }, { id: "cool", label: "Cool", value: "#f4f7fb" }, { id: "mint", label: "Mint", value: "#f3f9f5" }, { id: "rose", label: "Rose", value: "#fbf5f6" }, { id: "grey", label: "Grey", value: "#f2f3f5" }, { id: "sand", label: "Sand", value: "#ece3d5" }, { id: "stone", label: "Stone", value: "#e6e3dd" }, { id: "sky", label: "Sky", value: "#dfe9f6" }, { id: "sage", label: "Sage", value: "#dfe9e0" }, { id: "blush", label: "Blush", value: "#f2dfe2" }, { id: "steel", label: "Steel", value: "#dde2e9" }, { id: "lilac", label: "Lilac", value: "#e6e2f4" }, { id: "clay", label: "Clay", value: "#ecdfd8" }, { id: "slateblue", label: "Slate blue", value: "#d6dde7" }, { id: "graphite", label: "Graphite", value: "#d5d7db" } ];  function chooseSurface(value: string) {    setSurface(value);    if (value) document.documentElement.style.setProperty("--larsa-surface", value);    else document.documentElement.style.removeProperty("--larsa-surface");    try { if (value) localStorage.setItem(storageKey("surface"), value); else localStorage.removeItem(storageKey("surface")); } catch { /* ignore */ }  }  function chooseAccent(value: string) {
     setAccent(value);
     document.documentElement.style.setProperty("--larsa-accent", value);
     try {
