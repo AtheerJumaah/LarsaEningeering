@@ -345,3 +345,45 @@ button[aria-label="Back to home"] svg {
 
 .cardtools-custom { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 600; }
 .cardtools-custom input { width: 46px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; }
+
+/* --------------------------------------------------------------------------
+   Accent, applied across the interface.
+
+   One variable, so choosing a colour once changes every surface that should
+   follow it: primary actions, the selected tab, the active menu row, focus
+   rings, progress and chart fills. Left deliberately untouched: the Larsa
+   wordmark and the black sign-in header, which are identity rather than
+   theme, and the red / amber / green quota scale, where the colour is the
+   information and recolouring it would make the chart unreadable.
+   -------------------------------------------------------------------------- */
+
+:root { --larsa-accent: #17181b; }
+
+/* Primary actions */
+.auth-submit,
+.org-add,
+button.primary,
+.btn.primary { background: var(--larsa-accent) !important; border-color: var(--larsa-accent) !important; }
+
+/* Selected tab and active menu row */
+.org-tabs button.active { background: var(--larsa-accent); color: #fff; }
+.nav-item.active,
+.nav-item[aria-current="page"] { background: color-mix(in srgb, var(--larsa-accent) 20%, transparent); }
+
+/* Small emphasis marks */
+.access-pill,
+.hier-badge-you,
+.struct-count,
+.struct-chip em { background: var(--larsa-accent); border-color: var(--larsa-accent); color: #fff; }
+
+/* Charts and progress */
+.chart-fill-hours,
+.struct-share i,
+.chart-target { background: var(--larsa-accent); }
+.hier-bar i.hier-bar-present { background: color-mix(in srgb, var(--larsa-accent) 62%, #ffffff); }
+
+/* Focus */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible { outline-color: var(--larsa-accent); }
