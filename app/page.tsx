@@ -3686,6 +3686,7 @@ export default function Home() {
      tables — and the choice is remembered per device. On a phone this state is
      not used at all: there the sidebar is already a drawer driven by menuOpen. */
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [navHistory, setNavHistory] = useState<Item[]>([]);
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
   const [message, setMessage] = useState("");
@@ -5411,7 +5412,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [active, navigateInner, sessionUser]);
 
-  const choose = (item: Item, channel = channelForItem(item)) => {
+  const choose = (item: Item, channel = channelForItem(item), record = true) => {
     if (!canOpenInSession(sessionUserRef.current, item, sessionMethodRef.current)) {
       notify("You do not have access to this area.");
       return;
@@ -5421,6 +5422,13 @@ export default function Home() {
        up without an address) have no mailbox to verify — their access is
        already scoped and password-protected, so they pass straight through. */
     if (!previewOwner && item.engine === "accounting" && sessionUserRef.current && sessionUserRef.current.email && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
+    /* Recorded only once the navigation is certain to happen: everything that
+       could refuse it has already returned above. Going Back passes record
+       false, or the two would push each other back and forth for ever. */
+    if (record && activeRef.current && activeRef.current.id !== item.id) {
+      const from = activeRef.current;
+      setNavHistory((stack) => [...stack, from].slice(-30));
+    }
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);
@@ -5432,6 +5440,16 @@ export default function Home() {
       });
     }
     setMenuOpen(false);
+  };
+
+  /* Where Back goes. A stack of the areas actually visited this session, not
+     the browser's history: this is a single page, so the browser's own Back
+     button leaves the app altogether rather than stepping through it. */
+  const goBack = () => {
+    const previous = navHistory[navHistory.length - 1];
+    if (!previous) return;
+    setNavHistory((stack) => stack.slice(0, -1));
+    choose(previous, channelForItem(previous), false);
   };
 
   const install = async () => {
@@ -7248,6 +7266,21 @@ export default function Home() {
             >
               <PanelLeftOpen size={20} />
             </button>
+            {/* Back, on every page that has somewhere to go back to. The
+                browser's own Back leaves the app, so this is the only control
+                that steps through where you have actually been. */}
+            {navHistory.length > 0 && (
+              <button
+                type="button"
+                className="top-back"
+                onClick={goBack}
+                aria-label={`Back to ${navHistory[navHistory.length - 1].label}`}
+                title={`Back to ${navHistory[navHistory.length - 1].label}`}
+              >
+                <ArrowLeft size={17} />
+                <b>Back</b>
+              </button>
+            )}
             {/* Home must not depend on the sidebar being on screen. It sits in
                 the bar itself, next to the title, wherever you are. */}
             {active.id !== "overview" && (

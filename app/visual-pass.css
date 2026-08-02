@@ -1218,7 +1218,9 @@ aside.sidebar .sidebar-account .account-open > span { border-radius: 12px; }
   }
 }
 
-/* Home in the top bar, so it never depends on the sidebar being on screen. */
+/* Back and Home in the top bar, so neither depends on the sidebar being on
+   screen. Same pill, so they read as one pair of controls. */
+.unified-app .top-back,
 .unified-app .top-home {
   display: inline-flex;
   align-items: center;
@@ -1236,12 +1238,13 @@ aside.sidebar .sidebar-account .account-open > span { border-radius: 12px; }
   transition: border-color .16s ease, background .16s ease;
 }
 .unified-app .top-home .larsa-mark { width: 17px; height: 17px; }
-.unified-app .top-home:hover { border-color: var(--ink); background: var(--soft); }
-.unified-app.dark .top-home { background: #1b1f27; border-color: #333a46; }
-.unified-app.dark .top-home:hover { border-color: #6b7484; background: #232833; }
+.unified-app :is(.top-back, .top-home):hover { border-color: var(--ink); background: var(--soft); }
+.unified-app.dark :is(.top-back, .top-home) { background: #1b1f27; border-color: #333a46; }
+.unified-app.dark :is(.top-back, .top-home):hover { border-color: #6b7484; background: #232833; }
+.unified-app .top-back svg { margin-inline-start: -2px; }
 @media (max-width: 760px) {
-  .unified-app .top-home { padding: 8px; }
-  .unified-app .top-home b { display: none; }
+  .unified-app :is(.top-back, .top-home) { padding: 8px; }
+  .unified-app :is(.top-back, .top-home) b { display: none; }
 }
 
 /* --- 20. Where the words sit on a card -----------------------------------
