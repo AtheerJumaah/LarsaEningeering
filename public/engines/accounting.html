@@ -5267,5 +5267,13 @@ function v35cEnsureCharts() {
 })();
 </script>
 
+<!-- v4.0 Accounting upgrade: shared calculation core + Supabase-authoritative
+     accounting layer (relational acct_* ledger, consultancy-fee engine,
+     historical exchange-rate snapshots, refund settlement, protected
+     approvals, append-only audit). Additive, same pattern as every earlier
+     vNN patch; inert when Supabase is not configured. -->
+<script src="accounting-core.js"></script>
+<script src="accounting-cloud.js"></script>
+
 </body>
 </html>
