@@ -252,6 +252,50 @@ test("card text sits where it was asked to sit", () => {
   assert.match(pass, /@media \(max-width: 760px\) \{\s*\n\s*\.accounting-card \.accounting-links \{ padding-inline-start: 0; \}/);
 });
 
+test("installed on a desktop, the bar keeps clear of the window controls", () => {
+  const manifest = JSON.parse(read("public/manifest.webmanifest"));
+  /* window-controls-overlay hands the app the title bar and then draws the
+     minimise/maximise/close buttons on top of it — which put them straight
+     over the clocks and the icon buttons. */
+  assert.ok(!manifest.display_override.includes("window-controls-overlay"),
+    "the app must not ask for the window-controls overlay");
+  assert.equal(manifest.display, "standalone");
+  // An app installed before that change keeps its old manifest for a while,
+  // so the bar reserves the controls' strip on both ends regardless.
+  assert.match(pass, /@media \(display-mode: window-controls-overlay\) \{/);
+  assert.match(pass, /padding-right: max\(18px, calc\(100vw - env\(titlebar-area-width/);
+  assert.match(pass, /padding-left: max\(22px, calc\(env\(titlebar-area-x/);
+  // An overlay window with no draggable region cannot be moved.
+  assert.match(pass, /-webkit-app-region: drag/);
+  // The cache name must move, or the old manifest stays precached.
+  const version = /larsa-control-v(\d+)/.exec(read("public/sw.js"));
+  assert.ok(version && Number(version[1]) >= 19, "bump the cache when the manifest changes");
+  /* The title bar the browser draws for the installed window is painted in the
+     theme colour. Black above a near-white app is a band bolted on top; the
+     app's own background makes the two surfaces meet as one. */
+  assert.equal(manifest.theme_color, "#f7f7f5");
+  assert.match(read("app/layout.tsx"), /themeColor: "#f7f7f5"/);
+  // And it follows the light/dark toggle rather than being fixed at build time.
+  assert.match(page, /meta\[name="theme-color"\]/);
+  assert.match(page, /meta\.setAttribute\("content", dark \? "#0d0f14" : "#f7f7f5"\)/);
+});
+
+test("the page title outweighs its own subtitle", () => {
+  /* Tailwind's reset drops h1 to the body weight, which left the small grey
+     description as the boldest text in the bar. */
+  const title = /\.unified-app \.page-heading h1 \{[\s\S]*?font-weight: (\d+)/.exec(pass);
+  const sub = /\.unified-app \.page-heading p \{[\s\S]*?font-weight: (\d+)/.exec(pass);
+  assert.ok(title && sub, "both parts of the heading need a stated weight");
+  assert.ok(Number(title[1]) > Number(sub[1]),
+    "the title must be heavier than the line describing it");
+});
+
+test("the clock labels read from the left", () => {
+  assert.match(globals, /\.clocks span \{[\s\S]*?text-align: start;/);
+  assert.ok(!/\.clocks span \{[^}]*text-align: right/.test(globals),
+    "the clock chips must not be right-aligned");
+});
+
 test("responsive rules keep the six cards as cards on small screens", () => {
   assert.match(pass, /@media \(max-width: 700px\) \{/);
   // On a phone the grid becomes one column of full-width cards...

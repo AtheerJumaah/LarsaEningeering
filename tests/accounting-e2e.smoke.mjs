@@ -131,6 +131,12 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 await page.addInitScript(() => {
   localStorage.setItem("larsaSupabaseBridgeV1", JSON.stringify({ url: "http://127.0.0.1:8932", anonKey: "test-anon" }));
+  // The roster the parent shell normally injects, so the people dropdowns
+  // have real accounts to offer.
+  window.__larsaAccountingRoster = [
+    { email: "e2e@larsaeng.com", name: "E2E Accountant", role: "Accountant" },
+    { email: "boss@larsaeng.com", name: "E2E Approver", role: "Approver" },
+  ];
 });
 await page.goto("http://127.0.0.1:8932/engines/accounting.html?demo=1", { waitUntil: "load" });
 await page.waitForTimeout(2000);
@@ -241,6 +247,50 @@ const reviewMirror = await page.evaluate(() => state.funding[0] && state.funding
 console.log("receipt modal:", receiptModalUp, "| mirror review status:", reviewMirror);
 console.log("post calls:", posted.length, posted[0] ? JSON.stringify({ amount: posted[0].body.txn.amount, status: posted[0].body.txn.status, kind: posted[0].body.txn.kind, project: posted[0].body.txn.project_id, actor: posted[0].body.actor.role }) : "-");
 
+/* Assigning people is a dropdown: one line when shut, tick boxes when open,
+   and the shut line keeps up as boxes are ticked. */
+await page.evaluate(() => {
+  const root = document.getElementById("modalRoot");
+  if (root) root.innerHTML = "";
+  return renderSettingsEnterprise();
+});
+await page.waitForTimeout(900);
+const picker = await page.evaluate(() => {
+  const dd = document.querySelector("details.acct-dd");
+  if (!dd) return { found: false };
+  const shutHeight = dd.getBoundingClientRect().height;
+  const closedText = (dd.querySelector(".acct-dd-text") || {}).textContent;
+  dd.open = true;
+  const boxes = dd.querySelectorAll("input.acct-person");
+  return {
+    found: true,
+    count: document.querySelectorAll("details.acct-dd").length,
+    shutHeight: Math.round(shutHeight),
+    closedText,
+    people: boxes.length,
+    openHeight: Math.round(dd.getBoundingClientRect().height),
+    id: dd.id,
+  };
+});
+let pickerLive = null;
+if (picker.found && picker.people) {
+  pickerLive = await page.evaluate((id) => {
+    const box = document.querySelector("#" + id + " input.acct-person");
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    return {
+      label: (document.querySelector("#" + id + " .acct-dd-text") || {}).textContent,
+      chosen: document.querySelectorAll("#" + id + " input.acct-person:checked").length,
+      read: typeof readPicker === "function" ? null : null,
+    };
+  }, picker.id);
+}
+const pickerOk = picker.found && picker.people >= 2 && picker.shutHeight < 56
+  && /Anyone with the permission/.test(picker.closedText || "")
+  && pickerLive && pickerLive.chosen === 1
+  && !/Anyone with the permission/.test(pickerLive.label || "");
+console.log("people dropdown:", pickerOk, JSON.stringify({ ...picker, after: pickerLive }));
+
 await browser.close(); server.close();
 const fatal = errors.filter((e) => !/Failed to fetch/.test(e));
 console.log("page errors:", JSON.stringify(fatal));
@@ -250,6 +300,7 @@ const pass = mirror.on && mirror.fundingCount === 1 && mirror.fundingFee === 800
   && modalState.projectLocked && modalState.dateFilled && modalState.feePanel
   && posted.length === 1 && posted[0].body.txn.amount === 2000000 && posted[0].body.txn.status === "pending"
   && receiptModalUp && reviewMirror === "pending_review"
+  && pickerOk
   && fatal.length === 0;
 console.log(pass ? "E2E SMOKE OK" : "E2E SMOKE FAILED");
 process.exit(pass ? 0 : 1);

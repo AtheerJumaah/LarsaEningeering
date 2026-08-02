@@ -496,7 +496,7 @@ test("assigning accountants and approvers picks real accounts from a dropdown", 
   assert.match(cloud, /state\.users/);
   // The pickers are real selects, not free-text email boxes.
   assert.match(cloud, /function rosterPicker\(/);
-  assert.match(cloud, /class="acct-people"/);   // a tick list, not a text box
+  assert.match(cloud, /<details class="acct-dd"/);   // a dropdown, not a text box
   assert.match(cloud, /function readPicker\(/);
   assert.match(cloud, /rosterPicker\("acct_prj_accountants"/);
   assert.match(cloud, /rosterPicker\("acct_prj_approvers"/);
@@ -560,11 +560,23 @@ test("the project form is simplified and keeps every stored value", () => {
   assert.match(cloud, /code: rec\.code \|\| derivedProjectCode/);
 });
 
-test("assigning people is a tick list — many people, no modifier keys", () => {
+test("assigning people is a dropdown — many people, no modifier keys", () => {
   const cloud = cloudNow();
-  assert.match(cloud, /class="acct-people"/);
+  /* Closed it is one line saying who is assigned; open it is tick boxes, so a
+     second name is an ordinary click rather than a Ctrl/Cmd-click. */
+  assert.match(cloud, /<details class="acct-dd"/);
+  assert.match(cloud, /<summary class="acct-dd-head">/);
   assert.match(cloud, /type="checkbox" class="acct-person"/);
-  assert.match(cloud, /Tick everyone who should be assigned/);
+  assert.match(cloud, /function pickerSummary\(/);
+  // The closed summary keeps up as boxes are ticked.
+  assert.match(cloud, /function syncPickerLabel\(/);
+  assert.match(cloud, /function watchPickers\(/);
+  assert.match(cloud, /pickerStyles\(\);\s*\n\s*watchPickers\(\);/);
+  // Nobody chosen still means anyone holding the permission.
+  assert.match(cloud, /Anyone with the permission/);
+  // The long instructions under every picker are gone.
+  assert.ok(!/Tick everyone who should be assigned/.test(cloud),
+    "the per-picker instructions should not be restated under each control");
   // Reading it back collects every ticked person.
   assert.match(cloud, /querySelectorAll\("\.acct-person"\)/);
   assert.match(cloud, /\.filter\(function \(b\) \{ return b\.checked; \}\)/);
