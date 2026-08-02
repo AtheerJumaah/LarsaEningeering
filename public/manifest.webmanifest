@@ -7,13 +7,12 @@
   "scope": "/",
   "display": "standalone",
   "display_override": [
-    "window-controls-overlay",
     "standalone",
     "minimal-ui"
   ],
   "orientation": "any",
   "background_color": "#f7f7f5",
-  "theme_color": "#000000",
+  "theme_color": "#f7f7f5",
   "categories": [
     "business",
     "productivity",
