@@ -225,8 +225,10 @@
     return out;
   }
 
-  /* A multi-select of people. Empty selection keeps the existing meaning:
-     anyone who holds the permission. */
+  /* Pick people — as many as you like. A tick list rather than a
+     multi-select: it is obvious that more than one person can be chosen,
+     and it needs no Ctrl/Cmd-click to do it. Ticking nobody keeps the
+     existing meaning: anyone who holds the permission. */
   function rosterPicker(id, selected, emptyLabel) {
     var chosen = emailList(selected);
     var people = acctRoster();
@@ -235,18 +237,27 @@
         '<span class="muted small">' + TT("No staff accounts found — enter emails separated by commas.",
           "لا توجد حسابات موظفين — أدخل البريد مفصولاً بفواصل.") + "</span>";
     }
-    return '<select id="' + id + '" multiple size="' + Math.min(5, Math.max(3, people.length)) + '" style="min-height:74px">' +
+    return '<div class="acct-people" id="' + id + '" data-people="1" style="max-height:132px;overflow:auto;' +
+      'border:1px solid var(--line,#d9d9d9);border-radius:6px;padding:5px 8px">' +
       people.map(function (p) {
-        return '<option value="' + esc4(p.email) + '"' + (chosen.indexOf(p.email) !== -1 ? " selected" : "") + ">" +
-          esc4(p.name) + (p.role ? " — " + esc4(p.role) : "") + "</option>";
-      }).join("") + "</select>" +
-      '<span class="muted small">' + esc4(emptyLabel || TT("Select none = anyone with the permission. Ctrl/Cmd-click to choose several.",
-        "بدون اختيار = أي شخص لديه الصلاحية. اضغط Ctrl/Cmd للاختيار المتعدد.")) + "</span>";
+        return '<label class="small" style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer">' +
+          '<input type="checkbox" class="acct-person" data-for="' + id + '" value="' + esc4(p.email) + '"' +
+          (chosen.indexOf(p.email) !== -1 ? " checked" : "") + ">" +
+          "<span>" + esc4(p.name) + (p.role ? ' <span class="muted">— ' + esc4(p.role) + "</span>" : "") + "</span></label>";
+      }).join("") + "</div>" +
+      '<span class="muted small">' + esc4(emptyLabel || TT("Tick everyone who should be assigned. None ticked = anyone with the permission.",
+        "اختر كل من يجب تكليفه. بدون اختيار = أي شخص لديه الصلاحية.")) + "</span>";
   }
-  /* Reads either the multi-select or the plain-text fallback. */
+  /* Reads the tick list, the older multi-select, or the plain-text fallback. */
   function readPicker(id) {
     var el = document.getElementById(id);
     if (!el) return null;
+    if (el.getAttribute && el.getAttribute("data-people") === "1") {
+      return Array.prototype.slice.call(el.querySelectorAll(".acct-person"))
+        .filter(function (b) { return b.checked; })
+        .map(function (b) { return String(b.value || "").toLowerCase().trim(); })
+        .filter(function (v) { return v.indexOf("@") > 0; });
+    }
     if (el.tagName === "SELECT") {
       return Array.prototype.slice.call(el.selectedOptions || [])
         .map(function (o) { return String(o.value || "").toLowerCase().trim(); })
@@ -908,7 +919,8 @@
         : (state.projects || [])[0];
       if (!rec) return;
       var payload = {
-        id: rec.id, code: rec.code || null, name: rec.name || null, client: rec.clientName || null,
+        id: rec.id, code: rec.code || derivedProjectCode(rec.name, rec.id),
+        name: rec.name || null, client: rec.clientName || null,
         region: rec.region || null, type: rec.type || null, status: rec.status || null,
         currency: rec.currency || null, contract_value: rec.contractValue != null ? rec.contractValue : null,
         approved_budget: rec.approvedBudget != null ? rec.approvedBudget : null,
@@ -960,6 +972,36 @@
         return !f || f.k !== "consultancyRate";
       });
     } catch (e) { /* engine not ready; the fee panel still governs */ }
+  }
+
+  /* A shorter project form. Fields that duplicated something else, or that
+     nobody fills in, are off the form — existing values are kept in the
+     record and nothing stored is deleted, so an old project loses nothing.
+       code           → generated quietly on save (below), still on documents
+       priority       → status and phase already say where a project stands
+       country        → region is the one the whole system runs on
+       team leader    → the responsible engineer and manager cover this
+       ClickUp/invoice links → the project files link is enough
+       consultancy %  → the accounting panel is the single fee source */
+  var PROJECT_FIELDS_OFF = ["code", "priority", "country", "teamLeader",
+    "clickUpLink", "invoiceLink", "consultancyRate"];
+  function wrapProjectSchema() {
+    try {
+      if (typeof SCHEMA === "undefined" || !SCHEMA || !SCHEMA.projects) return;
+      SCHEMA.projects = SCHEMA.projects.filter(function (f) {
+        return !f || PROJECT_FIELDS_OFF.indexOf(f.k) === -1;
+      });
+    } catch (e) { /* engine not ready; the form simply stays as it was */ }
+  }
+
+  /* Receipts, statements and the approval queue all show a project code, so
+     one is derived from the name when a project has none. Quiet, stable, and
+     never overwrites a code that already exists. */
+  function derivedProjectCode(name, id) {
+    var words = String(name || "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    var stem = words.slice(0, 2).map(function (w) { return w.slice(0, 3); }).join("-") || "PRJ";
+    var tail = String(id || "").replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase() || "0001";
+    return stem + "-" + tail;
   }
 
   var origOpenEditor = null;
@@ -2685,6 +2727,7 @@
     wrapCompanyTotals();
     wrapClientStatement();
     wrapFundingSchema();
+    wrapProjectSchema();
     bootstrap();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") setTimeout(install, 0);
