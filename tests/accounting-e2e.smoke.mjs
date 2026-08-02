@@ -102,7 +102,8 @@ console.log("modal:", JSON.stringify(modalState));
 await page.evaluate(() => {
   document.getElementById("ed_amount").value = "2000000";
   document.getElementById("ed_currency").value = "IQD";
-  document.getElementById("ed_status").value = "Received";
+  // Dual control: the counted statuses are hidden from an accountant's
+  // status picker; the gated default ("Pending Approval") is used as-is.
   return saveEditor();
 });
 await page.waitForTimeout(800);
@@ -122,7 +123,7 @@ const pass = mirror.on && mirror.fundingCount === 1 && mirror.fundingFee === 800
   && mirror.managed && mirror.fxRate === 1310 && mirror.projBudget === 100000000
   && hasSummary && summaryChecks && refundNumber && costProgress
   && modalState.projectLocked && modalState.dateFilled && modalState.feePanel
-  && posted.length === 1 && posted[0].body.txn.amount === 2000000 && posted[0].body.txn.status === "received"
+  && posted.length === 1 && posted[0].body.txn.amount === 2000000 && posted[0].body.txn.status === "pending"
   && receiptModalUp && reviewMirror === "pending_review"
   && fatal.length === 0;
 console.log(pass ? "E2E SMOKE OK" : "E2E SMOKE FAILED");

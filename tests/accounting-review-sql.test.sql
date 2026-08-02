@@ -5,6 +5,12 @@
 -- ============================================================
 \set ON_ERROR_STOP on
 begin;
+-- Migration 007 adds the maker-checker rule (new entries forced to DRAFT,
+-- approval only by a different user). This suite tests the CALCULATION
+-- engine (rates, fees, refunds, receipts, review math), so it runs under
+-- the sanctioned internal flag exactly like system flows do; the rule
+-- itself is covered by accounting-makerchecker-sql.test.sql.
+select set_config('acct.internal_op', '1', true);
 
 create or replace function pg_temp.chk(label text, ok boolean)
 returns void language plpgsql as $$

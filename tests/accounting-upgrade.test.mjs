@@ -258,3 +258,46 @@ test("the accounting identity gate is usable: confirm mode prefills the signed-i
   // Username-only accounts (no mailbox) skip the accounting email gate entirely:
   assert.match(page, /sessionUserRef\.current\.email && accountingNeedsVerification/);
 });
+
+test("dual control: new entries land as Pending Approval, never self-approved on entry", () => {
+  assert.match(migrations, /create or replace function public\.acct_internal_op/);
+  assert.match(migrations, /st := 'pending';\s*\n\s*forced_pending := true;/);
+  assert.match(migrations, /'requested_status', requested_st, 'approval_policy', 'maker_checker'/);
+  assert.match(migrations, /'entered_pending', forced_pending/);
+  // Approval is a separate act by a different user holding 'approve':
+  assert.match(migrations, /perform public\.acct_check_perm\(actor, 'approve'\);\s*\n\s*perform public\.acct_check_approver_scope/);
+  assert.match(migrations, /ACCT_APPROVAL: you entered %/);
+  const cloud = cloudNow();
+  assert.match(cloud, /entered_pending/);
+  assert.match(cloud, /Saved as PENDING APPROVAL/);
+  assert.match(cloud, /acct_mkchk_hint/);
+  assert.match(cloud, /pending: "Pending Approval"/);
+});
+
+test("dual control: approvers are assignable per area and per project; accountants per project", () => {
+  assert.match(migrations, /add column if not exists area_approvers jsonb not null default '\{\}'::jsonb/);
+  assert.match(migrations, /add column if not exists assigned_accountants jsonb not null default '\[\]'::jsonb/);
+  assert.match(migrations, /add column if not exists assigned_approvers\s+jsonb not null default '\[\]'::jsonb/);
+  assert.match(migrations, /acct_check_entry_scope/);
+  assert.match(migrations, /acct_approver_scope_ok/);
+  assert.match(migrations, /data entry for project "%" is assigned to/);
+  assert.match(migrations, /approval for project "%" is assigned to/);
+  assert.match(migrations, /approval for the % area is assigned to/);
+  // All six areas are assignable, and assignment narrows but never grants:
+  for (const kind of ["funding", "material", "labor", "expense", "revenue", "adjustment"]) {
+    assert.ok(migrations.includes(`'${kind}'`), kind + " must be an assignable area");
+  }
+  const cloud = cloudNow();
+  assert.match(cloud, /acct_prj_accountants/);
+  assert.match(cloud, /acct_prj_approvers/);
+  assert.match(cloud, /acct-area-approver/);
+  assert.match(cloud, /approverScope\(/);
+  assert.match(cloud, /entryScopeOk\(/);
+});
+
+test("dual control: internal dual-controlled flows stay exempt via a transaction-local flag", () => {
+  const decides = migrations.split("acct_decide_approval(").length - 1;
+  assert.ok(decides >= 2, "acct_decide_approval must be redefined in 007");
+  assert.match(migrations, /perform set_config\('acct\.internal_op', '1', true\);/);
+  assert.match(migrations, /not public\.acct_internal_op\(\)/);
+});
