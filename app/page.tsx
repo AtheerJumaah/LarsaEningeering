@@ -4999,7 +4999,11 @@ export default function Home() {
       notify("You do not have access to this area.");
       return;
     }
-    if (!previewOwner && item.engine === "accounting" && sessionUserRef.current && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
+    /* The email-code identity gate only makes sense for accounts that HAVE an
+       email. Username-only accounts (clients, trainees, interns an admin set
+       up without an address) have no mailbox to verify — their access is
+       already scoped and password-protected, so they pass straight through. */
+    if (!previewOwner && item.engine === "accounting" && sessionUserRef.current && sessionUserRef.current.email && accountingNeedsVerification(sessionUserRef.current, getDeviceId())) { setAccountingGate(item); return; } setNavChannel(item.id === "overview" ? "home" : channel);
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);

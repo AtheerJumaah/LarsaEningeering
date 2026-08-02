@@ -190,7 +190,11 @@ export function AccountAccess({
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState(mode === "reset" ? String(currentUser?.email || "") : "");
+  /* "confirm" (the accounting-area identity check) arrives with the signed-in
+     user and its field is read-only — so it MUST be prefilled from that user,
+     exactly like "reset". Before this, confirm mode started empty AND
+     read-only: an untypeable blank email box that blocked the whole gate. */
+  const [email, setEmail] = useState(mode === "reset" || mode === "confirm" ? String(currentUser?.email || "") : "");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [code, setCode] = useState("");
@@ -460,7 +464,7 @@ export function AccountAccess({
               required
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              readOnly={mode === "reset" || mode === "confirm"}
+              readOnly={(mode === "reset" || mode === "confirm") && Boolean(currentUser?.email)}
               autoComplete="username"
               autoCapitalize="none"
               autoCorrect="off"
