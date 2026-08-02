@@ -156,6 +156,16 @@ test("Install uses the browser's real install when there is one", () => {
     "the duplicate listener is gone");
   assert.equal((page.match(/window\.removeEventListener\("beforeinstallprompt"/g) || []).length, 1,
     "and it is still cleaned up");
+  /* An install that already happened is the commonest reason the browser stays
+     silent. getInstalledRelatedApps can only answer that if the manifest lists
+     the app as its own related application, so the button knows to stand down
+     instead of offering an install that cannot happen. */
+  const manifest = JSON.parse(read("public/manifest.webmanifest"));
+  assert.ok(Array.isArray(manifest.related_applications)
+    && manifest.related_applications.some((a) => a.platform === "webapp" && /manifest\.webmanifest$/.test(a.url || "")),
+    "the manifest must list itself as a related webapp");
+  assert.equal(manifest.prefer_related_applications, false);
+  assert.match(page, /getInstalledRelatedApps/);
   // The manual steps are the fallback, and say which platform is yours.
   assert.match(page, /step\.id === os \? "match" : undefined/);
   assert.match(pass, /\.install-grid article\.match/);

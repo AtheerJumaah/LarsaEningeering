@@ -478,8 +478,13 @@ test("the permanent history is browsable and sample data is marked", () => {
 });
 
 test("the service worker ships the corrected engine and the logo", () => {
-  assert.match(sw, /larsa-control-v17/);
-  assert.ok(!/larsa-control-v16"/.test(sw), "the cache name must be bumped past v16");
+  /* Pinning one exact version made this fail on the next release that had to
+     bump it, which is the opposite of what it is guarding. What matters is
+     that the cache name is at or past the release that shipped the corrected
+     engine, so an older cached copy cannot survive. */
+  const version = /larsa-control-v(\d+)/.exec(sw);
+  assert.ok(version && Number(version[1]) >= 17,
+    "the service worker cache must be at or past v17");
   assert.match(sw, /\/icons\/larsa-logo\.svg/);
 });
 
