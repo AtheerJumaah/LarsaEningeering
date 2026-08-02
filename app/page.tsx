@@ -1396,7 +1396,18 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     const approvals = ITEMS.find((row) => row.id === "staff-approvals");
     return approvals ? hasItemPermission(user, approvals, action) : false;
   }
-  if (item.id === "org-structure") return canSeeOrgPortal();    if (item.id === "platform-settings") return Boolean(user.platformAdmin) || hasItemPermission(user, item, "view");    if (item.id === "live-presence") {
+  if (item.id === "org-structure") return canSeeOrgPortal();
+  /* Platform Super Admins always reach platform settings; everyone else falls
+     through to the ordinary grant check for this same item. That fall-through
+     has to be the grant lookup itself — asking hasItemPermission again with
+     the same item recursed forever and blew the stack for every account that
+     is not a Super Admin. */
+  if (item.id === "platform-settings") {
+    if (user.platformAdmin) return true;
+    const settingsGrant = user.permissionProfile?.grants[item.id]?.[action];
+    return settingsGrant === undefined ? legacyCanAct(user, item, action) : settingsGrant;
+  }
+  if (item.id === "live-presence") {
     const live = ITEMS.find((row) => row.id === "staff-live");
     return live ? hasItemPermission(user, live, "view") : true;
   }
@@ -1858,7 +1869,10 @@ function buildHomeSummary(
     title: "Weekly points",
     detail: `${weekApproved} approved of ${weekTarget} target`,
     meta: awaiting ? `${awaiting} awaiting review` : weekApproved >= weekTarget ? "Target reached" : `${Math.max(0, weekTarget - weekApproved)} to go`,
-    tone: weekApproved >= weekTarget ? "done" : awaiting ? "open" : "due",
+    /* Progress towards a weekly target is something to get on with, not a
+       fault. Red is kept for genuinely overdue work, so an ordinary Monday
+       morning no longer reports the week as a problem. */
+    tone: weekApproved >= weekTarget ? "done" : "open",
     itemId: "performance-center",
   });
 
@@ -3661,6 +3675,10 @@ export default function Home() {
   const [clock, setClock] = useState({ baghdad: "", texas: "" });
   const [storageTick, setStorageTick] = useState(0);
   const [recentId, setRecentId] = useState("");
+  /* A short trail of recently opened areas, so Continue Working can offer the
+     last few places as well as the very last one. Ids only — no record data
+     leaves the device, and the list is capped. */
+  const [recentTrail, setRecentTrail] = useState<string[]>([]);
   const [accessUsers, setAccessUsers] = useState<StaffUser[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [growthStore, setGrowthStore] = useState<GrowthStore>({
@@ -3734,6 +3752,10 @@ export default function Home() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setRecentId(localStorage.getItem("larsa-control-recent") || "");
+      try {
+        const trail = JSON.parse(localStorage.getItem("larsa-control-recent-trail") || "[]");
+        if (Array.isArray(trail)) setRecentTrail(trail.filter((id) => typeof id === "string").slice(0, 6));
+      } catch { /* a corrupt trail is simply ignored */ }
       setHydrated(true);
     }, 0);
     return () => clearTimeout(timer);
@@ -3810,17 +3832,28 @@ export default function Home() {
     });
   }, [refs]);
 
-  useEffect(() => {
-    applyThemeToFrames(dark);
-    try { localStorage.setItem("larsa-control-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
-  }, [applyThemeToFrames, dark]);
-
+  /* The saved choice has to be read before anything is written back, or the
+     first render's default overwrites it and dark mode is lost on every
+     reload. themeRead flips once the stored value has been applied; only
+     after that does a change get persisted. */
+  const [themeRead, setThemeRead] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      try { setDark(localStorage.getItem("larsa-control-theme") === "dark"); } catch { /* private mode */ }
+      try {
+        const saved = localStorage.getItem("larsa-control-theme");
+        if (saved === "dark" || saved === "light") setDark(saved === "dark");
+        else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) setDark(true);
+      } catch { /* private mode */ }
+      setThemeRead(true);
     }, 0);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    applyThemeToFrames(dark);
+    if (!themeRead) return;
+    try { localStorage.setItem("larsa-control-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
+  }, [applyThemeToFrames, dark, themeRead]);
 
   const applySessionToFrame = useCallback((engine: Engine, user: StaffUser, method: SignInMethod = "email") => {
     const frame = refs[engine].current;
@@ -5327,6 +5360,11 @@ export default function Home() {
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);
       setRecentId(item.id);
+      setRecentTrail((prev) => {
+        const next = [item.id, ...prev.filter((id) => id !== item.id)].slice(0, 6);
+        try { localStorage.setItem("larsa-control-recent-trail", JSON.stringify(next)); } catch { /* private mode */ }
+        return next;
+      });
     }
     setMenuOpen(false);
   };
@@ -7164,7 +7202,7 @@ export default function Home() {
 
         <section className="workspace">
           <div className={active.native === "overview" ? "native active" : "native"}>
-            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} summary={homeSummary} />
+            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
           </div>
           <div className={active.native === "admin" ? "native active" : "native"}>
             <AdminCenter choose={choose} user={sessionUser} />
@@ -7596,12 +7634,14 @@ function Overview({
   user,
   method,
   recentId,
+  recentTrail,
   summary,
 }: {
   choose: (item: Item, channel?: NavChannel) => void;
   user: StaffUser | null;
   method: SignInMethod | null;
   recentId: string;
+  recentTrail: string[];
   summary: HomeSummary;
 }) {
   const open = (id: string, channel: NavChannel) => {
@@ -7640,6 +7680,10 @@ function Overview({
     return item && canOpenInSession(user, item, method);
   });
   const recentItem = ITEMS.find((item) => item.id === recentId && canOpenInSession(user, item, method));
+  /* Only areas this account may actually open are offered back. */
+  const recentTrailItems = recentTrail
+    .map((id: string) => ITEMS.find((item) => item.id === id && canOpenInSession(user, item, method)))
+    .filter((item): item is Item => Boolean(item));
   const scope = DATA_SCOPES.find((row) => row.id === (user?.permissionProfile?.scope || defaultScopeForPreset(user?.access || "Engineer")));
   const quickCandidateIds = [
     "quick-clock",
@@ -7718,28 +7762,36 @@ function Overview({
             {summary.dueCount ? `${summary.dueCount} need attention` : "Nothing overdue"}
           </span>
         </div>
-        <div className="home-board-grid">
-          <article className="home-stat">
-            <span><Timer size={18} /></span>
-            <div><small>Today</small><b>{summary.openClock ? "Clocked in" : summary.shiftToday || "No shift"}</b>
-              <p>{summary.openClock ? `${summary.openClock.hours.toFixed(1)} h so far` : "Attendance"}</p></div>
-          </article>
-          <article className="home-stat home-stat-ring">
-            <div><small>Weekly points</small><b>{summary.weekApproved} / {summary.weekTarget}</b>
-              <p>{pointsPercent >= 100 ? "Target reached" : `${Math.max(0, summary.weekTarget - summary.weekApproved)} points to go`}</p></div>
-            <Ring value={summary.weekApproved} target={summary.weekTarget} caption="points" size={86} />
-          </article>
+        {/* Today's shift and the weekly points already have their own tiles in
+            the role summary above, so repeating them here only added length.
+            What belongs here is where to carry on and what this account can
+            reach — with Continue Working given the room to be useful. */}
+        <div className="home-board-grid home-board-grid-lean">
+          <button type="button" className="home-stat home-continue" onClick={() => recentItem && choose(recentItem, channelForItem(recentItem))} disabled={!recentItem}>
+            <span><FileClock size={18} /></span>
+            <div><small>Continue working</small><b>{recentItem?.label || "No recent area yet"}</b>
+              <p>{recentItem ? "Pick up where you left off" : "Your last area appears here"}</p></div>
+            <ArrowRight size={17} />
+          </button>
+          {recentTrailItems.length > 1 && (
+            <article className="home-stat home-recent">
+              <span><Timer size={18} /></span>
+              <div><small>Recent</small>
+                <div className="home-recent-list">
+                  {recentTrailItems.slice(1, 4).map((entry: Item) => (
+                    <button type="button" key={entry.id} onClick={() => choose(entry, channelForItem(entry))}>
+                      {entry.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </article>
+          )}
           <article className="home-stat">
             <span><LockKeyhole size={18} /></span>
             <div><small>Data scope</small><b>{quickAccess ? "Own records" : scope?.label || "Assigned access"}</b>
               <p>{modules.length} work areas available</p></div>
           </article>
-          <button type="button" className="home-stat home-continue" onClick={() => recentItem && choose(recentItem, channelForItem(recentItem))} disabled={!recentItem}>
-            <span><FileClock size={18} /></span>
-            <div><small>Continue working</small><b>{recentItem?.label || "No recent area yet"}</b>
-              <p>Pick up where you left off</p></div>
-            <ArrowRight size={17} />
-          </button>
         </div>
         {reminderGroups.length > 0 && (
           <div className="reminder-columns">

@@ -602,3 +602,380 @@ aside.sidebar .nav-item svg { color: #cfd3da; }
 aside.sidebar .nav-item.active,
 aside.sidebar .nav-item.active b,
 aside.sidebar .nav-item.active small { color: #ffffff !important; }
+
+/* ===========================================================================
+   REFINEMENT PASS — tokens, night mode, and the six work-area cards
+
+   Appearance only, and deliberately conservative: the rounded language, the
+   six large cards, their decorative circles, their individual accent colours
+   and the black sidebar are all preserved exactly. What changes is contrast,
+   alignment and consistency — the things that read as unfinished rather than
+   as design.
+   =========================================================================== */
+
+/* --- 1. Semantic tokens ---------------------------------------------------
+   One vocabulary for surfaces, text, focus and status, so a module never has
+   to invent its own colour and then drift from the rest of the product. */
+.unified-app {
+  --surface: var(--panel);
+  --surface-raised: #ffffff;
+  --surface-muted: var(--soft);
+  --text: var(--ink);
+  --text-2: var(--muted);
+  --text-disabled: #9ca3af;
+  --field-bg: #ffffff;
+  --field-border: var(--line);
+  --focus-ring: #2563eb;
+
+  --info: #1d4ed8;      --info-soft: #e5edfd;
+  --success: #15803d;   --success-soft: #dcfce7;
+  --warning: #b45309;   --warning-soft: #fef3c7;
+  --danger: #b91c1c;    --danger-soft: #fee2e2;
+
+  --st-pending: #b45309;   --st-pending-soft: #fef3c7;
+  --st-approved: #15803d;  --st-approved-soft: #dcfce7;
+  --st-rejected: #b91c1c;  --st-rejected-soft: #fee2e2;
+  --st-draft: #4b5563;     --st-draft-soft: #eceef1;
+}
+.unified-app.dark {
+  --surface-raised: #1d212a;
+  --surface-muted: #161a21;
+  --text-disabled: #767e8c;
+  /* Inputs on dark surfaces were rendering as near-white boxes with pale
+     text. They now sit on the panel colour with a legible border. */
+  --field-bg: #12151b;
+  --field-border: #333a47;
+  --focus-ring: #7ea8f7;
+
+  --info: #8ab4f8;      --info-soft: #16233a;
+  --success: #5fd39b;   --success-soft: #12301f;
+  --warning: #f0b357;   --warning-soft: #33260f;
+  --danger: #f28b82;    --danger-soft: #3a1a1a;
+
+  --st-pending: #f0b357;   --st-pending-soft: #33260f;
+  --st-approved: #5fd39b;  --st-approved-soft: #12301f;
+  --st-rejected: #f28b82;  --st-rejected-soft: #3a1a1a;
+  --st-draft: #a8b0bd;     --st-draft-soft: #1f242d;
+}
+
+/* --- 2. The six work-area cards ------------------------------------------
+   Same size, same rounding, same decorative circles. Only the geometry is
+   tightened: equal heights, one shared decoration origin, and states that
+   were previously invisible. */
+.module-grid:not(.quick-grid):not(.accounting-grid) { gap: 18px; }
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble {
+  min-height: 232px;
+  padding: 22px;
+  align-content: start;
+  row-gap: 12px;
+}
+/* Both decorative layers now share one origin, so they read as one layered
+   shape instead of two circles fighting a 32px offset. */
+.module-bubble::after { right: -70px; top: -70px; }
+.module-bubble .module-blob { top: -70px; inset-inline-end: -70px; }
+.module-bubble .module-orb { width: 60px; height: 60px; }
+.module-bubble .module-orb svg { width: 26px; height: 26px; }
+.module-copy { align-content: end; }
+.module-open { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Keyboard focus was relying on the browser default, which the rounded card
+   swallowed. Hover already moved; focus now matches it. */
+.module-bubble:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+  transform: translateY(-3px);
+}
+/* The drag affordance is for arranging cards, not for reading them: it stays
+   available, and appears the moment the card is hovered or focused, but it
+   stops competing with the title at rest. */
+.module-bubble > .grip-dots { opacity: 0; transition: opacity .18s ease; }
+.module-bubble:hover > .grip-dots,
+.module-bubble:focus-within > .grip-dots { opacity: .55; }
+
+/* Night mode: the same six colours, adapted rather than removed. The pale
+   pastels were printing as bright discs on near-black; these are the same
+   hues at night-appropriate depth, with legible OPEN labels. */
+.unified-app.dark .module-bubble.green  { --bubble-soft: #14361f; --bubble-ink: #6fdca6; }
+.unified-app.dark .module-bubble.violet { --bubble-soft: #241f47; --bubble-ink: #b9a7fb; }
+.unified-app.dark .module-bubble.rose   { --bubble-soft: #3d1b28; --bubble-ink: #f9a3b6; }
+.unified-app.dark .module-bubble.amber  { --bubble-soft: #3a2712; --bubble-ink: #f3bd6b; }
+.unified-app.dark .module-bubble.blue   { --bubble-soft: #16294a; --bubble-ink: #8fb6fb; }
+.unified-app.dark .module-bubble.slate  { --bubble-soft: #242a34; --bubble-ink: #b9c2d1; }
+.unified-app.dark .module-bubble.green  .module-blob { background: #1c4a2c; }
+.unified-app.dark .module-bubble.violet .module-blob { background: #2f2860; }
+.unified-app.dark .module-bubble.rose   .module-blob { background: #522435; }
+.unified-app.dark .module-bubble.amber  .module-blob { background: #4d341a; }
+.unified-app.dark .module-bubble.blue   .module-blob { background: #1d3763; }
+.unified-app.dark .module-bubble.slate  .module-blob { background: #2f3644; }
+.unified-app.dark .module-blob { opacity: .55; }
+/* Cards were sinking into the page at night; a slightly raised surface and a
+   readable edge separate them without adding a hard border. */
+.unified-app.dark .module-bubble {
+  background: var(--surface-raised);
+  border-color: #2f3542;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+}
+.unified-app.dark .module-bubble:hover { border-color: color-mix(in srgb, var(--bubble-ink) 45%, #2f3542); }
+.unified-app.dark .module-copy small { color: #a9b1bf; }
+
+/* --- 3. Night-mode contrast fixes named in review ------------------------- */
+/* Selected Home / sidebar rows were barely distinguishable from the rest. */
+.unified-app.dark aside.sidebar .nav-item.active {
+  background: rgba(126, 168, 247, .16);
+  box-shadow: inset 0 0 0 1px rgba(126, 168, 247, .34);
+}
+aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offset: -2px; }
+
+/* Native inputs kept the browser's light styling inside dark panels, which
+   produced white boxes with almost-white text. */
+.unified-app.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.unified-app.dark select,
+.unified-app.dark textarea {
+  background: var(--field-bg);
+  color: var(--ink);
+  border-color: var(--field-border);
+  color-scheme: dark;
+}
+.unified-app.dark input::placeholder,
+.unified-app.dark textarea::placeholder { color: #79808d; }
+.unified-app.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.unified-app.dark input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(.7); }
+
+/* A visible focus ring everywhere, not just where a component remembered. */
+.unified-app :is(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* Helper and chart text was dropping below readable contrast at night. */
+.unified-app.dark :is(.muted, small.muted, .hint, .helper, figcaption) { color: #a9b1bf; }
+.unified-app.dark :is(.recharts-text, .recharts-cartesian-axis-tick-value) tspan { fill: #b6bdc9; }
+.unified-app.dark .recharts-cartesian-grid line { stroke: #2b303b; }
+
+/* Primary actions that vanished on dark surfaces — the HR add button among
+   them — keep their shape and simply become visible again. */
+.unified-app.dark :is(.primary, button.primary, .btn-primary, .add-button, .hr-add) {
+  background: #f3f4f6;
+  color: #14161b;
+  border-color: transparent;
+}
+.unified-app.dark :is(.primary, button.primary, .btn-primary):hover { background: #ffffff; }
+.unified-app.dark :is(.ghost, button.ghost) { border-color: var(--line); color: var(--ink); }
+
+/* --- 4. Status: never colour alone --------------------------------------- */
+.status-dot::before, .badge-dot::before { content: ""; }
+.unified-app :is(.badge, .pill, .status-pill) { border-radius: 999px; font-weight: 800; }
+
+/* --- 5. Shell tidy -------------------------------------------------------- */
+/* The floating Appearance control sat over page content and duplicated the
+   header's theme switch. It stays available, just out of the way. */
+.card-tools-fab, .appearance-fab, [class*="appearance"][class*="fab"] {
+  opacity: .55;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.card-tools-fab:hover, .appearance-fab:hover,
+.card-tools-fab:focus-visible, .appearance-fab:focus-visible { opacity: 1; }
+/* Header groups: times together, then actions, with breathing room between. */
+.topbar, .app-header { gap: 10px; }
+
+/* --- 6. Printed documents stay white ------------------------------------- */
+/* Receipts, statements and reports are financial documents. They print on
+   white regardless of the theme the app happens to be in. */
+@media print {
+  .unified-app, .unified-app.dark, html, body {
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+  .unified-app.dark * {
+    background-color: transparent !important;
+    color: #111111 !important;
+    border-color: #d0d0d0 !important;
+    box-shadow: none !important;
+  }
+  aside.sidebar, .topbar, .app-header, .card-tools-fab, .appearance-fab { display: none !important; }
+}
+
+/* --- 7. Home board: fewer, better tiles ----------------------------------
+   Today's shift and the weekly points moved out of this row because the role
+   summary above already states them. Continue Working takes the room it
+   gained and becomes the primary thing to click. */
+.home-board-grid.home-board-grid-lean {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 1fr);
+}
+.home-board-grid.home-board-grid-lean .home-continue {
+  border-color: color-mix(in srgb, var(--focus-ring) 26%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--focus-ring) 5%, var(--panel)), var(--panel));
+}
+.home-board-grid.home-board-grid-lean .home-continue:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--focus-ring) 46%, var(--line));
+  transform: translateY(-2px);
+}
+.home-recent-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.home-recent-list button {
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-recent-list button:hover { border-color: var(--focus-ring); }
+@media (max-width: 1024px) {
+  .home-board-grid.home-board-grid-lean { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* --- 8. Section headers keep their badge inside the page ------------------
+   The "needs attention" badge was being clipped by the sticky header when a
+   section scrolled under it. */
+.section-head { align-items: center; row-gap: 8px; flex-wrap: wrap; }
+.section-head .black-badge { white-space: nowrap; }
+.home-board { scroll-margin-top: 84px; }
+
+/* Amber for attention, red only for genuinely overdue. */
+.black-badge.due { background: var(--danger); color: #fff; }
+.reminder-row.open i { background: var(--warning); }
+.reminder-row.due i { background: var(--danger); }
+.reminder-row.done i { background: var(--success); }
+
+/* --- 9. Zero-value tiles recede instead of shouting ---------------------- */
+.home-stat.is-empty, .metric-card.is-empty { opacity: .72; }
+.home-stat.is-empty b, .metric-card.is-empty b { color: var(--text-2); font-weight: 800; }
+
+/* --- 10. Tables, modals, inputs: one rounded family ---------------------- */
+.unified-app :is(.data-table, .table-wrap) { border-radius: 18px; overflow: hidden; }
+.unified-app .data-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--soft);
+  color: var(--text-2);
+}
+.unified-app.dark .data-table thead th { background: #1b1f27; color: #b6bdc9; }
+.unified-app :is(.modal, .dialog, .group-dialog, .sheet) { border-radius: 24px; }
+.unified-app :is(input, select, textarea) { border-radius: 12px; }
+.unified-app :is(button, .btn) { border-radius: 12px; }
+.unified-app :is(.pill, .badge, .black-badge, .access-pill, .eyebrow) { border-radius: 999px; }
+
+/* Modals must always fit the viewport, on any device. */
+.unified-app :is(.modal, .dialog, .group-dialog) {
+  max-height: min(88dvh, 900px);
+  max-width: min(94vw, 720px);
+  overflow: auto;
+}
+
+/* --- 11. Engineering: date range as a real segmented control -------------
+   Day / Week / Month / 6 Months / Year were rendering as loose buttons with
+   no shared frame and no clear selected state, which read as unfinished. */
+.unified-app :is(.range-tabs, .seg, .segmented, [role="tablist"].range) {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.unified-app :is(.range-tabs, .seg, .segmented, [role="tablist"].range) > button {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 800;
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.unified-app :is(.range-tabs, .seg, .segmented, [role="tablist"].range) > button:hover { color: var(--ink); }
+.unified-app :is(.range-tabs, .seg, .segmented, [role="tablist"].range) > button:is(.active, [aria-selected="true"]) {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0,0,0,.12);
+}
+.unified-app.dark :is(.range-tabs, .seg, .segmented, [role="tablist"].range) > button:is(.active, [aria-selected="true"]) {
+  background: #2a303c;
+  color: #fff;
+}
+/* From / To pairs line up instead of drifting apart. */
+.unified-app .date-range { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.unified-app .date-range input[type="date"] { min-width: 148px; }
+
+/* --- 12. HR: a hero in proportion, and an Add button that is always visible */
+.unified-app .hr-hero, .unified-app .overview-hero.hr {
+  padding-block: 20px;
+  min-height: 0;
+}
+.unified-app .hr-hero h2, .unified-app .overview-hero.hr h2 { margin-block: 2px; }
+/* Employee cards align on one baseline whatever the name length. */
+.unified-app .employee-card, .unified-app .hr-card {
+  display: grid;
+  align-content: start;
+  min-height: 168px;
+  border-radius: 22px;
+}
+.unified-app :is(.employee-card, .hr-card) .avatar,
+.unified-app :is(.employee-card, .hr-card) .initials {
+  border-radius: 50%;
+  flex: none;
+}
+/* Secondary and destructive row actions move behind an overflow control
+   rather than sitting permanently beside every person. */
+.unified-app :is(.employee-card, .hr-card) .row-actions .danger { order: 99; }
+
+/* --- 13. Time & Attendance: shifts told apart by more than shade ---------
+   Several shift types were near-identical greens. Each type now has its own
+   hue plus a written label, so they are distinguishable without relying on
+   colour vision. */
+.unified-app .shift-chip { border-radius: 999px; font-weight: 800; border: 1px solid transparent; }
+.unified-app .shift-chip.mode-office  { background: var(--success-soft); color: var(--success); border-color: color-mix(in srgb, var(--success) 34%, transparent); }
+.unified-app .shift-chip.mode-online  { background: var(--info-soft);    color: var(--info);    border-color: color-mix(in srgb, var(--info) 34%, transparent); }
+.unified-app .shift-chip.mode-site    { background: var(--warning-soft); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 34%, transparent); }
+.unified-app .shift-chip.mode-other   { background: var(--st-draft-soft);color: var(--st-draft);border-color: color-mix(in srgb, var(--st-draft) 34%, transparent); }
+.shift-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 12px; font-weight: 700; color: var(--text-2); }
+.shift-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-inline-end: 6px; }
+
+/* Big schedules: the employee column and the date row stay put while the
+   grid scrolls, so a name is never lost halfway across a week. */
+.unified-app .schedule-table { border-collapse: separate; border-spacing: 0; }
+.unified-app .schedule-table thead th { position: sticky; top: 0; z-index: 3; background: var(--soft); }
+.unified-app .schedule-table :is(td, th):first-child {
+  position: sticky; inset-inline-start: 0; z-index: 2;
+  background: var(--panel);
+  box-shadow: 1px 0 0 var(--line);
+}
+.unified-app .schedule-table thead th:first-child { z-index: 4; }
+
+/* --- 14. Administration: permissions that can be read ------------------- */
+.unified-app .perm-group { border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.unified-app .perm-group > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 850;
+  background: var(--soft); list-style: none;
+}
+.unified-app .perm-group > summary::-webkit-details-marker { display: none; }
+.unified-app .perm-changed { box-shadow: inset 3px 0 0 var(--focus-ring); }
+.unified-app .save-bar {
+  position: sticky; bottom: 0; z-index: 5;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 18px 18px;
+  padding: 12px 16px;
+}
+
+/* --- 15. Responsive safety nets ----------------------------------------- */
+@media (max-width: 1024px) {
+  .unified-app :is(.form-grid, .field-grid) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .unified-app :is(.form-grid, .field-grid) { grid-template-columns: minmax(0, 1fr); }
+  .unified-app :is(.modal, .dialog, .group-dialog) { max-width: 96vw; border-radius: 20px; }
+  /* The six cards stack as cards, never as plain rows. */
+  .module-grid:not(.quick-grid):not(.accounting-grid) { grid-template-columns: minmax(0, 1fr) !important; }
+  .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble { min-height: 150px; padding: 18px; border-radius: 24px; }
+  .module-bubble::after, .module-bubble .module-blob { width: 118px; height: 118px; top: -56px; inset-inline-end: -56px; right: -56px; }
+  .topbar, .app-header { flex-wrap: wrap; row-gap: 8px; }
+}
+/* Financial figures must never be clipped or wrapped mid-number. */
+.unified-app :is(.money, .amount, td.right, .fin-tile b) { font-variant-numeric: tabular-nums; white-space: nowrap; }
