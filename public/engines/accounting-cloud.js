@@ -1960,6 +1960,29 @@
     try { if (window.__larsaProductionMode === true) return true; } catch (e) {}
     return ACCT.on === true;
   }
+  /* Inside the authenticated Larsa Control shell the engine's own top bar
+     repeats controls the global header already provides — branding, the
+     theme switch, the signed-in user and Sign out. Those are suppressed so
+     there is one shell, not two. The currency and language toggles stay:
+     they are accounting's own, and Arabic receipts depend on them. */
+  function suppressEmbeddedShell() {
+    if (!inProduction()) return;
+    if (document.getElementById("acct-shell-tidy")) return;
+    var css = document.createElement("style");
+    css.id = "acct-shell-tidy";
+    css.textContent = [
+      "#appTitle,#themeBtn,#signOutBtn,.topbar .user-chip{display:none!important}",
+      /* What remains is accounting's own: section nav, currency, language. */
+      ".topbar{min-height:0;padding-top:6px;padding-bottom:6px;gap:10px}",
+      ".topbar .tb-right{gap:8px;margin-inline-start:auto}",
+      ".topbar .tb-left{gap:8px}",
+      /* The project title was disappearing under the sticky bar. */
+      ".view-scroll{scroll-padding-top:64px}",
+      ".page-head h1{scroll-margin-top:72px}",
+    ].join("\n");
+    (document.head || document.documentElement).appendChild(css);
+  }
+
   var LEGACY_SETTINGS_CARDS = [
     /supabase\s*sync/i, /production\s*setup/i, /restore\s*points?/i,
     /local[-\s]?first/i, /audit\s*trail/i, /audit\s*log/i,
@@ -2728,6 +2751,7 @@
     wrapClientStatement();
     wrapFundingSchema();
     wrapProjectSchema();
+    suppressEmbeddedShell();
     bootstrap();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") setTimeout(install, 0);
