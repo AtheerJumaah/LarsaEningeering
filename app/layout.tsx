@@ -36,7 +36,11 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#000000",
+  /* The app's own background, not black. This is what the browser paints the
+     installed window's title bar with, and a black strip above a near-white
+     app reads as a separate band rather than the top of the app. The page
+     keeps this in step with the light/dark toggle at runtime. */
+  themeColor: "#f7f7f5",
 };
 
 export default function RootLayout({

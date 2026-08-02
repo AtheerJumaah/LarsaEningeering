@@ -1304,3 +1304,27 @@ aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
   .topbar .page-heading { -webkit-app-region: drag; app-region: drag; }
   .topbar button, .topbar .clocks, .topbar .top-home { -webkit-app-region: no-drag; app-region: no-drag; }
 }
+
+/* --- 22. The page heading ------------------------------------------------
+
+   The title was rendering lighter than its own subtitle: Tailwind's reset
+   drops h1 back to the body weight, and nothing put it back, while the small
+   grey line underneath was set at 700. So the least important text in the bar
+   was the boldest thing in it. Weight goes to the title and comes out of the
+   subtitle, which is all this needed. */
+.unified-app .page-heading h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.025em;
+  line-height: 1.12;
+  color: var(--ink);
+}
+.unified-app .page-heading p {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2, var(--muted));
+}
+@media (max-width: 760px) {
+  .unified-app .page-heading h1 { font-size: 17px; letter-spacing: -.02em; }
+}

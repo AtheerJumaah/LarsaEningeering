@@ -3874,6 +3874,15 @@ export default function Home() {
 
   useEffect(() => {
     applyThemeToFrames(dark);
+    /* Installed on a desktop, the browser paints the window's title bar in the
+       app's theme colour. That colour was a flat black while the app's own top
+       bar is near-white, so the strip carrying the minimise / maximise / close
+       buttons read as a black band bolted above the app instead of part of it.
+       Kept in step with the theme here, the two surfaces meet as one. */
+    try {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute("content", dark ? "#0d0f14" : "#f7f7f5");
+    } catch { /* no document in a non-browser environment */ }
     if (!themeRead) return;
     try { localStorage.setItem("larsa-control-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
   }, [applyThemeToFrames, dark, themeRead]);
