@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   CircleDollarSign,
   ClipboardCheck,
   ClipboardList,
@@ -28,6 +29,7 @@ import {
   FileBarChart,
   FileClock,
   FileSpreadsheet,
+  FileText,
   FolderLock,
   FolderKanban,
   Gauge,
@@ -110,7 +112,8 @@ type NativeView =
   | "performanceHistory"
   | "projects"
   | "notifications"
-  | "constructionFinancials" | "orgStructure" | "platformSettings";
+  | "constructionFinancials" | "orgStructure" | "platformSettings"
+  | "myPay";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -213,6 +216,9 @@ type StaffUser = {
 type Item = {
   id: string;
   label: string;
+  /* Only where a label is genuinely used in Arabic. The shell is English;
+     the accounting engine is bilingual, and My Pay is reachable from both. */
+  labelAr?: string;
   description: string;
   code: string;
   engine?: Engine;
@@ -439,6 +445,13 @@ const NOTIFY_EVENTS: { id: string; label: string; description: string; audience:
   { id: "accounting.flag", label: "Accounting review flag", description: "An entry is flagged for review", audience: "Finance" },
   { id: "project.updated", label: "Project updated", description: "Progress or status changes on a project you can see", audience: "Assigned" },
   { id: "admin.broadcast", label: "Admin announcement", description: "A targeted message sent to you from Notifications", audience: "Everyone" },
+  /* Pay events. The body never carries a figure: a notification preview can
+     appear on a lock screen, in an email client, or over somebody's shoulder,
+     and a salary is not something to leak in a preview. The amount is behind
+     the tap, in My Pay, where the record is. */
+  { id: "pay.published", label: "Payslip available", description: "A pay period has been published for you", audience: "Everyone" },
+  { id: "pay.paid", label: "Payment recorded", description: "A payroll payment has been recorded against your pay", audience: "Everyone" },
+  { id: "pay.commission", label: "Commission updated", description: "One of your commissions was approved, scheduled, or paid", audience: "Everyone" },
 ];
 const NOTIFY_STORE_KEY = "larsaNotificationsV1";
 // Sign-in convenience. The address and the "stay signed in" session are stored;
@@ -557,6 +570,14 @@ const GROUPS: Group[] = [
         description: "Choose a work area",
         code: "OV",
         native: "overview",
+      },
+      {
+        id: "my-pay",
+        label: "My Pay",
+        description: "Salary, commissions, and payment history",
+        labelAr: "رواتبي ومستحقاتي",
+        code: "MY",
+        native: "myPay",
       },
     ],
   },
@@ -693,9 +714,20 @@ const MY_POINTS_ITEM: Item = {
   code: "MP",
   native: "myPoints",
 };
-const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_ITEM, QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, ACCOUNTING_HUB_ITEM, SETTINGS_ITEM, REQUESTS_ITEM, PRESENCE_ITEM];
+/* An employee's own pay. Personal, like My Settings — it is not a seventh
+   work area, and it never shows anybody else's figures. The Arabic label is
+   carried on the item so the areas that do speak Arabic can use it. */
+const MY_PAY_ITEM: Item = {
+  id: "my-pay",
+  label: "My Pay",
+  description: "Salary, commissions, and payment history",
+  labelAr: "رواتبي ومستحقاتي",
+  code: "MY",
+  native: "myPay",
+};
+const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_ITEM, QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, ACCOUNTING_HUB_ITEM, SETTINGS_ITEM, REQUESTS_ITEM, PRESENCE_ITEM, MY_PAY_ITEM];
 const DEFAULT_ITEM = ITEMS.find((item) => item.id === "overview")!;
-const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "my-points", "staff-development", "my-settings", "my-requests", "live-presence"]);
+const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "my-points", "staff-development", "my-settings", "my-requests", "live-presence", "my-pay"]);
 const PERMISSION_ACTIONS: { id: PermissionAction; label: string }[] = [
   { id: "view", label: "View" },
   { id: "add", label: "Add" },
@@ -902,6 +934,7 @@ const ACCOUNTING_TREE: { id: string; label: string; description: string; icon: s
 
 const ICONS: Record<string, LucideIcon> = {
   overview: Gauge,
+  "my-pay": Wallet,
   "staff-dashboard": LayoutDashboard,
   "staff-clock": Timer,
   "staff-live": Radio,
@@ -1440,6 +1473,11 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     return GROUPS.find((group) => group.label === "Accounting")!.items
       .some((row) => hasItemPermission(user, row, "view"));
   }
+  /* Your own pay is yours, the way your own settings are. There is nothing
+     to grant: the record is scoped to the signed-in person on the server, and
+     seeing somebody ELSE's pay is a separate backend permission that no
+     screen here can hand out. */
+  if (item.id === "my-pay") return true;
   if (item.id === "my-points") {
     const personalGrant = user.permissionProfile?.grants["staff-performance"]?.add;
     return personalGrant === undefined
@@ -1565,7 +1603,7 @@ function channelForItem(item: Item): NavChannel {
   ) return "admin";
   // Sits with payroll, because that is the permission it follows.
   if (item.id === "sales-commissions") return "accounting";
-  if (item.id === "my-settings") return "home";
+  if (item.id === "my-settings" || item.id === "my-pay") return "home";
   if (item.id === "my-requests" || item.id === "live-presence") return "time";
   if (item.id === "quick-clock" || item.id === "week-schedule") return "time";
   if (
@@ -7489,6 +7527,9 @@ export default function Home() {
               payroll={accountingSnapshot.payroll}
             />
           </div>
+          <div className={active.native === "myPay" ? "native active" : "native"}>
+            <MyPay viewer={sessionUser} active={active.native === "myPay"} />
+          </div>
           <div className={active.native === "constructionFinancials" ? "native active" : "native"}>
             <ConstructionFinancials snapshot={accountingSnapshot} viewer={sessionUser} />
           </div>
@@ -7838,6 +7879,7 @@ function Overview({
   const scope = DATA_SCOPES.find((row) => row.id === (user?.permissionProfile?.scope || defaultScopeForPreset(user?.access || "Engineer")));
   const quickCandidateIds = [
     "quick-clock",
+    "my-pay",
     "my-points",
     "my-requests",
     "performance-center",
@@ -9486,6 +9528,660 @@ function ProjectPortal({
 /* What each person costs and earns over a period, in one place: commission
    from the revenue they closed, plus payroll. The accounting engine stays the
    system of record — nothing is written here, only totalled. */
+/* ===========================================================================
+   My Pay — an employee's own salary, commissions and payment history.
+
+   Everything on this screen comes from one server call, pay_my_statement,
+   which scopes itself to the signed-in person before it reads a row. There is
+   no client-side filtering of somebody else's data, because none of somebody
+   else's data ever arrives. Nothing is computed here that the payroll run did
+   not already approve: this screen formats authoritative figures, it does not
+   invent salary, tax or deduction arithmetic.
+
+   Money is never mixed. Amounts carry the historical exchange-rate snapshot
+   taken when they were recorded, so a later change to the platform rate
+   cannot move a figure on this page, and USD and IQD are reported side by
+   side rather than added together.
+   =========================================================================== */
+type PayStatement = {
+  ok?: boolean;
+  found?: boolean;
+  employee?: {
+    email?: string; employee_no?: string | null; full_name?: string;
+    position?: string | null; department?: string | null; region?: string | null;
+    employment_start?: string | null; employment_type?: string | null;
+    pay_schedule?: string | null; salary_currency?: string | null;
+    base_salary?: number | null; payment_method?: string | null;
+    payment_ref_masked?: string | null; show_pending_commissions?: boolean;
+  };
+  range?: { from?: string | null; to?: string | null; note?: string | null };
+  totals?: Record<string, number | string | null>;
+  by_currency?: Record<string, { net?: number }>;
+  periods?: PayPeriodRow[];
+  months?: { month: string; base_iqd: number; commission_iqd: number; bonus_iqd: number; net_iqd: number }[];
+  commissions?: PayCommissionRow[];
+  note?: string;
+};
+type PayPeriodRow = {
+  period_id: string; period_no: string; label?: string | null;
+  period_start: string; period_end: string; pay_date?: string | null;
+  currency: string; status: string; published_at?: string | null;
+  base_salary_iqd: number; commission_iqd: number; bonus_iqd: number;
+  deduction_iqd: number; advance_repayment_iqd: number; reimbursement_iqd: number;
+  net_iqd: number; net_usd: number; paid_iqd: number; last_paid_on?: string | null;
+  currencies?: string[];
+  items?: { id: string; item_type: string; description?: string | null;
+    original_amount: number; original_currency: string; exchange_rate: number;
+    rate_date?: string | null; rate_source?: string | null;
+    amount_iqd: number; amount_usd: number; sign: number; status: string }[];
+};
+type PayCommissionRow = {
+  id: string; commission_no: string; title: string;
+  project_id?: string | null; client?: string | null;
+  earning_start?: string | null; earning_end?: string | null;
+  basis: string; rate?: number | null; base_amount?: number | null; base_currency?: string | null;
+  rule_snapshot?: Record<string, unknown>;
+  original_amount: number; original_currency: string; exchange_rate: number;
+  rate_date?: string | null; rate_source?: string | null;
+  amount_iqd: number; amount_usd: number; status: string;
+  submitted_at?: string | null; approved_at?: string | null; approved_by?: string | null;
+  paid_at?: string | null; period_no?: string | null; reverses_id?: string | null;
+  created_at?: string | null;
+};
+
+/* Written status, an icon and a colour — never colour alone, and never a
+   word that implies money has moved when it has not. */
+const PAY_STATUS: Record<string, { label: string; tone: string; icon: LucideIcon }> = {
+  draft: { label: "Draft", tone: "draft", icon: FileText },
+  pending_review: { label: "Pending review", tone: "pending", icon: Clock },
+  pending_approval: { label: "Pending approval", tone: "pending", icon: Clock },
+  approved: { label: "Approved — not yet paid", tone: "approved", icon: CheckCircle2 },
+  scheduled: { label: "Scheduled for payment", tone: "approved", icon: CalendarDays },
+  partially_paid: { label: "Partially paid", tone: "partial", icon: CircleDollarSign },
+  paid: { label: "Paid", tone: "paid", icon: CheckCircle2 },
+  rejected: { label: "Rejected", tone: "rejected", icon: X },
+  reversed: { label: "Reversed", tone: "rejected", icon: RotateCcw },
+  void: { label: "Void", tone: "rejected", icon: X },
+  estimated: { label: "Expected", tone: "draft", icon: Clock },
+};
+function payStatus(key: string) {
+  return PAY_STATUS[key] || { label: key.replace(/_/g, " "), tone: "draft", icon: FileText };
+}
+
+/* IQD is whole; USD keeps its cents, because a commission of $12.50 is a real
+   amount somebody is owed. Neither is ever added to the other. */
+function payMoney(amount: number, currency: string) {
+  const value = Number(amount) || 0;
+  if (currency === "USD") {
+    return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return `${Math.round(value).toLocaleString("en-US")} IQD`;
+}
+function payDate(value?: string | null) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
+  return parsed.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+function payMonthLabel(key: string) {
+  const [year, month] = key.split("-");
+  const parsed = new Date(Number(year), Number(month) - 1, 1);
+  return Number.isNaN(parsed.getTime()) ? key : parsed.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+}
+function payNumber(source: Record<string, number | string | null> | undefined, key: string) {
+  const raw = source?.[key];
+  const value = typeof raw === "string" ? Number(raw) : raw;
+  return Number.isFinite(value as number) ? (value as number) : 0;
+}
+
+const PAY_RANGES = [
+  { id: "this-month", label: "This month" },
+  { id: "last-month", label: "Last month" },
+  { id: "3m", label: "Last 3 months" },
+  { id: "6m", label: "Last 6 months" },
+  { id: "ytd", label: "Year to date" },
+  { id: "year", label: "This calendar year" },
+  { id: "joining", label: "Since joining Larsa" },
+  { id: "all", label: "All history" },
+  { id: "custom", label: "Custom range" },
+];
+
+function payRangeDates(id: string, joined?: string | null, customFrom?: string, customTo?: string) {
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const now = new Date();
+  const startOfMonth = (offset: number) => new Date(now.getFullYear(), now.getMonth() + offset, 1);
+  const endOfMonth = (offset: number) => new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+  switch (id) {
+    case "this-month": return { from: iso(startOfMonth(0)), to: iso(endOfMonth(0)) };
+    case "last-month": return { from: iso(startOfMonth(-1)), to: iso(endOfMonth(-1)) };
+    case "3m": return { from: iso(startOfMonth(-2)), to: iso(endOfMonth(0)) };
+    case "6m": return { from: iso(startOfMonth(-5)), to: iso(endOfMonth(0)) };
+    case "ytd": return { from: iso(new Date(now.getFullYear(), 0, 1)), to: iso(now) };
+    case "year": return { from: iso(new Date(now.getFullYear(), 0, 1)), to: iso(new Date(now.getFullYear(), 11, 31)) };
+    /* The official start date, and only that. When HR has not recorded one the
+       server opens the range up and says so, rather than guessing a date. */
+    case "joining": return { from: joined || null, to: iso(now) };
+    case "all": return { from: null, to: iso(now) };
+    case "custom": return { from: customFrom || null, to: customTo || iso(now) };
+    default: return { from: null, to: iso(now) };
+  }
+}
+
+/* Payroll events happen on the server, hours or days before the employee
+   opens the app. Rather than pretend there is a push channel that does not
+   exist, this compares what the ledger now says against what this device was
+   last told, and raises the difference. Amounts stay out of the message. */
+const PAY_SEEN_KEY = "larsa-control-pay-seen";
+function announcePayChanges(statement: PayStatement, viewer: StaffUser | null) {
+  if (!viewer) return;
+  try {
+    const seen = JSON.parse(localStorage.getItem(PAY_SEEN_KEY) || "{}") as Record<string, string>;
+    const next: Record<string, string> = { ...seen };
+    const raise = (event: string, title: string, body: string) =>
+      raiseNotification({ event, title, body, itemId: "my-pay", fromName: "Payroll", recipients: [viewer] });
+
+    (statement.periods || []).forEach((period) => {
+      const key = `p:${period.period_id}`;
+      const stamp = `${period.published_at || ""}|${period.status}|${period.paid_iqd}`;
+      if (seen[key] === stamp) { next[key] = stamp; return; }
+      if (!seen[key]) {
+        raise("pay.published", "Payslip available", `Your payslip for ${period.label || period.period_no} is ready to view.`);
+      } else if (period.status === "paid" || period.status === "partially_paid") {
+        raise("pay.paid", "Payment recorded", `A payment was recorded against ${period.label || period.period_no}.`);
+      }
+      next[key] = stamp;
+    });
+
+    (statement.commissions || []).forEach((row) => {
+      const key = `c:${row.id}`;
+      if (seen[key] === row.status) { next[key] = row.status; return; }
+      if (seen[key] && ["approved", "scheduled", "paid", "rejected"].includes(row.status)) {
+        raise("pay.commission", "Commission updated", `"${row.title}" is now ${payStatus(row.status).label.toLowerCase()}.`);
+      }
+      next[key] = row.status;
+    });
+
+    localStorage.setItem(PAY_SEEN_KEY, JSON.stringify(next));
+  } catch { /* a device that cannot remember simply does not repeat itself */ }
+}
+
+function MyPay({ viewer, active }: { viewer: StaffUser | null; active: boolean }) {
+  const [rangeId, setRangeId] = useState("6m");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [data, setData] = useState<PayStatement | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [openPeriod, setOpenPeriod] = useState<string>("");
+  const [slip, setSlip] = useState<Record<string, unknown> | null>(null);
+  const [slipBusy, setSlipBusy] = useState(false);
+  const [loadKey, setLoadKey] = useState(0);
+
+  const joined = data?.employee?.employment_start || null;
+  const range = payRangeDates(rangeId, joined, customFrom, customTo);
+
+  const actor = useMemo(() => (viewer ? {
+    email: viewer.email || "",
+    name: viewer.name || "",
+    role: accountingRole(viewer),
+  } : null), [viewer]);
+
+  useEffect(() => {
+    if (!active || !actor) return;
+    if (rangeId === "custom" && !customFrom) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const client = supabaseConfigured() ? getSupabaseClient() : null;
+      if (!client) {
+        setNote("My Pay reads the shared payroll ledger, which is not connected on this device.");
+        setData(null);
+        return;
+      }
+      if (!actor.email) {
+        setNote("This account has no email address, so it cannot be matched to a payroll record. Ask an administrator to add one.");
+        setData(null);
+        return;
+      }
+      setBusy(true);
+      client.rpc("pay_my_statement", {
+        actor,
+        p_from: range.from,
+        p_to: range.to,
+        p_employee_email: null,
+      }).then(({ data: payload, error }) => {
+        if (cancelled) return;
+        setBusy(false);
+        if (error || !payload) {
+          setNote("Could not reach the payroll ledger just now. No figures are shown rather than stale ones.");
+          setData(null);
+          return;
+        }
+        setNote("");
+        const next = payload as PayStatement;
+        setData(next);
+        announcePayChanges(next, viewer);
+      }, () => {
+        if (cancelled) return;
+        setBusy(false);
+        setNote("Could not reach the payroll ledger just now. No figures are shown rather than stale ones.");
+        setData(null);
+      });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+    // range is derived from these three, and actor from the viewer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, actor, rangeId, customFrom, customTo, loadKey]);
+
+  const totals = data?.totals;
+  const periods = data?.periods || [];
+  const months = data?.months || [];
+  const commissions = data?.commissions || [];
+  const employee = data?.employee;
+  const byCurrency = data?.by_currency || {};
+  const currencies = Object.keys(byCurrency);
+
+  const netIqd = payNumber(totals, "net_iqd");
+  const paidIqd = payNumber(totals, "paid_iqd");
+  const outstanding = payNumber(totals, "outstanding_iqd");
+  const latestStatus = periods[0]?.status || (paidIqd > 0 ? "partially_paid" : periods.length ? "approved" : "");
+
+  const openSlip = (periodId: string) => {
+    if (!actor) return;
+    const client = supabaseConfigured() ? getSupabaseClient() : null;
+    if (!client) return;
+    setSlipBusy(true);
+    client.rpc("pay_payslip", { actor, p_period_id: periodId, p_employee_email: null })
+      .then(({ data: payload, error }) => {
+        setSlipBusy(false);
+        if (error || !payload) { setNote("That payslip could not be opened."); return; }
+        setSlip(payload as Record<string, unknown>);
+      }, () => { setSlipBusy(false); setNote("That payslip could not be opened."); });
+  };
+
+  if (!viewer) return <div className="native-scroll" />;
+
+  return (
+    <div className="native-scroll pay-scroll">
+      <section className="overview-hero pay-hero">
+        <div>
+          <span className="eyebrow">My Pay</span>
+          <h2>{employee?.full_name || viewer.name}</h2>
+          <p>Salary, commissions, and payment history — visible only to you.</p>
+        </div>
+        {employee && (
+          <dl className="pay-identity">
+            {employee.employee_no && <div><dt>Employee ID</dt><dd>{employee.employee_no}</dd></div>}
+            {employee.position && <div><dt>Position</dt><dd>{employee.position}</dd></div>}
+            {employee.department && <div><dt>Department</dt><dd>{employee.department}</dd></div>}
+            <div><dt>Started</dt><dd>{employee.employment_start ? payDate(employee.employment_start) : "Not recorded"}</dd></div>
+            <div><dt>Period shown</dt><dd>{range.from ? payDate(range.from) : "All history"} → {payDate(range.to)}</dd></div>
+            <div><dt>Last payment</dt><dd>{payDate(totals?.last_paid_on as string)}</dd></div>
+          </dl>
+        )}
+      </section>
+
+      <section className="pay-controls">
+        <div className="pay-range" role="group" aria-label="Reporting period">
+          {PAY_RANGES.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={rangeId === option.id ? "is-on" : ""}
+              aria-pressed={rangeId === option.id}
+              onClick={() => setRangeId(option.id)}
+            >{option.label}</button>
+          ))}
+        </div>
+        {rangeId === "custom" && (
+          <div className="pay-custom">
+            <label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label>
+            <label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label>
+          </div>
+        )}
+        {latestStatus && (
+          <span className={`pay-status is-${payStatus(latestStatus).tone}`}>
+            {(() => { const Icon = payStatus(latestStatus).icon; return <Icon size={14} />; })()}
+            {payStatus(latestStatus).label}
+          </span>
+        )}
+        <button type="button" className="btn small" onClick={() => setLoadKey((n) => n + 1)} disabled={busy}>
+          <RotateCcw size={14} /> {busy ? "Loading…" : "Refresh"}
+        </button>
+      </section>
+
+      {note && <p className="pay-note" role="status">{note}</p>}
+      {data?.range?.note && <p className="pay-note soft" role="status">{data.range.note}</p>}
+      {data && data.found === false && (
+        <div className="empty">No payroll record is set up for this account yet. Your accountant sets one up when your first pay period is prepared.</div>
+      )}
+
+      {data?.found && (
+        <>
+          <section className="pay-cards" aria-label="Earnings summary">
+            <PayCard label="Base salary" value={payNumber(totals, "base_salary_iqd")} />
+            <PayCard label="Approved commissions" value={payNumber(totals, "approved_commission_iqd")} tone="good" />
+            <PayCard label="Pending commissions" value={payNumber(totals, "pending_commission_iqd")} tone="pending"
+              hint="Not yet approved — not money you have been paid." />
+            <PayCard label="Bonuses" value={payNumber(totals, "bonus_iqd")} />
+            <PayCard label="Deductions" value={payNumber(totals, "deduction_iqd")} tone="minus" />
+            <PayCard label="Advance repayments" value={payNumber(totals, "advance_repayment_iqd")} tone="minus" />
+            <PayCard label="Reimbursements" value={payNumber(totals, "reimbursement_iqd")}
+              hint="Expenses paid back to you — not part of salary." />
+            <PayCard label="Net earnings" value={netIqd} tone="strong" />
+            <PayCard label="Amount paid" value={paidIqd} tone="good" />
+            <PayCard label="Approved, not yet paid" value={outstanding} tone={outstanding > 0 ? "pending" : "good"} />
+          </section>
+
+          <section className="pay-meta">
+            <span><b>{payNumber(totals, "periods")}</b> pay periods</span>
+            <span><b>{payMoney(payNumber(totals, "average_month_iqd"), "IQD")}</b> average per period</span>
+            {currencies.length > 1 && (
+              <span className="pay-split">
+                Paid in {currencies.map((code) => (
+                  <b key={code}>{payMoney(Number(byCurrency[code]?.net || 0), code)}</b>
+                )).reduce((all, node, index) => index === 0 ? [node] : [...all, <i key={`sep${index}`}> and </i>, node], [] as React.ReactNode[])}
+                {" "}— shown separately, never added together.
+              </span>
+            )}
+          </section>
+
+          <PayCharts months={months} paid={paidIqd} outstanding={outstanding} />
+
+          <section className="pay-block">
+            <div className="section-head"><h3>Pay periods</h3></div>
+            {periods.length === 0 ? (
+              <div className="empty compact">No published pay periods fall inside this range.</div>
+            ) : (
+              <div className="pay-periods">
+                {periods.map((row) => {
+                  const meta = payStatus(row.status);
+                  const Icon = meta.icon;
+                  const isOpen = openPeriod === row.period_id;
+                  return (
+                    <article key={row.period_id} className={isOpen ? "pay-period is-open" : "pay-period"}>
+                      <button type="button" className="pay-period-head" onClick={() => setOpenPeriod(isOpen ? "" : row.period_id)} aria-expanded={isOpen}>
+                        <span className="pay-period-when">
+                          <b>{row.label || `${payDate(row.period_start)} – ${payDate(row.period_end)}`}</b>
+                          <small>{row.period_no} · paid {payDate(row.pay_date)}</small>
+                        </span>
+                        <span className="pay-period-figs">
+                          <span><small>Net</small><b>{payMoney(row.net_iqd, "IQD")}</b></span>
+                          <span><small>Paid</small><b>{payMoney(row.paid_iqd, "IQD")}</b></span>
+                        </span>
+                        <span className={`pay-status is-${meta.tone}`}><Icon size={13} />{meta.label}</span>
+                        <ChevronRight size={16} className="pay-chev" />
+                      </button>
+                      {isOpen && (
+                        <div className="pay-period-body">
+                          <table className="data-table pay-table">
+                            <thead>
+                              <tr><th>Component</th><th>Detail</th><th className="right">Amount</th><th>Rate used</th><th className="right">IQD equivalent</th></tr>
+                            </thead>
+                            <tbody>
+                              {(row.items || []).map((item) => (
+                                <tr key={item.id}>
+                                  <td>{item.item_type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</td>
+                                  <td>{item.description || "—"}</td>
+                                  <td className="right">{item.sign < 0 ? "−" : ""}{payMoney(item.original_amount, item.original_currency)}</td>
+                                  <td>{item.original_currency === "IQD" ? "—" : `1 USD = ${Number(item.exchange_rate).toLocaleString("en-US")} IQD`}</td>
+                                  <td className="right">{item.sign < 0 ? "−" : ""}{payMoney(item.amount_iqd, "IQD")}</td>
+                                </tr>
+                              ))}
+                              <tr className="pay-total-row">
+                                <td colSpan={4}><b>Net pay</b></td>
+                                <td className="right"><b>{payMoney(row.net_iqd, "IQD")}</b></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div className="rowActions">
+                            <button type="button" className="btn small" onClick={() => openSlip(row.period_id)} disabled={slipBusy}>
+                              <FileText size={14} /> {slipBusy ? "Opening…" : "Payslip"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="pay-block">
+            <div className="section-head"><h3>Commissions</h3></div>
+            {commissions.length === 0 ? (
+              <div className="empty compact">No commissions in this range.</div>
+            ) : (
+              <div className="pay-commissions">
+                {commissions.map((row) => {
+                  const meta = payStatus(row.status);
+                  const Icon = meta.icon;
+                  return (
+                    <article key={row.id} className="pay-commission">
+                      <header>
+                        <b>{row.title}</b>
+                        <span className={`pay-status is-${meta.tone}`}><Icon size={13} />{meta.label}</span>
+                      </header>
+                      <p className="pay-commission-amount">{payMoney(row.original_amount, row.original_currency)}</p>
+                      <dl>
+                        {row.client && <div><dt>Client</dt><dd>{row.client}</dd></div>}
+                        <div><dt>Earned</dt><dd>{payDate(row.earning_start)} – {payDate(row.earning_end)}</dd></div>
+                        <div><dt>Basis</dt><dd>{row.basis === "percent"
+                          ? `${((Number(row.rate) || 0) * 100).toFixed(2)}% of ${payMoney(Number(row.base_amount) || 0, row.base_currency || row.original_currency)}`
+                          : "Fixed amount"}</dd></div>
+                        {row.original_currency !== "IQD" && (
+                          <div><dt>Rate used</dt><dd>1 USD = {Number(row.exchange_rate).toLocaleString("en-US")} IQD · {payDate(row.rate_date)}</dd></div>
+                        )}
+                        <div><dt>Submitted</dt><dd>{payDate(row.submitted_at || row.created_at)}</dd></div>
+                        <div><dt>Approved</dt><dd>{row.approved_at ? `${payDate(row.approved_at)}${row.approved_by ? ` · ${row.approved_by}` : ""}` : "—"}</dd></div>
+                        <div><dt>In payroll</dt><dd>{row.period_no || "Not yet scheduled"}</dd></div>
+                        <div><dt>Paid</dt><dd>{row.paid_at ? payDate(row.paid_at) : "Not yet paid"}</dd></div>
+                        {row.reverses_id && <div><dt>Correction</dt><dd>Reverses an earlier commission</dd></div>}
+                      </dl>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {slip && <PaySlip slip={slip} onClose={() => setSlip(null)} />}
+    </div>
+  );
+}
+
+function PayCard({ label, value, tone, hint }: { label: string; value: number; tone?: string; hint?: string }) {
+  return (
+    <article className={`pay-card${tone ? ` is-${tone}` : ""}${value === 0 ? " is-empty" : ""}`} title={hint}>
+      <small>{label}</small>
+      <b>{payMoney(value, "IQD")}</b>
+      {hint && <em>{hint}</em>}
+    </article>
+  );
+}
+
+/* Charts, hand-drawn to match the rest of the app and to stay honest:
+   the stack shows the parts of gross earnings and never includes the total
+   it adds up to, and an empty range draws nothing rather than an empty grid. */
+function PayCharts({ months, paid, outstanding }: {
+  months: { month: string; base_iqd: number; commission_iqd: number; bonus_iqd: number; net_iqd: number }[];
+  paid: number; outstanding: number;
+}) {
+  if (!months.length) {
+    return (
+      <section className="pay-block">
+        <div className="section-head"><h3>Earnings over time</h3></div>
+        <div className="empty compact">Nothing to chart for this period yet. Charts appear once a pay period has been published.</div>
+      </section>
+    );
+  }
+  const peak = Math.max(...months.map((m) => m.base_iqd + m.commission_iqd + m.bonus_iqd), 1);
+  const netPeak = Math.max(...months.map((m) => Math.abs(m.net_iqd)), 1);
+  const cumulative = months.reduce((sum, m) => sum + m.net_iqd, 0);
+  const settled = paid + Math.max(outstanding, 0);
+  return (
+    <section className="pay-block">
+      <div className="section-head">
+        <h3>Earnings over time</h3>
+        <span className="pay-cumulative">Cumulative net for this range: <b>{payMoney(cumulative, "IQD")}</b></span>
+      </div>
+      <div className="pay-chart-grid">
+        <figure className="pay-chart">
+          <figcaption>Monthly earnings, by component</figcaption>
+          <ul className="pay-legend">
+            <li><i className="is-base" />Base salary</li>
+            <li><i className="is-comm" />Commission</li>
+            <li><i className="is-bonus" />Bonus</li>
+          </ul>
+          <div className="pay-columns" role="img"
+            aria-label={months.map((m) => `${payMonthLabel(m.month)}: base ${Math.round(m.base_iqd)}, commission ${Math.round(m.commission_iqd)}, bonus ${Math.round(m.bonus_iqd)} IQD`).join("; ")}>
+            {months.map((m) => {
+              const gross = m.base_iqd + m.commission_iqd + m.bonus_iqd;
+              return (
+                <div className="pay-column" key={m.month} title={`${payMonthLabel(m.month)} — ${payMoney(gross, "IQD")}`}>
+                  <span className="pay-stack">
+                    <i className="is-bonus" style={{ height: `${(m.bonus_iqd / peak) * 100}%` }} />
+                    <i className="is-comm" style={{ height: `${(m.commission_iqd / peak) * 100}%` }} />
+                    <i className="is-base" style={{ height: `${(m.base_iqd / peak) * 100}%` }} />
+                  </span>
+                  <small>{payMonthLabel(m.month)}</small>
+                  <b>{payMoney(gross, "IQD")}</b>
+                </div>
+              );
+            })}
+          </div>
+        </figure>
+
+        <figure className="pay-chart">
+          <figcaption>Net earnings trend</figcaption>
+          <div className="pay-columns is-trend" role="img"
+            aria-label={months.map((m) => `${payMonthLabel(m.month)}: net ${Math.round(m.net_iqd)} IQD`).join("; ")}>
+            {months.map((m) => (
+              <div className="pay-column" key={m.month} title={`${payMonthLabel(m.month)} — ${payMoney(m.net_iqd, "IQD")}`}>
+                <span className="pay-stack">
+                  <i className="is-net" style={{ height: `${(Math.abs(m.net_iqd) / netPeak) * 100}%` }} />
+                </span>
+                <small>{payMonthLabel(m.month)}</small>
+                <b>{payMoney(m.net_iqd, "IQD")}</b>
+              </div>
+            ))}
+          </div>
+        </figure>
+
+        <figure className="pay-chart pay-chart-wide">
+          <figcaption>Paid against approved</figcaption>
+          <div className="pay-splitbar" role="img"
+            aria-label={`Paid ${Math.round(paid)} IQD of ${Math.round(settled)} IQD approved`}>
+            <i className="is-paid" style={{ width: `${settled > 0 ? (paid / settled) * 100 : 0}%` }} />
+            <i className="is-due" style={{ width: `${settled > 0 ? (Math.max(outstanding, 0) / settled) * 100 : 0}%` }} />
+          </div>
+          <ul className="pay-legend">
+            <li><i className="is-paid" />Paid {payMoney(paid, "IQD")}</li>
+            <li><i className="is-due" />Approved, not yet paid {payMoney(Math.max(outstanding, 0), "IQD")}</li>
+          </ul>
+        </figure>
+      </div>
+    </section>
+  );
+}
+
+/* The payslip. A4, printed white whatever theme the app is in, and it never
+   says "paid" before a payment has been recorded. */
+function PaySlip({ slip, onClose }: { slip: Record<string, unknown>; onClose: () => void }) {
+  const get = (path: string[]): unknown => path.reduce<unknown>((node, key) =>
+    node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined, slip);
+  const text = (path: string[]) => { const value = get(path); return value == null ? "" : String(value); };
+  const money = (path: string[]) => payMoney(Number(get(path)) || 0, "IQD");
+  const items = (get(["items"]) as { item_type: string; description?: string; original_amount: number;
+    original_currency: string; exchange_rate: number; amount_iqd: number; sign: number }[]) || [];
+  const payments = (get(["payments"]) as { paid_on: string; amount: number; currency: string;
+    status: string; method?: string; reference_masked?: string }[]) || [];
+  const state = text(["payment_state"]);
+  const stateLabel = state === "paid" ? "Paid"
+    : state === "partially_paid" ? "Partially paid — balance outstanding"
+    : "Approved — Not Yet Paid";
+  return (
+    <div className="modal-layer" onMouseDown={onClose}>
+      <section className="pay-slip-shell" role="dialog" aria-modal="true" aria-label="Payslip"
+        onMouseDown={(event: MouseEvent) => event.stopPropagation()}>
+        <div className="modal-head no-print">
+          <div><span className="eyebrow">Payslip</span><h2>{text(["period", "period_no"])}</h2></div>
+          <div className="rowActions">
+            <button type="button" className="btn small" onClick={() => window.print()}><FileText size={14} /> Print / PDF</button>
+            <button type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          </div>
+        </div>
+        <article className="pay-slip" id="larsa-payslip">
+          <header className="pay-slip-head">
+            <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={190} height={74} />
+            <div>
+              <h1>Payslip</h1>
+              <p>{text(["slip_no"])}</p>
+            </div>
+          </header>
+          <div className="pay-slip-grid">
+            <dl>
+              <div><dt>Employee</dt><dd>{text(["employee", "full_name"])}</dd></div>
+              <div><dt>Employee ID</dt><dd>{text(["employee", "employee_no"]) || "—"}</dd></div>
+              <div><dt>Position</dt><dd>{text(["employee", "position"]) || "—"}</dd></div>
+              <div><dt>Department</dt><dd>{text(["employee", "department"]) || "—"}</dd></div>
+            </dl>
+            <dl>
+              <div><dt>Pay period</dt><dd>{payDate(text(["period", "period_start"]))} – {payDate(text(["period", "period_end"]))}</dd></div>
+              <div><dt>Payment date</dt><dd>{payDate(text(["period", "pay_date"]))}</dd></div>
+              <div><dt>Status</dt><dd><b>{stateLabel}</b></dd></div>
+              <div><dt>Approved by</dt><dd>{text(["period", "approved_by"]) || "—"}</dd></div>
+            </dl>
+          </div>
+          <table className="pay-slip-table">
+            <thead><tr><th>Component</th><th>Detail</th><th className="right">Amount</th><th className="right">IQD equivalent</th></tr></thead>
+            <tbody>
+              {items.map((item, index) => (
+                <tr key={index}>
+                  <td>{item.item_type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</td>
+                  <td>{item.description || "—"}
+                    {item.original_currency !== "IQD" && <small> · 1 USD = {Number(item.exchange_rate).toLocaleString("en-US")} IQD</small>}
+                  </td>
+                  <td className="right">{item.sign < 0 ? "−" : ""}{payMoney(item.original_amount, item.original_currency)}</td>
+                  <td className="right">{item.sign < 0 ? "−" : ""}{payMoney(item.amount_iqd, "IQD")}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><td colSpan={3}>Gross earnings</td><td className="right">{money(["gross_iqd"])}</td></tr>
+              <tr className="pay-slip-net"><td colSpan={3}><b>Net pay</b></td><td className="right"><b>{money(["net_iqd"])}</b></td></tr>
+              <tr><td colSpan={3}>Amount paid</td><td className="right">{money(["paid_iqd"])}</td></tr>
+              <tr><td colSpan={3}>Outstanding</td><td className="right">{money(["outstanding_iqd"])}</td></tr>
+            </tfoot>
+          </table>
+          {payments.length > 0 && (
+            <table className="pay-slip-table">
+              <thead><tr><th>Payment</th><th>Method</th><th>Reference</th><th className="right">Amount</th></tr></thead>
+              <tbody>
+                {payments.map((row, index) => (
+                  <tr key={index}>
+                    <td>{payDate(row.paid_on)}{row.status === "reversed" ? " · reversed" : ""}</td>
+                    <td>{row.method || "—"}</td>
+                    <td>{row.reference_masked || "—"}</td>
+                    <td className="right">{payMoney(row.amount, row.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <footer className="pay-slip-foot">
+            <p><b>Larsa Engineering</b> · {text(["employee", "payment_method"]) || "Payment method not recorded"}
+              {text(["employee", "payment_ref_masked"]) ? ` · ${text(["employee", "payment_ref_masked"])}` : ""}</p>
+            <p className="pay-slip-ref">Verification {text(["verification"]).slice(0, 16)}</p>
+          </footer>
+        </article>
+      </section>
+    </div>
+  );
+}
+
 function SalesCommissions({
   viewer,
   users,

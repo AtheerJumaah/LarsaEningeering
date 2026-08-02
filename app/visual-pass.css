@@ -1331,3 +1331,217 @@ aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
 @media (max-width: 760px) {
   .unified-app .page-heading h1 { font-size: 17px; letter-spacing: -.02em; }
 }
+
+/* --- 23. My Pay ----------------------------------------------------------
+
+   The employee's own financial screen. Same rounded card language as the
+   rest of the app, same tokens, same night mode — nothing here invents a
+   second design system. Status is always a colour AND an icon AND a word,
+   because a colour alone tells a colour-blind reader nothing, and telling
+   somebody their salary is "green" is not telling them it is unpaid. */
+.pay-scroll { display: grid; gap: 16px; align-content: start; }
+.pay-hero { display: grid; gap: 16px; }
+.pay-identity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+.pay-identity div { min-width: 0; }
+.pay-identity dt { color: var(--text-2, var(--muted)); font-size: 10.5px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+.pay-identity dd { margin: 2px 0 0; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+
+.pay-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pay-range { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.pay-range button {
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2, var(--muted));
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.pay-range button:hover { color: var(--ink); background: var(--soft); }
+.pay-range button.is-on { color: var(--panel); background: var(--ink); }
+.unified-app.dark .pay-range button.is-on { color: #12151b; background: #e8eaef; }
+.pay-custom { display: flex; gap: 10px; align-items: flex-end; }
+.pay-custom label { display: grid; gap: 4px; font-size: 10.5px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2, var(--muted)); }
+.pay-custom input { padding: 8px 10px; }
+/* The refresh control sits in a row of chips, so its icon belongs beside its
+   label rather than stacked above it. */
+.pay-controls .btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; }
+
+/* Status: colour, icon and words together. */
+.pay-status {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px; font-weight: 850; white-space: nowrap;
+}
+.pay-status.is-paid     { background: #dcfce7; border-color: #86e0a8; color: #14532d; }
+.pay-status.is-approved { background: #e0edff; border-color: #9dbdf5; color: #1c3d78; }
+.pay-status.is-pending  { background: #fef3c7; border-color: #eac776; color: #713f12; }
+.pay-status.is-partial  { background: #ffedd5; border-color: #f0b978; color: #7c2d12; }
+.pay-status.is-rejected { background: #fee2e2; border-color: #f0a3a3; color: #7f1d1d; }
+.pay-status.is-draft    { background: var(--soft); border-color: var(--line); color: var(--text-2, var(--muted)); }
+.unified-app.dark .pay-status.is-paid     { background: #12351f; border-color: #2c6b42; color: #86efac; }
+.unified-app.dark .pay-status.is-approved { background: #16294a; border-color: #2f5490; color: #a8c8ff; }
+.unified-app.dark .pay-status.is-pending  { background: #3a2712; border-color: #7a5720; color: #f6ce85; }
+.unified-app.dark .pay-status.is-partial  { background: #3d2413; border-color: #86501f; color: #f9bd88; }
+.unified-app.dark .pay-status.is-rejected { background: #3d1b1b; border-color: #7f3535; color: #fca5a5; }
+.unified-app.dark .pay-status.is-draft    { background: #232833; border-color: #333a46; color: #aab2c0; }
+
+.pay-note { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-tile); background: var(--soft); color: var(--text-2, var(--muted)); font-size: 13px; font-weight: 650; }
+.pay-note.soft { background: transparent; }
+
+.pay-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; }
+.pay-card {
+  display: grid; gap: 5px; align-content: start;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tile);
+  background: var(--panel);
+}
+.pay-card small { color: var(--text-2, var(--muted)); font-size: 11px; font-weight: 800; }
+.pay-card b { font-size: 19px; font-weight: 850; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pay-card em { font-style: normal; font-size: 10.5px; font-weight: 650; color: var(--text-2, var(--muted)); line-height: 1.35; }
+.pay-card.is-strong { border-color: color-mix(in srgb, var(--ink) 35%, var(--line)); }
+.pay-card.is-strong b { font-size: 23px; }
+.pay-card.is-good b { color: #15803d; }
+.pay-card.is-pending b { color: #a16207; }
+.pay-card.is-minus b { color: #b91c1c; }
+.pay-card.is-empty { opacity: .72; }
+.unified-app.dark .pay-card.is-good b { color: #6fdca6; }
+.unified-app.dark .pay-card.is-pending b { color: #f3bd6b; }
+.unified-app.dark .pay-card.is-minus b { color: #f4a5a5; }
+
+.pay-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px; font-weight: 650; color: var(--text-2, var(--muted)); }
+.pay-meta b { color: var(--ink); font-weight: 850; font-variant-numeric: tabular-nums; }
+.pay-split i { font-style: normal; }
+
+.pay-block { display: grid; gap: 12px; }
+.pay-cumulative { font-size: 12.5px; font-weight: 650; color: var(--text-2, var(--muted)); }
+.pay-cumulative b { color: var(--ink); font-weight: 850; }
+
+/* Charts: honest by construction. The stack shows the parts of gross pay and
+   never the total they add up to, so nothing is double-counted visually. */
+.pay-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.pay-chart { margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); display: grid; gap: 12px; align-content: start; }
+.pay-chart-wide { grid-column: 1 / -1; }
+.pay-chart figcaption { font-size: 13px; font-weight: 850; letter-spacing: -.01em; }
+.pay-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; list-style: none; font-size: 11.5px; font-weight: 700; color: var(--text-2, var(--muted)); }
+.pay-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.pay-legend i { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.pay-columns { display: flex; align-items: flex-end; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.pay-column { display: grid; gap: 5px; justify-items: center; min-width: 52px; flex: 1 1 52px; }
+.pay-stack { display: flex; flex-direction: column-reverse; justify-content: flex-start; width: 34px; height: 132px; border-radius: 8px; background: var(--soft); overflow: hidden; }
+.pay-stack i { display: block; width: 100%; min-height: 0; }
+.pay-column small { font-size: 10.5px; font-weight: 800; color: var(--text-2, var(--muted)); white-space: nowrap; }
+.pay-column b { font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+i.is-base { background: #2563eb; }
+i.is-comm { background: #7c3aed; }
+i.is-bonus { background: #0d9488; }
+i.is-net { background: #17181b; }
+i.is-paid { background: #15803d; }
+i.is-due { background: #d97706; }
+.unified-app.dark i.is-base { background: #6ea2ff; }
+.unified-app.dark i.is-comm { background: #b9a7fb; }
+.unified-app.dark i.is-bonus { background: #5ec7bb; }
+.unified-app.dark i.is-net { background: #e8eaef; }
+.unified-app.dark i.is-paid { background: #6fdca6; }
+.unified-app.dark i.is-due { background: #f3bd6b; }
+.pay-splitbar { display: flex; height: 18px; border-radius: 999px; overflow: hidden; background: var(--soft); }
+.pay-splitbar i { display: block; height: 100%; }
+
+/* Pay periods: a table on a desk, cards on a phone. */
+.pay-periods { display: grid; gap: 10px; }
+.pay-period { border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); overflow: hidden; }
+.pay-period.is-open { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
+.pay-period-head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) auto auto 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: start;
+  cursor: pointer;
+}
+.pay-period-head:hover { background: var(--soft); }
+.pay-period-when { display: grid; gap: 2px; min-width: 0; }
+.pay-period-when b { font-size: 14px; font-weight: 800; }
+.pay-period-when small { font-size: 11px; font-weight: 650; color: var(--text-2, var(--muted)); }
+.pay-period-figs { display: flex; gap: 18px; }
+.pay-period-figs span { display: grid; gap: 1px; text-align: end; }
+.pay-period-figs small { font-size: 10px; font-weight: 800; color: var(--text-2, var(--muted)); text-transform: uppercase; letter-spacing: .06em; }
+.pay-period-figs b { font-size: 14px; font-weight: 850; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pay-chev { color: var(--text-2, var(--muted)); transition: transform .18s ease; }
+.pay-period.is-open .pay-chev { transform: rotate(90deg); }
+.pay-period-body { padding: 0 16px 14px; display: grid; gap: 12px; }
+.pay-table th, .pay-table td { padding: 9px 10px; font-size: 12.5px; }
+.pay-table .right, .pay-slip-table .right { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pay-total-row td { border-top: 2px solid var(--line); }
+
+.pay-commissions { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.pay-commission { display: grid; gap: 8px; align-content: start; padding: 15px 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); }
+.pay-commission header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pay-commission header b { font-size: 14px; font-weight: 850; }
+.pay-commission-amount { margin: 0; font-size: 21px; font-weight: 850; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.pay-commission dl { display: grid; gap: 5px; margin: 0; }
+.pay-commission dl div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; font-size: 12px; }
+.pay-commission dt { color: var(--text-2, var(--muted)); font-weight: 800; }
+.pay-commission dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+
+/* The payslip document. */
+.pay-slip-shell {
+  width: min(860px, 96vw); max-height: 92dvh; overflow: auto;
+  padding: 18px; border-radius: var(--radius-panel);
+  background: var(--panel); color: var(--ink);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .3);
+}
+.pay-slip { background: #ffffff; color: #111111; padding: 30px 34px; border: 1px solid #e2e2e2; border-radius: 12px; display: grid; gap: 18px; }
+.pay-slip-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 2px solid #111; padding-bottom: 14px; }
+.pay-slip-head h1 { margin: 0; font-size: 24px; letter-spacing: -.02em; }
+.pay-slip-head p { margin: 2px 0 0; font-size: 12px; font-weight: 700; color: #555; }
+.pay-slip-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+.pay-slip-grid dl { display: grid; gap: 6px; margin: 0; }
+.pay-slip-grid div { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 10px; font-size: 12.5px; }
+.pay-slip-grid dt { color: #555; font-weight: 800; }
+.pay-slip-grid dd { margin: 0; font-weight: 650; }
+.pay-slip-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pay-slip-table th { text-align: start; padding: 8px 10px; border-bottom: 1.5px solid #111; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+.pay-slip-table td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+.pay-slip-table td small { display: block; color: #666; font-size: 10.5px; }
+.pay-slip-table tfoot td { border-top: 1px solid #ccc; border-bottom: 0; font-weight: 700; }
+.pay-slip-net td { border-top: 2px solid #111 !important; font-size: 14px; }
+.pay-slip-foot { border-top: 1px solid #ddd; padding-top: 12px; font-size: 11px; color: #555; }
+.pay-slip-foot p { margin: 0 0 3px; }
+.pay-slip-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* Printing a payslip prints the payslip, not the application around it. */
+@media print {
+  .pay-slip-shell { width: auto; max-height: none; padding: 0; box-shadow: none; background: #fff; }
+  .pay-slip { border: 0; padding: 0; }
+  .modal-layer { position: static; background: none; display: block; }
+  .no-print { display: none !important; }
+  body:has(#larsa-payslip) .native-scroll,
+  body:has(#larsa-payslip) .workspace > .native:not(:has(#larsa-payslip)) { display: none !important; }
+  @page { size: A4; margin: 14mm; }
+}
+
+@media (max-width: 760px) {
+  /* A pay period is unreadable as a wide table on a phone, so it becomes a
+     card: the figures stack under the dates instead of scrolling sideways. */
+  .pay-period-head { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; }
+  .pay-period-figs { grid-column: 1 / -1; justify-content: flex-start; gap: 24px; }
+  .pay-period-figs span { text-align: start; }
+  .pay-chev { display: none; }
+  .pay-period-body { overflow-x: auto; }
+  .pay-commission dl div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .pay-identity { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+}
