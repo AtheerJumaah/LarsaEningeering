@@ -322,6 +322,100 @@
     };
   }
 
+  /* ---------- amounts in words (receipts) ---------- */
+  var EN_ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+    "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  var EN_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  function enBelowThousand(n) {
+    var out = [];
+    if (n >= 100) { out.push(EN_ONES[Math.floor(n / 100)] + " Hundred"); n = n % 100; }
+    if (n >= 20) {
+      out.push(EN_TENS[Math.floor(n / 10)] + (n % 10 ? "-" + EN_ONES[n % 10] : ""));
+    } else if (n > 0) out.push(EN_ONES[n]);
+    return out.join(" ");
+  }
+  function numberToWordsEn(n) {
+    n = Math.floor(Math.abs(Number(n) || 0));
+    if (n === 0) return "Zero";
+    var parts = [];
+    var scales = [[1e9, "Billion"], [1e6, "Million"], [1e3, "Thousand"], [1, ""]];
+    scales.forEach(function (s) {
+      if (n >= s[0]) {
+        var chunk = Math.floor(n / s[0]);
+        n = n % s[0];
+        parts.push(enBelowThousand(chunk) + (s[1] ? " " + s[1] : ""));
+      }
+    });
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  var AR_ONES = ["", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة", "عشرة",
+    "أحد عشر", "اثنا عشر", "ثلاثة عشر", "أربعة عشر", "خمسة عشر", "ستة عشر", "سبعة عشر", "ثمانية عشر", "تسعة عشر"];
+  var AR_TENS = ["", "", "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون"];
+  var AR_HUNDREDS = ["", "مائة", "مائتان", "ثلاثمائة", "أربعمائة", "خمسمائة", "ستمائة", "سبعمائة", "ثمانمائة", "تسعمائة"];
+  function arBelowThousand(n) {
+    var out = [];
+    if (n >= 100) { out.push(AR_HUNDREDS[Math.floor(n / 100)]); n = n % 100; }
+    if (n >= 20) {
+      var unit = n % 10;
+      out.push((unit ? AR_ONES[unit] + " و" : "") + AR_TENS[Math.floor(n / 10)]);
+    } else if (n > 0) out.push(AR_ONES[n]);
+    return out.join(" و");
+  }
+  function arScale(chunk, singular, dual, plural, generic) {
+    if (chunk === 1) return singular;
+    if (chunk === 2) return dual;
+    if (chunk >= 3 && chunk <= 10) return arBelowThousand(chunk) + " " + plural;
+    return arBelowThousand(chunk) + " " + generic;
+  }
+  function numberToWordsAr(n) {
+    n = Math.floor(Math.abs(Number(n) || 0));
+    if (n === 0) return "صفر";
+    var parts = [];
+    if (n >= 1e9) { parts.push(arScale(Math.floor(n / 1e9), "مليار", "ملياران", "مليارات", "مليار")); n = n % 1e9; }
+    if (n >= 1e6) { parts.push(arScale(Math.floor(n / 1e6), "مليون", "مليونان", "ملايين", "مليون")); n = n % 1e6; }
+    if (n >= 1e3) { parts.push(arScale(Math.floor(n / 1e3), "ألف", "ألفان", "آلاف", "ألف")); n = n % 1e3; }
+    if (n > 0) parts.push(arBelowThousand(n));
+    return parts.join(" و");
+  }
+  function amountInWords(amount, currency, lang) {
+    var n = Number(amount) || 0;
+    var whole = Math.floor(Math.abs(n));
+    var cents = Math.round((Math.abs(n) - whole) * 100);
+    if (lang === "ar") {
+      var curAr = currency === "USD" ? "دولار أمريكي" : "دينار عراقي";
+      var out = numberToWordsAr(whole) + " " + curAr;
+      if (cents > 0) out += " و" + numberToWordsAr(cents) + " سنت";
+      return out + " لا غير";
+    }
+    var curEn = currency === "USD" ? "US Dollars" : "Iraqi Dinars";
+    var res = numberToWordsEn(whole) + " " + curEn;
+    if (cents > 0) res += " and " + numberToWordsEn(cents) + " Cents";
+    return res + " Only";
+  }
+
+  /* ---------- review / approval status helpers ----------
+     Approval changes the reliability of a number, never the amount. */
+  var REVIEW_META = {
+    unreviewed: { color: "red", icon: "●", en: "Unreviewed", ar: "غير مُراجع" },
+    pending_review: { color: "yellow", icon: "◐", en: "Pending Review", ar: "قيد المراجعة" },
+    approved: { color: "green", icon: "✔", en: "Approved", ar: "مُعتمد" },
+    needs_correction: { color: "red", icon: "✖", en: "Needs Correction", ar: "يحتاج تصحيحاً" },
+    voided: { color: "gray", icon: "⊘", en: "Voided/Reversed", ar: "ملغى/معكوس" },
+  };
+  function reviewMeta(status) { return REVIEW_META[status] || REVIEW_META.unreviewed; }
+  /* Worst-of aggregation: red > yellow > green. */
+  function aggregateStatus(statuses) {
+    var hasRed = false, hasYellow = false, any = false;
+    (statuses || []).forEach(function (s) {
+      if (!s) return;
+      any = true;
+      if (s === "needs_correction" || s === "red") hasRed = true;
+      else if (s === "unreviewed" || s === "pending_review" || s === "yellow") hasYellow = true;
+    });
+    if (!any) return null;
+    return hasRed ? "red" : hasYellow ? "yellow" : "green";
+  }
+
   return {
     round2: r2,
     resolveRate: resolveRate,
@@ -332,5 +426,10 @@
     feeForTxn: feeForTxn,
     computeRefund: computeRefund,
     projectSummary: projectSummary,
+    numberToWordsEn: numberToWordsEn,
+    numberToWordsAr: numberToWordsAr,
+    amountInWords: amountInWords,
+    reviewMeta: reviewMeta,
+    aggregateStatus: aggregateStatus,
   };
 });
