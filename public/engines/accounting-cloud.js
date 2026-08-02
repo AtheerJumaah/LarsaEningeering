@@ -887,6 +887,244 @@
     return txn;
   }
 
+
+  /* ======================================================================
+     Payroll bridge.
+
+     Payroll, commissions and employee records used to live only in this
+     browser's blob. They now have an authoritative home, and this is the
+     path to it: every save here also writes the backend record, and the
+     backend is what My Pay reads. Nothing is mirrored twice — the local row
+     keeps the returned server ids so a second save updates rather than
+     duplicates, and a salary becomes a company expense exactly once, when
+     the run is approved, server-side.
+     ====================================================================== */
+  var PAY = { on: false, employees: [], periods: [], commissions: [], mapping: [], hr: [] };
+
+  function payLoadAdmin(done) {
+    if (!ACCT.on) { if (done) done(); return; }
+    rpc("pay_admin_overview", { actor: actor(), p_limit: 200 }).then(function (b) {
+      PAY.on = true;
+      PAY.employees = (b && b.employees) || [];
+      PAY.periods = (b && b.periods) || [];
+      PAY.commissions = (b && b.commissions) || [];
+      PAY.mapping = (b && b.mapping_queue) || [];
+      PAY.hr = (b && b.hr_queue) || [];
+      if (done) done();
+    }, function () { PAY.on = false; if (done) done(); });
+  }
+
+  function payEmployeeEmail(row) {
+    if (!row) return "";
+    var direct = String(row.email || row.employeeEmail || "").trim().toLowerCase();
+    if (direct.indexOf("@") > 0) return direct;
+    // The engine stores an employee id on a payroll row; resolve it through
+    // the local employee list, and fall back to the roster by name.
+    var emp = null;
+    try {
+      emp = (state.employees || []).filter(function (e) {
+        return e.id === (row.employeeId || row.employee_id);
+      })[0] || null;
+    } catch (e) {}
+    if (emp && emp.email) return String(emp.email).trim().toLowerCase();
+    var name = String((emp && emp.name) || row.person || row.employee || "").trim().toLowerCase();
+    if (!name) return "";
+    var hit = acctRoster().filter(function (p) { return String(p.name || "").trim().toLowerCase() === name; })[0];
+    return hit ? String(hit.email || "").toLowerCase() : "";
+  }
+
+  /* An employee record must exist before anything can be paid to it. This is
+     an upsert, so re-saving a person is not a second person. */
+  function paySyncEmployee(row, done) {
+    var email = payEmployeeEmail(row);
+    if (!ACCT.on || !email) { if (done) done(null); return; }
+    rpc("pay_upsert_employee", { actor: actor(), payload: {
+      email: email,
+      full_name: row.name || row.employee || email,
+      employee_no: row.employeeNo || row.payrollId || null,
+      position: row.role || row.position || null,
+      department: row.department || null,
+      region: row.payrollRegion || row.region || null,
+      employment_type: row.employmentType || null,
+      pay_schedule: row.paySchedule || null,
+      employment_start: row.startDate || null,
+      employment_end: row.endDate || null,
+      base_salary: Number(row.defaultSalary || row.baseSalary || 0) || null,
+      salary_currency: row.currency || "IQD",
+      payment_method: row.paymentMethod || null,
+      active: row.active !== false,
+      legacy_id: row.id || null,
+    } }).then(function (res) {
+      if (res && res.employee) { row.serverEmployeeId = res.employee.id; }
+      if (done) done(res);
+    }, function (err) { toast(String(err.message || err)); if (done) done(null); });
+  }
+
+  /* A payroll row in the engine is one employee's period. It becomes a
+     period plus its component items — base pay, bonus, allowances,
+     deductions and reimbursement kept apart rather than pre-summed, because
+     My Pay has to be able to show them apart. */
+  function paySyncPayroll(row, done) {
+    var email = payEmployeeEmail(row);
+    if (!ACCT.on || !email) { if (done) done(null); return; }
+    if (row.serverPeriodId) { if (done) done(null); return; }
+    var start = row.periodStart || row.period || null;
+    var end = row.periodEnd || row.period || null;
+    if (start && String(start).length === 7) { start = start + "-01"; }
+    if (end && String(end).length === 7) {
+      var d = new Date(end + "-01T00:00:00Z");
+      d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0);
+      end = d.toISOString().slice(0, 10);
+    }
+    if (!start || !end) { if (done) done(null); return; }
+    paySyncEmployee({ id: row.employeeId, email: email, name: row.employee || email }, function () {
+      rpc("pay_open_period", { actor: actor(), payload: {
+        period_start: start, period_end: end, pay_date: row.payDate || null,
+        region: row.region || null, currency: row.currency || "IQD",
+        label: row.period || null,
+      } }).then(function (res) {
+        var periodId = res && res.period && res.period.id;
+        if (!periodId) { if (done) done(null); return; }
+        row.serverPeriodId = periodId;
+        var parts = [
+          ["base_salary", Number(row.baseSalary || 0) + Number(row.regularPay || 0) + Number(row.overtimePay || 0), row.notes || "Salary"],
+          ["bonus", Number(row.bonus || 0), "Bonus"],
+          ["allowance", Number(row.allowances || 0), "Allowances"],
+          ["deduction", Number(row.totalEmployeeDeductions || row.deductions || 0), "Deductions"],
+          ["reimbursement", Number(row.reimbursement || 0), "Reimbursement"],
+        ].filter(function (p) { return p[1] > 0; });
+        var pending = parts.length;
+        if (!pending) { if (done) done(res); return; }
+        parts.forEach(function (part) {
+          rpc("pay_add_item", { actor: actor(), payload: {
+            period_id: periodId, employee_email: email, item_type: part[0],
+            amount: part[1], currency: row.currency || "IQD", description: part[2],
+            project_id: row.projectId || null,
+          } }).then(function () { pending -= 1; if (!pending && done) done(res); },
+                     function () { pending -= 1; if (!pending && done) done(res); });
+        });
+      }, function (err) { toast(String(err.message || err)); if (done) done(null); });
+    });
+  }
+
+  /* Commissions carry the rule that produced them. The engine's percentage
+     and base are sent as they stand, and the server freezes them onto the
+     record, so changing a default later cannot rewrite history. */
+  function paySyncCommission(row, done) {
+    var email = payEmployeeEmail({ person: row.person, employeeId: row.employeeId });
+    if (!ACCT.on || !email) { if (done) done(null); return; }
+    if (row.serverCommissionId) { if (done) done(null); return; }
+    var rate = Number(row.rate || 0);
+    rpc("pay_record_commission", { actor: actor(), payload: {
+      employee_email: email,
+      title: row.description || "Commission",
+      basis: rate > 0 ? "percent" : "fixed",
+      rate: rate > 0 ? rate : null,
+      base_amount: Number(row.base || 0) || null,
+      base_currency: row.currency || "IQD",
+      amount: Number(row.due || 0) || 0,
+      currency: row.currency || "IQD",
+      project_id: row.projectId || null,
+      client: row.client || null,
+      earning_start: row.date || null,
+      earning_end: row.date || null,
+      status: "pending_review",
+    } }).then(function (res) {
+      if (res && res.commission) { row.serverCommissionId = res.commission.id; }
+      if (done) done(res);
+    }, function (err) { toast(String(err.message || err)); if (done) done(null); });
+  }
+
+  var PAY_COLLS = { employees: paySyncEmployee, payroll: paySyncPayroll, commissions: paySyncCommission };
+
+  var origPaySave = null;
+  function wrapPayrollSave() {
+    if (origPaySave) return;
+    origPaySave = window.saveEditor;
+    window.saveEditor = function () {
+      var coll = null;
+      try { coll = typeof coll0 !== "undefined" ? coll0 : null; } catch (e) {}
+      var out = origPaySave.apply(this, arguments);
+      if (!ACCT.on || !coll || !PAY_COLLS[coll]) return out;
+      // The local save has already happened and the record has an id; the
+      // backend write follows, and its ids are stored back on the row.
+      setTimeout(function () {
+        try {
+          var row = (state[coll] || [])[0];
+          if (row) PAY_COLLS[coll](row, function () { try { save(); } catch (e) {} });
+        } catch (e) {}
+      }, 30);
+      return out;
+    };
+  }
+
+  /* Salary expenses already in the ledger with no payroll item behind them.
+     They are never touched and never copied — an accountant links them, and
+     the queue is how they find them. */
+  function payMappingCardHTML() {
+    if (!PAY.on || !PAY.mapping.length) return "";
+    return '<div class="card"><h3>' + TT("Payroll mapping queue", "قائمة ربط الرواتب") + "</h3>" +
+      '<p class="muted small">' + TT("Salary entries already in the ledger with no payroll record behind them. Link one to an employee and pay period — the original entry is preserved and never duplicated.",
+        "قيود رواتب موجودة في الدفتر بلا سجل رواتب خلفها. اربط القيد بموظف وفترة — القيد الأصلي محفوظ ولا يُكرر.") + "</p>" +
+      '<table class="data-table"><thead><tr>' +
+      "<th>" + TT("Entry", "القيد") + "</th><th>" + TT("Description", "الوصف") + "</th>" +
+      '<th class="right">' + TT("Amount", "المبلغ") + "</th><th>" + TT("Employee", "الموظف") + "</th>" +
+      "<th>" + TT("Period", "الفترة") + "</th><th></th></tr></thead><tbody>" +
+      PAY.mapping.map(function (m) {
+        return "<tr><td>" + esc4(m.txn_no || "") + "</td><td>" + esc4(m.description || "") + "</td>" +
+          '<td class="right">' + Number(m.amount || 0).toLocaleString() + " " + esc4(m.currency || "") + "</td>" +
+          '<td><select id="paymap_e_' + esc4(m.id) + '">' +
+          PAY.employees.map(function (e) {
+            return '<option value="' + esc4(e.email) + '"' + (m.suggested_email === e.email ? " selected" : "") + ">" + esc4(e.full_name || e.email) + "</option>";
+          }).join("") + "</select></td>" +
+          '<td><select id="paymap_p_' + esc4(m.id) + '">' +
+          PAY.periods.map(function (p) {
+            return '<option value="' + esc4(p.id) + '">' + esc4(p.period_no) + " · " + esc4(p.period_start) + "</option>";
+          }).join("") + "</select></td>" +
+          '<td><button class="btn sm" onclick="acctPayMap(\'' + esc4(m.id) + "','" + esc4(m.txn_id) + '\')">' +
+          TT("Link", "ربط") + "</button></td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+
+  window.acctPayMap = function (queueId, txnId) {
+    var emailEl = document.getElementById("paymap_e_" + queueId);
+    var periodEl = document.getElementById("paymap_p_" + queueId);
+    if (!emailEl || !periodEl || !emailEl.value || !periodEl.value) {
+      toast(TT("Choose an employee and a pay period first.", "اختر الموظف والفترة أولاً."));
+      return;
+    }
+    rpc("pay_link_transaction", {
+      actor: actor(), p_txn_id: txnId, p_employee_email: emailEl.value,
+      p_period_id: periodEl.value, p_note: "Linked from the payroll mapping queue",
+    }).then(function () {
+      toast(TT("Linked. The original accounting entry is unchanged.", "تم الربط. القيد المحاسبي الأصلي دون تغيير."));
+      payLoadAdmin(function () { if (typeof render === "function") render(); });
+    }, function (err) { toast(String(err.message || err)); });
+  };
+
+  var origRenderPayroll = null;
+  function wrapPayrollView() {
+    if (origRenderPayroll) return;
+    origRenderPayroll = window.renderPayrollV312 || window.renderPayroll;
+    if (typeof origRenderPayroll !== "function") return;
+    var wrapped = function () {
+      var out = origRenderPayroll.apply(this, arguments);
+      try {
+        var view = document.getElementById("view");
+        if (view && PAY.on && PAY.mapping.length && !document.getElementById("acct_pay_map")) {
+          var d = document.createElement("div");
+          d.id = "acct_pay_map";
+          d.innerHTML = payMappingCardHTML();
+          view.appendChild(d);
+        }
+      } catch (e) {}
+      return out;
+    };
+    window.renderPayrollV312 = wrapped;
+    window.renderPayroll = wrapped;
+    try { if (window.RENDERERS) window.RENDERERS.payroll = wrapped; } catch (e) {}
+  }
+
   var origSaveEditor = null;
   function wrapSaveEditor() {
     if (origSaveEditor) return;
@@ -2838,6 +3076,9 @@
     suppressEmbeddedShell();
     pickerStyles();
     watchPickers();
+    wrapPayrollSave();
+    wrapPayrollView();
+    payLoadAdmin();
     bootstrap();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") setTimeout(install, 0);
