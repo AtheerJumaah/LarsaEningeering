@@ -192,6 +192,71 @@
     if (al.length && al.indexOf(me) === -1) return { ok: false, who: al.join(", "), what: TT("this area", "هذا القسم") };
     return { ok: true };
   }
+  /* ---------------- who can be assigned ----------------
+     Assignments name a real account, never a typed-in address. The
+     roster comes from the signed-in Larsa Control staff list when the
+     engine runs inside the work area, and falls back to the engine's
+     own user list so the dropdowns still work standalone. */
+  function acctRoster() {
+    var seen = {}, out = [];
+    var add = function (email, name, role) {
+      var e = String(email || "").toLowerCase().trim();
+      if (!e || e.indexOf("@") < 0 || seen[e]) return;
+      seen[e] = true;
+      out.push({ email: e, name: name || e, role: role || "" });
+    };
+    try {
+      (window.__larsaAccountingRoster || []).forEach(function (p) { add(p.email, p.name, p.role); });
+    } catch (e) {}
+    try {
+      (state.users || []).forEach(function (u) {
+        if (u && u.active !== false) add(u.email, u.name, u.role);
+      });
+    } catch (e) {}
+    // Anyone already granted explicit accounting permissions stays selectable
+    // even if they are no longer in the roster, so an existing assignment is
+    // never silently dropped when the form is reopened.
+    (ACCT.permissions || []).forEach(function (p) { add(p.email, p.email, ""); });
+    ACCT.projects.forEach(function (p) {
+      emailList(p.assigned_accountants).concat(emailList(p.assigned_approvers))
+        .forEach(function (e) { add(e, e, ""); });
+    });
+    out.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    return out;
+  }
+
+  /* A multi-select of people. Empty selection keeps the existing meaning:
+     anyone who holds the permission. */
+  function rosterPicker(id, selected, emptyLabel) {
+    var chosen = emailList(selected);
+    var people = acctRoster();
+    if (!people.length) {
+      return '<input id="' + id + '" value="' + esc4(chosen.join(", ")) + '" placeholder="name@larsaeng.com">' +
+        '<span class="muted small">' + TT("No staff accounts found — enter emails separated by commas.",
+          "لا توجد حسابات موظفين — أدخل البريد مفصولاً بفواصل.") + "</span>";
+    }
+    return '<select id="' + id + '" multiple size="' + Math.min(5, Math.max(3, people.length)) + '" style="min-height:74px">' +
+      people.map(function (p) {
+        return '<option value="' + esc4(p.email) + '"' + (chosen.indexOf(p.email) !== -1 ? " selected" : "") + ">" +
+          esc4(p.name) + (p.role ? " — " + esc4(p.role) : "") + "</option>";
+      }).join("") + "</select>" +
+      '<span class="muted small">' + esc4(emptyLabel || TT("Select none = anyone with the permission. Ctrl/Cmd-click to choose several.",
+        "بدون اختيار = أي شخص لديه الصلاحية. اضغط Ctrl/Cmd للاختيار المتعدد.")) + "</span>";
+  }
+  /* Reads either the multi-select or the plain-text fallback. */
+  function readPicker(id) {
+    var el = document.getElementById(id);
+    if (!el) return null;
+    if (el.tagName === "SELECT") {
+      return Array.prototype.slice.call(el.selectedOptions || [])
+        .map(function (o) { return String(o.value || "").toLowerCase().trim(); })
+        .filter(function (v) { return v.indexOf("@") > 0; });
+    }
+    return String(el.value || "").split(/[,;\s]+/)
+      .map(function (x) { return x.trim().toLowerCase(); })
+      .filter(function (x) { return x.indexOf("@") > 0; });
+  }
+
   function entryScopeOk(pid) {
     var proj = projectRow(pid);
     if (!proj) return true;
@@ -866,13 +931,10 @@
           payload.fee_basis = (document.getElementById("acct_prj_fee_basis") || {}).value || "funding";
           payload.fee_treatment = (document.getElementById("acct_prj_fee_treatment") || {}).value || "deduct_from_funding";
         }
-        var splitEmails = function (elId) {
-          return ((document.getElementById(elId) || {}).value || "").split(/[,;\s]+/)
-            .map(function (x) { return x.trim().toLowerCase(); })
-            .filter(function (x) { return x.indexOf("@") > 0; });
-        };
-        if (document.getElementById("acct_prj_accountants")) payload.assigned_accountants = splitEmails("acct_prj_accountants");
-        if (document.getElementById("acct_prj_approvers")) payload.assigned_approvers = splitEmails("acct_prj_approvers");
+        var accs = readPicker("acct_prj_accountants");
+        var apprs = readPicker("acct_prj_approvers");
+        if (accs !== null) payload.assigned_accountants = accs;
+        if (apprs !== null) payload.assigned_approvers = apprs;
       } else if (rec.consultancyRate != null && rec.consultancyRate !== "") {
         payload.fee_inherit = false;
         payload.fee_method = "percentage";
@@ -1098,10 +1160,10 @@
         ["deduct_from_funding", "project_expense", "larsa_revenue", "custom"].map(function (t) { return '<option value="' + t + '"' + (ap && ap.fee_treatment === t ? " selected" : "") + ">" + t + "</option>"; }).join("") + "</select></div>" +
         "</div></div>" +
         '<div class="form-grid" style="margin-top:6px">' +
-        '<div class="field wide"><label>' + TT("Assigned accountants — data entry (comma-separated emails; empty = anyone with access)", "المحاسبون المكلفون — إدخال البيانات (بريد إلكتروني مفصول بفواصل؛ فارغ = أي شخص لديه صلاحية)") + '</label>' +
-        '<input id="acct_prj_accountants" placeholder="accountant@larsaeng.com" value="' + esc4((Array.isArray(ap && ap.assigned_accountants) ? ap.assigned_accountants : []).join(", ")) + '"></div>' +
-        '<div class="field wide"><label>' + TT("Assigned approvers — review & approve entries (comma-separated emails; empty = anyone with the approve permission)", "المعتمِدون المكلفون — مراجعة القيود واعتمادها (بريد إلكتروني مفصول بفواصل؛ فارغ = أي شخص لديه صلاحية الاعتماد)") + '</label>' +
-        '<input id="acct_prj_approvers" placeholder="manager@larsaeng.com" value="' + esc4((Array.isArray(ap && ap.assigned_approvers) ? ap.assigned_approvers : []).join(", ")) + '"></div>' +
+        '<div class="field wide"><label>' + TT("Assigned accountants — who enters data", "المحاسبون المكلفون — من يُدخل البيانات") + "</label>" +
+        rosterPicker("acct_prj_accountants", ap && ap.assigned_accountants) + "</div>" +
+        '<div class="field wide"><label>' + TT("Assigned approvers — who reviews and approves", "المعتمِدون المكلفون — من يراجع ويعتمد") + "</label>" +
+        rosterPicker("acct_prj_approvers", ap && ap.assigned_approvers) + "</div>" +
         "</div>" +
         '<p class="muted small">' + TT("The person who enters an entry never approves it — entries wait as Pending Approval for the assigned approver (self-approval only via the explicit permission).", "من يُدخل القيد لا يعتمده — تبقى القيود بانتظار الاعتماد للمعتمِد المكلف (الاعتماد الذاتي فقط عبر الصلاحية الصريحة).") + "</p>" +
         '<p class="muted small">' + TT("Changing these defaults affects FUTURE entries only. Historical transactions keep their permanent rate and fee snapshots.", "تغيير هذه الافتراضيات يخص القيود المستقبلية فقط. القيود التاريخية تحتفظ بلقطاتها الدائمة للسعر والأتعاب.") + "</p>";
@@ -1476,6 +1538,126 @@
   };
 
   var origXRenderProject = null;
+  /* ---------------- the project workspace: everything on one page ----------------
+     Opening a project gives you the whole project: the financial
+     summary, and every ledger you can record into — funding,
+     materials, labour, expenses, revenue — with its own Add button,
+     all on the project page. Nothing here needs a trip to another
+     section, and the project stays locked in the editor so an entry
+     can never land on the wrong project. */
+  var WORKSPACE_KINDS = [
+    { coll: "funding", perm: "funding",
+      en: "Funding received", ar: "التمويل المستلم",
+      addEn: "Add funding", addAr: "إضافة تمويل" },
+    { coll: "materials", perm: "materials",
+      en: "Materials", ar: "المواد",
+      addEn: "Add material", addAr: "إضافة مادة" },
+    { coll: "projectLabor", perm: "labor",
+      en: "Workforce / Labour", ar: "العمالة",
+      addEn: "Add labour", addAr: "إضافة عمالة" },
+    { coll: "expenses", perm: "expenses",
+      en: "Other costs", ar: "التكاليف الأخرى",
+      addEn: "Add cost", addAr: "إضافة تكلفة" },
+    { coll: "revenue", perm: "revenue",
+      en: "Revenue", ar: "الإيرادات",
+      addEn: "Add revenue", addAr: "إضافة إيراد" },
+  ];
+
+  function canCreateColl(coll) {
+    try { if (typeof can === "function") return can("create", coll === "projectLabor" ? "labor" : coll); }
+    catch (e) {}
+    return canWriteAcct();
+  }
+  /* Opens the editor with this project locked in, and returns here on save.
+     Uses the engine's own linked-add path so the existing behaviour and
+     permission checks are preserved exactly. */
+  window.acctAddHere = function (coll, pid) {
+    var backToWorkspace = function () {
+      // Come back to the one-page project workspace, not to the single
+      // ledger tab for whatever was just added.
+      try { window.__larsaReturnProjectTab = "summary"; } catch (e) {}
+    };
+    try {
+      if (typeof window.addLinked310 === "function") {
+        var r = window.addLinked310(coll, pid);
+        backToWorkspace();
+        return r;
+      }
+      if (typeof window.addLinked === "function") {
+        var r2 = window.addLinked(coll, pid);
+        backToWorkspace();
+        return r2;
+      }
+    } catch (e) {}
+    window.__larsaReturnProjectId = pid;
+    backToWorkspace();
+    try { window.xAdd(coll, pid); } catch (e) { try { openEditor(coll, null); } catch (e2) {} }
+  };
+
+  function workspaceRows(coll, pid) {
+    var list = (state[coll] || []).filter(function (r) { return r.projectId === pid; });
+    list.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+    return list;
+  }
+  function workspaceTable(coll, rows) {
+    try {
+      if (coll === "expenses" && typeof xExpenseTable === "function") return xExpenseTable(rows);
+      if (coll === "materials" && typeof xMaterialTable === "function") return xMaterialTable(rows);
+      if (coll === "projectLabor" && typeof xLaborTable === "function") return xLaborTable(rows);
+      if (coll === "funding" && typeof xLedger === "function") {
+        return xLedger("funding", rows, [
+          { label: TT("Date", "التاريخ"), get: function (r) { return r.date; } },
+          { label: TT("Payer", "الدافع"), get: function (r) { return esc4(r.payerName || r.description || "—"); } },
+          { label: TT("Gross", "الإجمالي"), r: 1, get: function (r) { return nmoney(r.amount, r.currency); } },
+          { label: TT("Fee", "الأتعاب"), r: 1, get: function (r) { return r.waived ? TT("Waived", "معفى") : nmoney(r.consultancyFee, r.currency); } },
+          { label: TT("Net construction", "صافي التنفيذ"), r: 1, get: function (r) { return nmoney(r.netConstruction, r.currency); } },
+          { label: TT("Status", "الحالة"), get: function (r) { return '<span class="pill">' + esc4(r.status) + "</span>"; } },
+        ]);
+      }
+      if (typeof xLedger === "function") {
+        return xLedger(coll, rows, [
+          { label: TT("Date", "التاريخ"), get: function (r) { return r.date; } },
+          { label: TT("Description", "الوصف"), get: function (r) { return esc4(r.description || r.itemName || r.notes || "—"); } },
+          { label: TT("Amount", "المبلغ"), r: 1, get: function (r) { return nmoney(r.amount, r.currency); } },
+          { label: TT("Status", "الحالة"), get: function (r) { return '<span class="pill">' + esc4(r.status) + "</span>"; } },
+        ]);
+      }
+    } catch (e) { console.warn("[acct-cloud] workspace table:", e); }
+    return '<p class="muted small">' + TT("Unable to render this ledger.", "تعذر عرض هذا السجل.") + "</p>";
+  }
+
+  function projectWorkspaceHTML(p) {
+    var quick = WORKSPACE_KINDS.filter(function (k) { return canCreateColl(k.coll); }).map(function (k) {
+      return '<button class="btn sm" onclick="acctAddHere(\'' + k.coll + "','" + esc4(p.id) + "')\">+ " +
+        TT(k.addEn, k.addAr) + "</button>";
+    }).join(" ");
+
+    var html = '<div class="card" id="acct_workspace"><h3>' +
+      TT("Record in this project", "التسجيل في هذا المشروع") + "</h3>" +
+      '<p class="muted small">' +
+      TT("Everything for this project is here — add funding or any cost without leaving the page. Each entry is locked to this project and waits for its assigned approver.",
+        "كل ما يخص هذا المشروع هنا — أضف التمويل أو أي تكلفة دون مغادرة الصفحة. كل قيد مرتبط بهذا المشروع وينتظر معتمِده المكلف.") + "</p>" +
+      (quick
+        ? '<div class="rpt-actions" style="flex-wrap:wrap;gap:6px">' + quick + "</div>"
+        : '<p class="muted small">' + TT("Your permissions do not include creating accounting entries.", "صلاحياتك لا تشمل إنشاء قيود محاسبية.") + "</p>") +
+      "</div>";
+
+    WORKSPACE_KINDS.forEach(function (k) {
+      var rows = workspaceRows(k.coll, p.id);
+      var addBtn = canCreateColl(k.coll)
+        ? '<button class="btn sm" onclick="acctAddHere(\'' + k.coll + "','" + esc4(p.id) + "')\">+ " + TT(k.addEn, k.addAr) + "</button>"
+        : "";
+      html += '<div class="card acct-ws-card"><h3>' + TT(k.en, k.ar) +
+        ' <span class="muted small">(' + rows.length + ")</span></h3>" +
+        (addBtn ? '<div class="rpt-actions">' + addBtn + "</div>" : "") +
+        (rows.length
+          ? workspaceTable(k.coll, rows)
+          : '<p class="muted small">' + TT("Nothing recorded yet.", "لا توجد قيود بعد.") + "</p>") +
+        "</div>";
+    });
+    return html;
+  }
+
   function wrapProjectView() {
     if (origXRenderProject) return;
     origXRenderProject = window.xRenderProject;
@@ -1492,11 +1674,15 @@
         var view = document.getElementById("view");
         if (!view || document.getElementById("acct_summary_card")) return out;
         var holder = document.createElement("div");
-        holder.innerHTML = summaryCardHTML(p);
+        holder.innerHTML = summaryCardHTML(p) + projectWorkspaceHTML(p);
         var firstCard = view.querySelector(".card");
-        if (firstCard && firstCard.parentNode) firstCard.parentNode.insertBefore(holder.firstChild, firstCard.nextSibling);
-        else view.appendChild(holder.firstChild);
-      } catch (e) { console.warn("[acct-cloud] summary inject:", e); }
+        var anchor = firstCard && firstCard.parentNode ? firstCard.nextSibling : null;
+        while (holder.firstChild) {
+          var node = holder.firstChild;
+          if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node, anchor);
+          else view.appendChild(node);
+        }
+      } catch (e) { console.warn("[acct-cloud] project workspace:", e); }
       return out;
     };
   }
@@ -1524,8 +1710,8 @@
        ["expense", TT("Expenses", "المصاريف")], ["revenue", TT("Revenue", "الإيرادات")], ["adjustment", TT("Adjustments", "التسويات")]].map(function (a) {
         var cur_ = ((s.area_approvers || {})[a[0]] || []);
         return '<div class="field wide"><label>' + a[1] + ' <span class="muted small">(' + a[0] + ')</span></label>' +
-          '<input class="acct-area-approver" data-kind="' + a[0] + '" placeholder="' + TT("emails, comma-separated — empty = by permission", "بريد إلكتروني مفصول بفواصل — فارغ = حسب الصلاحية") + '" value="' +
-          esc4((Array.isArray(cur_) ? cur_ : []).join(", ")) + '"' + (ACCT.isPlatformAdmin ? "" : " disabled") + "></div>";
+          rosterPicker("acct_area_" + a[0], cur_,
+            TT("Select none = anyone with the approve permission.", "بدون اختيار = أي شخص لديه صلاحية الاعتماد.")) + "</div>";
       }).join("") +
       "</div>" +
       (ACCT.isPlatformAdmin
@@ -1558,7 +1744,15 @@
         }).join("") + "</tbody></table></div>";
     }
     if (ACCT.isPlatformAdmin) {
-      html += '<div class="form-grid"><div class="field wide"><label>' + TT("Accountant email", "بريد المحاسب") + '</label><input id="acct_perm_email" type="email" placeholder="name@larsaeng.com"></div></div>' +
+      var roster = acctRoster();
+      html += '<div class="form-grid"><div class="field wide"><label>' + TT("Accountant", "المحاسب") + "</label>" +
+        (roster.length
+          ? '<select id="acct_perm_email"><option value="">' + TT("Choose a person…", "اختر شخصاً…") + "</option>" +
+            roster.map(function (p) {
+              return '<option value="' + esc4(p.email) + '">' + esc4(p.name) + (p.role ? " — " + esc4(p.role) : "") + "</option>";
+            }).join("") + "</select>"
+          : '<input id="acct_perm_email" type="email" placeholder="name@larsaeng.com">') +
+        "</div></div>" +
         '<div class="form-grid">' + PERM_KEYS.map(function (k) {
           return '<div class="field"><label class="small"><input type="checkbox" class="acct-perm-box" data-perm="' + k + '"> ' + k + "</label></div>";
         }).join("") + "</div>" +
@@ -1594,10 +1788,9 @@
           default_fee_treatment: (document.getElementById("acct_ps_treat") || {}).value || null,
           area_approvers: (function () {
             var out = {};
-            Array.prototype.forEach.call(document.querySelectorAll(".acct-area-approver"), function (inp) {
-              out[inp.getAttribute("data-kind")] = String(inp.value || "").split(/[,;\s]+/)
-                .map(function (x) { return x.trim().toLowerCase(); })
-                .filter(function (x) { return x.indexOf("@") > 0; });
+            ["funding", "material", "labor", "expense", "revenue", "adjustment"].forEach(function (kind) {
+              var picked = readPicker("acct_area_" + kind);
+              if (picked !== null) out[kind] = picked;
             });
             return out;
           })(),
