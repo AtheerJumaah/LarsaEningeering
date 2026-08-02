@@ -232,6 +232,14 @@
      summary line that says who is assigned, and opens to tick boxes so a
      second name is one ordinary click. Nobody ticked keeps its existing
      meaning: anyone who holds the permission. */
+  /* "Owner / Super Admin" is a job title, not an identity. One word is enough
+     to tell two people apart in a list you are picking from, and it keeps the
+     row on one line at any card width. */
+  function shortRole(role) {
+    var first = String(role || "").split(/[\/|,–—-]/)[0].trim();
+    if (!first) return "";
+    return first.length > 16 ? first.slice(0, 15).trim() + "…" : first;
+  }
   function pickerSummary(chosen, people, none) {
     if (!chosen.length) return none;
     var names = chosen.map(function (email) {
@@ -247,7 +255,7 @@
     if (!people.length) {
       return '<input id="' + id + '" value="' + esc4(chosen.join(", ")) + '" placeholder="name@larsaeng.com">';
     }
-    var none = TT("Anyone with the permission", "أي شخص لديه الصلاحية");
+    var none = TT("Anyone with permission", "أي شخص لديه الصلاحية");
     return '<details class="acct-dd" id="' + id + '" data-people="1" data-none="' + esc4(none) + '">' +
       '<summary class="acct-dd-head"><span class="acct-dd-text">' +
       esc4(pickerSummary(chosen, people, none)) + "</span></summary>" +
@@ -256,7 +264,9 @@
         return '<label class="acct-dd-row">' +
           '<input type="checkbox" class="acct-person" data-for="' + id + '" value="' + esc4(p.email) + '"' +
           (chosen.indexOf(p.email) !== -1 ? " checked" : "") + ">" +
-          "<span>" + esc4(p.name) + (p.role ? ' <span class="muted">— ' + esc4(p.role) + "</span>" : "") + "</span></label>";
+          '<span class="acct-dd-name">' + esc4(p.name) + "</span>" +
+          (p.role ? '<span class="acct-dd-role">' + esc4(shortRole(p.role)) + "</span>" : "") +
+          "</label>";
       }).join("") + "</div></details>";
   }
   /* The closed summary has to keep telling the truth as boxes are ticked.
@@ -270,8 +280,8 @@
     var chosen = boxes.filter(function (b) { return b.checked; })
       .map(function (b) { return String(b.value || "").toLowerCase().trim(); });
     var people = boxes.map(function (b) {
-      var span = b.parentNode.querySelector("span");
-      return { email: String(b.value || "").toLowerCase().trim(), name: span ? span.textContent.replace(/\s*—.*$/, "").trim() : b.value };
+      var span = b.parentNode.querySelector(".acct-dd-name");
+      return { email: String(b.value || "").toLowerCase().trim(), name: span ? span.textContent.trim() : b.value };
     });
     text.textContent = pickerSummary(chosen, people, dd.getAttribute("data-none") || "");
   }
@@ -2034,9 +2044,25 @@
       "transform:rotate(45deg) translate(-2px,-2px);opacity:.55;transition:transform .15s ease}",
       ".acct-dd[open] .acct-dd-head::after{transform:rotate(-135deg) translate(-2px,-2px)}",
       ".acct-dd-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".acct-dd-list{max-height:190px;overflow:auto;padding:4px 11px 9px;border-top:1px solid var(--line,#e6e6e6)}",
-      ".acct-dd-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;cursor:pointer}",
-      ".acct-dd-row input{flex:none;margin:0}",
+      ".acct-dd-list{max-height:190px;overflow-y:auto;overflow-x:hidden;padding:4px 11px 9px;",
+      "border-top:1px solid var(--line,#e6e6e6)}",
+      /* A grid, not a flex row: the engine's own form styling sets every input
+         to width:100%, which blew the checkbox out to the full width of the
+         card and left the name a sliver to wrap one word at a time inside.
+         The box gets a fixed track and the name gets a track that is allowed
+         to shrink, so a long name truncates instead of stacking. */
+      ".acct-dd-row{display:grid;grid-template-columns:16px minmax(0,1fr) auto;align-items:center;",
+      "gap:9px;padding:6px 0;font-size:13px;cursor:pointer}",
+      ".acct-dd-row input[type=checkbox]{width:16px;min-width:16px;max-width:16px;height:16px;margin:0;padding:0;flex:none}",
+      ".acct-dd-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}",
+      /* The role is context, not the answer to "who": one short word, on the
+         same line, never a second column of wrapped text. */
+      /* A px cap, not a percentage: a percentage max-width on an auto grid
+         track resolves against the track itself, which collapsed "Owner" to
+         a single letter. shortRole already keeps this to one word. */
+      ".acct-dd-role{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+      "padding:2px 8px;border-radius:999px;background:rgba(23,24,27,.06);",
+      "font-size:10.5px;font-weight:800;letter-spacing:.02em;color:var(--muted,#6b7280)}",
     ].join("\n");
     (document.head || document.documentElement).appendChild(css);
   }
