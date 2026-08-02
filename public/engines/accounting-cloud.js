@@ -138,10 +138,38 @@
   var WRITER_ROLES = ["Owner / Super Admin", "Management", "Accountant"];
   function canWriteAcct() { return myPerm("create"); }
 
+  /* Dual-control scope: per-project assigned accountants/approvers and
+     per-area (funding/material/labor/expense/revenue/adjustment)
+     assigned approvers. Empty assignment = access decides. */
+  function emailList(j) {
+    if (!Array.isArray(j)) return [];
+    return j.map(function (x) { return String(x || "").toLowerCase().trim(); }).filter(Boolean);
+  }
+  function myEmailLc() { return String((actor() || {}).email || "").toLowerCase(); }
+  function approverScope(pid, kind) {
+    var me = myEmailLc();
+    var proj = projectRow(pid);
+    var pl = proj ? emailList(proj.assigned_approvers) : [];
+    if (pl.length && pl.indexOf(me) === -1) return { ok: false, who: pl.join(", "), what: TT("this project", "هذا المشروع") };
+    var aa = (ACCT.settings || {}).area_approvers || {};
+    var al = emailList(aa[kind]);
+    if (al.length && al.indexOf(me) === -1) return { ok: false, who: al.join(", "), what: TT("this area", "هذا القسم") };
+    return { ok: true };
+  }
+  function entryScopeOk(pid) {
+    var proj = projectRow(pid);
+    if (!proj) return true;
+    var accs = emailList(proj.assigned_accountants);
+    if (!accs.length) return true;
+    var me = myEmailLc();
+    return accs.indexOf(me) !== -1 || emailList(proj.assigned_approvers).indexOf(me) !== -1
+      || (actor() || {}).role === "Owner / Super Admin";
+  }
+
   var COLL_KIND = { funding: "funding", materials: "material", projectLabor: "labor", expenses: "expense", revenue: "revenue" };
   var KIND_COLL = { funding: "funding", material: "materials", labor: "projectLabor", expense: "expenses", revenue: "revenue" };
   var STATUS_TO_LEGACY = {
-    draft: "Draft", pending: "Pending", approved: "Approved", posted: "Approved",
+    draft: "Draft", pending: "Pending Approval", approved: "Approved", posted: "Approved",
     received: "Received", paid: "Paid", rejected: "Rejected", void: "Void", reversed: "Reversed",
   };
   var LEGACY_TO_STATUS = {
@@ -512,7 +540,7 @@
     if (coll === "materials") amount = (qty && n("unitPrice")) ? Core.round2(qty * n("unitPrice")) : (n("unitPrice") || n("amount"));
     else if (coll === "projectLabor") amount = (qty && n("rate")) ? Core.round2(qty * n("rate")) : (n("rate") || n("amount"));
     else amount = n("amount");
-    var status = LEGACY_TO_STATUS[g("status")] || "draft";
+    var status = LEGACY_TO_STATUS[g("status")] || "pending";
     var fxEl = document.getElementById("ed_fxRate");
     var fxVal = fxEl ? Number(fxEl.value) : null;
     var prefilled = fxEl ? Number(fxEl.getAttribute("data-acct-prefill") || "0") : 0;
@@ -572,6 +600,12 @@
       var txn = readModalTxn(coll);
       if (!txn.project_id) { toast4(TT("Choose a project first.", "اختر المشروع أولاً.")); return; }
       if (!txn.amount || txn.amount <= 0) { toast4(TT("Enter a positive amount.", "أدخل مبلغاً موجباً.")); return; }
+      if (!entryScopeOk(txn.project_id)) {
+        var pAcc = projectRow(txn.project_id);
+        toast4(TT("Data entry for this project is assigned to: ", "إدخال بيانات هذا المشروع مُسنَد إلى: ")
+          + emailList(pAcc && pAcc.assigned_accountants).join(", "));
+        return;
+      }
       keepContext();
       var done = function (msg) {
         try { closeEditor(); } catch (e) {}
@@ -601,6 +635,13 @@
               try { closeEditor(); } catch (e) {}
               refresh(false);
               receiptModal(r.receipt, r.txn);   // client-ready proof, printable immediately
+              return;
+            }
+            // Maker-checker: the server stores every new entry as PENDING
+            // APPROVAL regardless of the status picked — say so plainly.
+            if (r && r.entered_pending) {
+              done(TT("Saved as PENDING APPROVAL — the assigned approver (a different user) approves it before it counts.",
+                "حُفظ بانتظار الاعتماد — يعتمده المعتمِد المخوّل (مستخدم آخر) قبل أن يُحتسب."));
               return;
             }
             done(fee && fee.fee_amount ? TT("Saved — consultancy fee ", "تم الحفظ — أتعاب استشارية ") + nmoney(Number(fee.fee_amount), fee.currency) + " (" + fee.status + ")"
@@ -643,6 +684,13 @@
           payload.fee_basis = (document.getElementById("acct_prj_fee_basis") || {}).value || "funding";
           payload.fee_treatment = (document.getElementById("acct_prj_fee_treatment") || {}).value || "deduct_from_funding";
         }
+        var splitEmails = function (elId) {
+          return ((document.getElementById(elId) || {}).value || "").split(/[,;\s]+/)
+            .map(function (x) { return x.trim().toLowerCase(); })
+            .filter(function (x) { return x.indexOf("@") > 0; });
+        };
+        if (document.getElementById("acct_prj_accountants")) payload.assigned_accountants = splitEmails("acct_prj_accountants");
+        if (document.getElementById("acct_prj_approvers")) payload.assigned_approvers = splitEmails("acct_prj_approvers");
       } else if (rec.consultancyRate != null && rec.consultancyRate !== "") {
         payload.fee_inherit = false;
         payload.fee_method = "percentage";
@@ -692,6 +740,49 @@
         if (!fx.value || Number(fx.value) <= 0) fx.value = rr.rate;
         if (!id) fx.setAttribute("data-acct-prefill", String(rr.rate));
       }
+      // Maker-checker: entry and approval are two different people.
+      // Hide the counted statuses this actor cannot lawfully set on this
+      // record (the server enforces the same rule regardless).
+      try {
+        var stSel = document.getElementById("ed_status");
+        if (stSel && stSel.options) {
+          var editingRec = id ? ACCT.txns.filter(function (t) { return t.id === id; })[0] : null;
+          var mineRec = !id || !editingRec || String(editingRec.created_by_email || "").toLowerCase() === myEmailLc();
+          var mayCount = myPerm("approve") && (!mineRec || myPerm("self_approve"))
+            && approverScope(pid, COLL_KIND[coll]).ok;
+          if (!mayCount) {
+            for (var oi = stSel.options.length - 1; oi >= 0; oi--) {
+              var mappedSt = LEGACY_TO_STATUS[stSel.options[oi].value] || "draft";
+              if (["approved", "posted", "received", "paid"].indexOf(mappedSt) !== -1) stSel.remove(oi);
+            }
+            if (!stSel.options.length) {
+              var dOpt = document.createElement("option");
+              dOpt.value = "Pending Approval"; dOpt.text = TT("Pending Approval", "بانتظار الاعتماد");
+              stSel.add(dOpt);
+            }
+            // New entries default to Pending Approval — entered by one
+            // person, approved by another (Draft stays available for
+            // deliberately unfinished work).
+            if (!id) {
+              for (var qi = 0; qi < stSel.options.length; qi++) {
+                if (stSel.options[qi].value === "Pending Approval" || stSel.options[qi].value === "Pending") {
+                  stSel.value = stSel.options[qi].value;
+                  break;
+                }
+              }
+            }
+            if (!document.getElementById("acct_mkchk_hint")) {
+              var hint = document.createElement("p");
+              hint.id = "acct_mkchk_hint";
+              hint.className = "muted small";
+              hint.textContent = TT("Entries are saved as Pending Approval — the assigned approver (a different user) reviews and approves them before they count.",
+                "القيود تُحفظ بانتظار الاعتماد — يراجعها ويعتمدها المعتمِد المخوّل (مستخدم آخر) قبل أن تُحتسب.");
+              var hostEl = (stSel.closest && stSel.closest(".field")) || stSel.parentNode;
+              if (hostEl && hostEl.appendChild) hostEl.appendChild(hint);
+            }
+          }
+        }
+      } catch (e) {}
       // Fee panel: resolved rule + authorized transaction-level override.
       if (!document.getElementById("acct_fee_panel")) {
         var kind = COLL_KIND[coll];
@@ -752,6 +843,13 @@
         '<div class="field"><label>' + TT("Accounting treatment", "المعالجة المحاسبية") + '</label><select id="acct_prj_fee_treatment">' +
         ["deduct_from_funding", "project_expense", "larsa_revenue", "custom"].map(function (t) { return '<option value="' + t + '"' + (ap && ap.fee_treatment === t ? " selected" : "") + ">" + t + "</option>"; }).join("") + "</select></div>" +
         "</div></div>" +
+        '<div class="form-grid" style="margin-top:6px">' +
+        '<div class="field wide"><label>' + TT("Assigned accountants — data entry (comma-separated emails; empty = anyone with access)", "المحاسبون المكلفون — إدخال البيانات (بريد إلكتروني مفصول بفواصل؛ فارغ = أي شخص لديه صلاحية)") + '</label>' +
+        '<input id="acct_prj_accountants" placeholder="accountant@larsaeng.com" value="' + esc4((Array.isArray(ap && ap.assigned_accountants) ? ap.assigned_accountants : []).join(", ")) + '"></div>' +
+        '<div class="field wide"><label>' + TT("Assigned approvers — review & approve entries (comma-separated emails; empty = anyone with the approve permission)", "المعتمِدون المكلفون — مراجعة القيود واعتمادها (بريد إلكتروني مفصول بفواصل؛ فارغ = أي شخص لديه صلاحية الاعتماد)") + '</label>' +
+        '<input id="acct_prj_approvers" placeholder="manager@larsaeng.com" value="' + esc4((Array.isArray(ap && ap.assigned_approvers) ? ap.assigned_approvers : []).join(", ")) + '"></div>' +
+        "</div>" +
+        '<p class="muted small">' + TT("The person who enters an entry never approves it — entries wait as Pending Approval for the assigned approver (self-approval only via the explicit permission).", "من يُدخل القيد لا يعتمده — تبقى القيود بانتظار الاعتماد للمعتمِد المكلف (الاعتماد الذاتي فقط عبر الصلاحية الصريحة).") + "</p>" +
         '<p class="muted small">' + TT("Changing these defaults affects FUTURE entries only. Historical transactions keep their permanent rate and fee snapshots.", "تغيير هذه الافتراضيات يخص القيود المستقبلية فقط. القيود التاريخية تحتفظ بلقطاتها الدائمة للسعر والأتعاب.") + "</p>";
       body.appendChild(wrap);
       var inhEl = document.getElementById("acct_prj_fee_inherit");
@@ -798,6 +896,21 @@
       if (!ACCT.on || !COLL_KIND[coll]) return origXApprove.apply(this, arguments);
       var t = ACCT.txns.filter(function (x) { return x.id === id; })[0];
       if (!t) return origXApprove.apply(this, arguments);
+      // Maker-checker guard (the server enforces the same rules):
+      if (!myPerm("approve")) {
+        toast4(TT("Your permissions do not include approving entries.", "صلاحياتك لا تشمل اعتماد القيود."));
+        return;
+      }
+      var scope = approverScope(t.project_id, t.kind);
+      if (!scope.ok) {
+        toast4(TT("Approval for ", "الاعتماد لـ") + scope.what + TT(" is assigned to: ", " مُسنَد إلى: ") + scope.who);
+        return;
+      }
+      if (String(t.created_by_email || "").toLowerCase() === myEmailLc() && !myPerm("self_approve")) {
+        toast4(TT("You entered this record — a different authorized user must approve it.",
+          "أنت من أدخل هذا القيد — يجب أن يعتمده مستخدم آخر مخوّل."));
+        return;
+      }
       keepContext();
       var target = t.kind === "funding" ? "received" : "approved";
       rpc("acct_set_txn_status", { actor: actor(), p_txn_id: id, p_status: target, p_note: null })
@@ -1024,6 +1137,18 @@
       '<div class="field"><label>' + TT("Default treatment", "المعالجة الافتراضية") + '</label><select id="acct_ps_treat"' + (ACCT.isPlatformAdmin ? "" : " disabled") + ">" +
       ["deduct_from_funding", "project_expense", "larsa_revenue"].map(function (t) { return '<option value="' + t + '"' + (s.default_fee_treatment === t ? " selected" : "") + ">" + t + "</option>"; }).join("") + "</select></div>" +
       "</div>" +
+      '<h4 style="margin:10px 0 2px">' + TT("Area approvers (dual control)", "معتمِدو الأقسام (رقابة مزدوجة)") + "</h4>" +
+      '<p class="muted small">' + TT("Assign who approves each accounting area. Empty = anyone holding the approve permission. Data is entered by the accountant and waits as Pending Approval until an assigned approver (a different user) approves it.",
+        "حدد من يعتمد كل قسم محاسبي. فارغ = أي شخص لديه صلاحية الاعتماد. يُدخل المحاسب البيانات وتبقى بانتظار الاعتماد حتى يعتمدها معتمِد مكلف (مستخدم آخر).") + "</p>" +
+      '<div class="form-grid">' +
+      [["funding", TT("Funding", "التمويل")], ["material", TT("Materials", "المواد")], ["labor", TT("Labor", "العمالة")],
+       ["expense", TT("Expenses", "المصاريف")], ["revenue", TT("Revenue", "الإيرادات")], ["adjustment", TT("Adjustments", "التسويات")]].map(function (a) {
+        var cur_ = ((s.area_approvers || {})[a[0]] || []);
+        return '<div class="field wide"><label>' + a[1] + ' <span class="muted small">(' + a[0] + ')</span></label>' +
+          '<input class="acct-area-approver" data-kind="' + a[0] + '" placeholder="' + TT("emails, comma-separated — empty = by permission", "بريد إلكتروني مفصول بفواصل — فارغ = حسب الصلاحية") + '" value="' +
+          esc4((Array.isArray(cur_) ? cur_ : []).join(", ")) + '"' + (ACCT.isPlatformAdmin ? "" : " disabled") + "></div>";
+      }).join("") +
+      "</div>" +
       (ACCT.isPlatformAdmin
         ? '<div class="rpt-actions"><button class="btn sm" onclick="acctSavePlatform()">' + TT("Save platform defaults (email code)", "حفظ إعدادات المنصة (رمز بريدي)") + "</button></div>"
         : '<p class="muted small">' + TT("Read-only: you are not a Platform Super Admin.", "للقراءة فقط: لست مشرف المنصة.") + "</p>") +
@@ -1088,6 +1213,15 @@
           default_fee_rate: (function () { var v = (document.getElementById("acct_ps_fee") || {}).value; return v === "" ? null : Number(v) / 100; })(),
           default_fee_basis: (document.getElementById("acct_ps_basis") || {}).value || null,
           default_fee_treatment: (document.getElementById("acct_ps_treat") || {}).value || null,
+          area_approvers: (function () {
+            var out = {};
+            Array.prototype.forEach.call(document.querySelectorAll(".acct-area-approver"), function (inp) {
+              out[inp.getAttribute("data-kind")] = String(inp.value || "").split(/[,;\s]+/)
+                .map(function (x) { return x.trim().toLowerCase(); })
+                .filter(function (x) { return x.indexOf("@") > 0; });
+            });
+            return out;
+          })(),
         },
       }).then(function () { toast4(TT("Platform accounting defaults saved (future entries only).", "حُفظت إعدادات المنصة (للقيود المستقبلية فقط).")); refresh(); })
         .catch(function (e) { toast4(String(e.message || e)); });
@@ -1388,13 +1522,15 @@
         if (!ACCT.on || !COLL_KIND[c] || !r || !r._acctManaged) return out;
         var extra = " " + reviewChip(r);
         var rs = r.reviewStatus || "unreviewed";
+        var scTx = ACCT.txns.filter(function (x) { return x.id === id; })[0];
+        var scOk = !scTx || approverScope(scTx.project_id, scTx.kind).ok;
         if ((rs === "unreviewed" || rs === "needs_correction") && myPerm("submit_review")) {
           extra += ' <button class="mini" title="' + TT("Submit for review", "إرسال للمراجعة") + '" onclick="event.stopPropagation();acctSubmitReview(\'' + id + "')\">⇪</button>";
         }
-        if ((rs === "pending_review" || rs === "unreviewed") && myPerm("approve")) {
+        if ((rs === "pending_review" || rs === "unreviewed") && myPerm("approve") && scOk) {
           extra += ' <button class="mini" title="' + TT("Approve entry", "اعتماد القيد") + '" onclick="event.stopPropagation();acctReviewEntry(\'' + id + "','approved')\">✔</button>";
         }
-        if (rs !== "needs_correction" && myPerm("reject")) {
+        if (rs !== "needs_correction" && myPerm("reject") && scOk) {
           extra += ' <button class="mini" title="' + TT("Request correction", "طلب تصحيح") + '" onclick="event.stopPropagation();acctReviewEntry(\'' + id + "','needs_correction')\">✖</button>";
         }
         if (c === "funding" && receiptRecordFor(id)) {
