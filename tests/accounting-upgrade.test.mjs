@@ -6,7 +6,7 @@
  * (browser core) and tests/accounting-sql.test.sql (authoritative backend). */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 
 const read = (p) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 const engine = read("public/engines/accounting.html");
@@ -300,4 +300,185 @@ test("dual control: internal dual-controlled flows stay exempt via a transaction
   assert.ok(decides >= 2, "acct_decide_approval must be redefined in 007");
   assert.match(migrations, /perform set_config\('acct\.internal_op', '1', true\);/);
   assert.match(migrations, /not public\.acct_internal_op\(\)/);
+});
+
+/* ============================================================
+   Corrective pass: the construction accounting model, currency
+   safety, approved/working totals, one authoritative source,
+   the approval queue, the receipt, and production hygiene.
+   ============================================================ */
+
+test("client construction funding is never Larsa revenue or company profit", () => {
+  // Backend: the two blocks exist and are computed from different inputs.
+  assert.match(migrations, /create or replace function public\.acct_project_financials/);
+  assert.match(migrations, /'client_funds', jsonb_build_object/);
+  assert.match(migrations, /'company', jsonb_build_object/);
+  assert.match(migrations, /larsa_rev_iqd := fee_all_iqd \+ eng_iqd \+ oth_rev_iqd/);
+  assert.match(migrations, /co_net_iqd := larsa_rev_iqd - co_exp_iqd/);
+  // Contractor accounting exists but only when explicitly selected.
+  assert.match(migrations, /accounting_mode text not null default 'client_funded'/);
+  assert.match(migrations, /check \(accounting_mode in \('client_funded','contractor'\)\)/);
+  // A cost is the client's unless it says otherwise.
+  assert.match(migrations, /acct_cost_bearer/);
+  assert.match(migrations, /else 'client'/);
+  // App shell: the old income = funding + fees + revenue is gone.
+  assert.ok(!/const income = funding \+ fees \+ revenue/.test(page),
+    "the app shell must not add client funding into income");
+  assert.ok(!/net = income - cost/.test(page),
+    "company profit must never be funding minus construction spending");
+  assert.match(page, /const larsaRevenue = fees \+ revenue/);
+  assert.match(page, /const companyNet = larsaRevenue - companyExpenses/);
+  assert.match(page, /Client fund control/);
+  assert.match(page, /Larsa company accounting/);
+});
+
+test("USD and IQD are never added, and exchange rates are never summed", () => {
+  // The injected ledger totals row groups by currency and skips rate columns.
+  assert.match(page, /larsaIsRateCol/);
+  assert.match(page, /Exchange rates are per entry and are never added together/);
+  assert.match(page, /larsaCur\s*=\s*function/);
+  assert.match(page, /Currencies are totalled separately and never added together/);
+  assert.ok(!/td\.textContent=larsaFmt\(sums\[index\]\)\s*;/.test(page),
+    "the old single-currency total must be gone");
+  // Backend keeps original-currency totals apart and converts at snapshots.
+  assert.match(migrations, /'by_currency', by_cur/);
+  assert.match(migrations, /gross_funding_approved/);
+  assert.match(migrations, /never added/i);
+});
+
+test("approved and working totals are both reported, with a reason in words", () => {
+  assert.match(migrations, /'approved', jsonb_build_object/);
+  assert.match(migrations, /'working', jsonb_build_object/);
+  assert.match(migrations, /'pending', jsonb_build_object/);
+  assert.match(migrations, /Contains ' \|\| unapproved_count \|\| ' unapproved entr/);
+  assert.match(migrations, /when needs_correction_count > 0 then 'red'/);
+  assert.match(migrations, /when unapproved_count > 0 then 'yellow'/);
+  const cloud = cloudNow();
+  assert.match(cloud, /Approved Actual Cost/);
+  assert.match(cloud, /Pending \/ Unapproved Cost/);
+  assert.match(cloud, /Working Actual Cost/);
+  assert.match(cloud, /Approved Remaining Client Balance/);
+  assert.match(cloud, /Working Remaining Client Balance/);
+  // Status is never colour alone.
+  assert.match(cloud, /reliabilityBanner/);
+  assert.match(cloud, /✔|⏳|✖/);
+});
+
+test("one authoritative calculation feeds every accounting surface", () => {
+  // The long-standing summary is now a projection of the authoritative model.
+  assert.match(migrations, /with f as \(select public\.acct_project_financials\(p_project_id\) as j\)/);
+  assert.match(migrations, /acct_company_financials/);
+  const cloud = cloudNow();
+  // The engine's own totals read the server figures.
+  assert.match(cloud, /window\.xTotals = function/);
+  assert.match(cloud, /window\.totals = function/);
+  assert.match(cloud, /_authoritative: true/);
+  // The client statement is rebuilt from the same model.
+  assert.match(cloud, /acctClientStatement/);
+  assert.match(cloud, /Approved spending/);
+  assert.match(cloud, /Working spending/);
+  assert.match(cloud, /wrapClientStatement/);
+  // The Construction Financials page reads the same backend function.
+  assert.match(page, /acct_company_financials/);
+  assert.match(page, /fromServerRow/);
+});
+
+test("consultancy fee has one source of truth and no duplicate zero field", () => {
+  const cloud = cloudNow();
+  assert.match(cloud, /wrapFundingSchema/);
+  assert.match(cloud, /f\.k !== "consultancyRate"/);
+  assert.match(cloud, /Effective rate/);
+  assert.match(cloud, /Rule source/);
+  assert.match(cloud, /Fee basis/);
+  assert.match(cloud, /Accounting treatment/);
+  assert.match(cloud, /acct_fee_amt/);
+  assert.match(cloud, /acct_fee_net/);
+  // Lifecycle stages stay distinct and projected is never called final.
+  assert.match(migrations, /'initial_accrued_iqd'/);
+  assert.match(migrations, /'estimated_refundable_iqd'/);
+  assert.match(migrations, /'refunded_to_date_iqd'/);
+  assert.match(migrations, /'current_recognised_iqd'/);
+  assert.match(migrations, /'projected_after_full_refund_iqd'/);
+  assert.match(migrations, /'final_settled_iqd'/);
+  assert.match(migrations, /'is_final', settlements_executed|'is_final', settled_count > 0/);
+});
+
+test("a real Accounting Approval Queue exists beside the renamed risk queue", () => {
+  assert.match(migrations, /create or replace function public\.acct_approval_queue/);
+  for (const source of ["entries", "refunds", "protected"]) {
+    assert.ok(migrations.includes(source + " as ("), source + " must feed the queue");
+  }
+  // Exactly one outstanding action per record.
+  assert.match(migrations, /then 'approve_entry' else 'review_entry' end as action/);
+  const cloud = cloudNow();
+  assert.match(cloud, /Accounting Approval Queue/);
+  assert.match(cloud, /Flags \/ Risk Reviews/);
+  assert.match(cloud, /acctQueueFilter/);
+  // Filterable by project, type, accountant, approver, age and status.
+  const queueFilters = /var QF = \{([^}]*)\}/.exec(cloud);
+  assert.ok(queueFilters, "the queue must declare its filter state");
+  for (const filter of ["project", "kind", "accountant", "approver", "age", "status"]) {
+    assert.ok(queueFilters[1].includes(filter + ":"), "queue must filter by " + filter);
+  }
+  // Self-approval stays blocked by default in the queue's own actions.
+  assert.match(cloud, /You entered this/);
+});
+
+test("the funding receipt is a Larsa statement with the official logo", () => {
+  const cloud = cloudNow();
+  assert.match(cloud, /\/icons\/larsa-logo\.svg/);
+  assert.ok(existsSync(new URL("../public/icons/larsa-logo.svg", import.meta.url)),
+    "the official logo asset must exist in the repository");
+  assert.match(cloud, /rc-logo/);
+  assert.match(cloud, /Funding Receipt/);
+  assert.match(cloud, /وصل استلام تمويل/);
+  // Sectioned document, not one long table.
+  for (const section of ["Document", "Client & Project", "Payment", "Amount",
+    "Currency & Exchange Rate", "Amount in Words", "Handled By", "Notes & Verification"]) {
+    assert.ok(cloud.includes(section), "receipt needs a " + section + " section");
+  }
+  assert.match(cloud, /@page\{size:A4/);
+  assert.match(cloud, /rc-signs/);
+  assert.match(cloud, /rc-stamp/);
+  // Unapproved receipts are watermarked; the number never changes.
+  assert.match(cloud, /rc-wm/);
+  assert.match(cloud, /PENDING REVIEW · بانتظار المراجعة/);
+  assert.match(cloud, /REPRINT — original receipt number preserved/);
+  // Language + direction.
+  assert.match(cloud, /receiptLang/);
+  assert.match(cloud, /dir="' \+ dir \+ '"/);
+});
+
+test("legacy local-prototype settings cannot confuse or replace production data", () => {
+  assert.match(page, /window\.__larsaProductionMode=true/);
+  const cloud = cloudNow();
+  assert.match(cloud, /stripLegacySettings/);
+  assert.match(cloud, /supabase\\s\*sync/i);
+  assert.match(cloud, /v35PullStateFromSupabase/);
+  assert.match(cloud, /audit\\s\*trail/i);
+  // Direct engine access never impersonates the production portal.
+  assert.match(cloud, /direct-access guard/);
+  assert.match(cloud, /window\.location\.replace\(target\)/);
+  assert.match(cloud, /ISOLATED DEMO — not production/);
+});
+
+test("the permanent history is browsable and sample data is marked", () => {
+  assert.match(migrations, /create or replace function public\.acct_audit_page/);
+  assert.match(migrations, /'changed_fields'/);
+  assert.match(migrations, /p_search/);
+  const cloud = cloudNow();
+  assert.match(cloud, /Permanent Accounting History/);
+  assert.match(cloud, /acctHistFilter/);
+  assert.match(cloud, /acctHistPage/);
+  assert.match(cloud, /sampleBadge/);
+  assert.match(cloud, /SAMPLE/);
+  // Removal stays a single protected action that never reseeds.
+  assert.match(cloud, /acctRemoveSamples/);
+  assert.match(migrations, /never seeded again|sample_state = 'removed'|sample data is never seeded again/i);
+});
+
+test("the service worker ships the corrected engine and the logo", () => {
+  assert.match(sw, /larsa-control-v17/);
+  assert.ok(!/larsa-control-v16"/.test(sw), "the cache name must be bumped past v16");
+  assert.match(sw, /\/icons\/larsa-logo\.svg/);
 });

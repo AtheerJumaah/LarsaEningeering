@@ -21,6 +21,74 @@ const bootstrap = {
   approvals: [], review_queue: [], audit_recent: [], archives: [],
 };
 
+/* The authoritative model, shaped exactly like the production
+   "Mosul Private Villa" figures the corrective pass must reproduce. */
+const COMPANY_FIN = {
+  projects: 1,
+  client_funds: {
+    gross_funding_iqd: 12000000, initial_fee_iqd: 960000, net_construction_funding_iqd: 11040000,
+    construction_cost_approved_iqd: 7000000, construction_cost_working_iqd: 7400000,
+    pending_construction_cost_iqd: 400000,
+    remaining_balance_approved_iqd: 4040000, remaining_balance_working_iqd: 3640000,
+    total_refund_due_iqd: 0, gross_funding_usd: 9160.31, construction_cost_approved_usd: 5343.51,
+  },
+  company: {
+    consultancy_fee_revenue_iqd: 960000, engineering_revenue_iqd: 0, other_revenue_iqd: 0,
+    larsa_revenue_iqd: 960000, company_expenses_iqd: 0, fee_refunds_reversals_iqd: 0,
+    company_net_profit_iqd: 960000, net_margin_pct: 100,
+    larsa_revenue_usd: 732.82, company_net_profit_usd: 732.82,
+  },
+  by_currency: { IQD: { currency: "IQD", gross_funding_working: 12000000, construction_cost_working: 7400000, entries: 6 } },
+  review: { status: "yellow", unapproved_entries: 1, needs_correction_entries: 0, label: "Contains 1 unapproved entry" },
+  rows: [{
+    project_id: "prj1", project_name: "E2E Villa", project_code: "E2E", client: "Client X", region: "Iraq",
+    currency: "IQD", is_sample: false, accounting_mode: "client_funded",
+    contract_value: 150000000, approved_budget: 100000000, budget_currency: "IQD",
+    by_currency: { IQD: { currency: "IQD", gross_funding_working: 12000000, construction_cost_working: 7400000, entries: 6 } },
+    fee: { effective_rate: 0.08, effective_rate_pct: 8, source: "platform_default", basis: "funding",
+      treatment: "deduct_from_funding", initial_accrued_iqd: 960000, is_final: false, final_settled_iqd: null },
+    client_funds: {
+      approved: {
+        gross_funding_iqd: 12000000, gross_funding_usd: 9160.31,
+        initial_fee_iqd: 960000, initial_fee_usd: 732.82,
+        net_construction_funding_iqd: 11040000, net_construction_funding_usd: 8427.48,
+        materials_iqd: 3000000, materials_usd: 2290.08,
+        labor_iqd: 2500000, labor_usd: 1908.4,
+        other_costs_iqd: 1500000, other_costs_usd: 1145.04,
+        construction_cost_iqd: 7000000, construction_cost_usd: 5343.51,
+        total_used_iqd: 7960000, total_used_usd: 6076.34,
+        remaining_balance_iqd: 4040000, remaining_balance_usd: 3083.97,
+      },
+      working: {
+        gross_funding_iqd: 12000000, gross_funding_usd: 9160.31,
+        materials_iqd: 3000000, materials_usd: 2290.08,
+        labor_iqd: 2500000, labor_usd: 1908.4,
+        other_costs_iqd: 1900000, other_costs_usd: 1450.38,
+        construction_cost_iqd: 7400000, construction_cost_usd: 5648.85,
+        total_used_iqd: 8360000, total_used_usd: 6381.68,
+        remaining_balance_iqd: 3640000, remaining_balance_usd: 2778.63,
+      },
+      pending: { construction_cost_iqd: 400000, construction_cost_usd: 305.34, gross_funding_iqd: 0, entries: 1 },
+      refundable_principal_iqd: 4040000, refundable_fee_iqd: 323200,
+      total_refund_due_iqd: 4363200, refunded_principal_to_date_iqd: 0, adjustments_iqd: 0,
+    },
+    company: {
+      consultancy_fee_revenue_iqd: 960000, consultancy_fee_revenue_usd: 732.82,
+      engineering_revenue_iqd: 0, engineering_revenue_usd: 0,
+      other_revenue_iqd: 0, other_revenue_usd: 0,
+      larsa_revenue_iqd: 960000, larsa_revenue_usd: 732.82,
+      operating_expenses_iqd: 0, operating_expenses_usd: 0,
+      larsa_attributable_project_costs_iqd: 0,
+      company_expenses_iqd: 0, company_expenses_usd: 0,
+      fee_refunds_reversals_iqd: 0,
+      company_net_profit_iqd: 960000, company_net_profit_usd: 732.82,
+    },
+    review: { status: "yellow", unapproved_entries: 1, needs_correction_entries: 0, label: "Contains 1 unapproved entry" },
+    cost_progress_pct: 7, schedule_progress_pct: 45,
+    schedule_progress_date: "2026-03-10", schedule_progress_by: "Site Eng",
+  }],
+};
+
 const server = createServer((req, res) => {
   if (req.url.startsWith("/rest/v1/rpc/")) {
     const name = req.url.split("/rest/v1/rpc/")[1].split("?")[0];
@@ -30,6 +98,16 @@ const server = createServer((req, res) => {
       calls.push({ name, body: body ? JSON.parse(body) : null });
       res.setHeader("Content-Type", "application/json");
       if (name === "acct_get_bootstrap") res.end(JSON.stringify(bootstrap));
+      else if (name === "acct_company_financials") res.end(JSON.stringify(COMPANY_FIN));
+      else if (name === "acct_approval_queue") res.end(JSON.stringify({ total: 1, by_kind: { expense: 1 }, rows: [
+        { id: "aa", queue_type: "transaction", record_kind: "expense", reference: "LRS-TXN-000009", project_id: "prj1",
+          project_name: "E2E Villa", description: "Pending permit", amount: 400000, currency: "IQD",
+          entered_by: "e2e@larsaeng.com", entered_by_name: "E2E Accountant", assigned_approver: "Any authorised approver",
+          age_days: 3, action: "approve_entry", action_label: "Approve so it counts", payment_status: "pending" }] }));
+      else if (name === "acct_audit_page") res.end(JSON.stringify({ total: 2, actions: ["Funding Added"], rows: [
+        { id: 2, at: "2026-03-11T09:00:00Z", actor_email: "e2e@larsaeng.com", actor_name: "E2E Accountant",
+          actor_role: "Accountant", project_id: "prj1", record_type: "funding", record_id: "x",
+          action: "Funding Added", reason: null, details: "LRS-TXN-000001", changed_fields: [] }] }));
       else if (name === "acct_is_platform_admin") res.end("false");
       else if (name === "acct_get_my_permissions") res.end(JSON.stringify({ view: true, create: true, submit_review: true, print_receipts: true, reprint_receipts: true, approve: false, reject: false, export_working: true, edit_own_unapproved: true }));
       else if (name === "acct_post_transaction") res.end(JSON.stringify({ ok: true, txn: { ...TXN, id: "33333333-3333-4333-8333-333333333333", txn_no: "LRS-TXN-000002" }, fee: { fee_amount: 160000, currency: "IQD", status: "posted" },
@@ -54,7 +132,7 @@ page.on("pageerror", (e) => errors.push(e.message));
 await page.addInitScript(() => {
   localStorage.setItem("larsaSupabaseBridgeV1", JSON.stringify({ url: "http://127.0.0.1:8932", anonKey: "test-anon" }));
 });
-await page.goto("http://127.0.0.1:8932/engines/accounting.html", { waitUntil: "load" });
+await page.goto("http://127.0.0.1:8932/engines/accounting.html?demo=1", { waitUntil: "load" });
 await page.waitForTimeout(2000);
 
 // Sign a writer in, the way the parent shell does (lexical global assignment).
@@ -84,10 +162,34 @@ const summary = await page.evaluate(() => {
   return el ? el.textContent : null;
 });
 const hasSummary = !!summary;
-const summaryChecks = hasSummary && ["Contract Value", "Net Construction Funding", "Total Refund Due to Client", "Cost Progress"].every((t) => summary.includes(t));
-const refundNumber = hasSummary && summary.includes("9,936,000"); // 9.2M unused + 8% (736,000) — no expenses in this fixture
+/* The card now renders the authoritative backend model: the two separated
+   blocks, and approved beside working. */
+const summaryChecks = hasSummary && [
+  "Contract Value", "Net Construction Funding", "Total Refund Due to Client", "Cost Progress",
+  "Client Fund Control", "Larsa Company Accounting",
+  "Approved Actual Cost", "Pending / Unapproved Cost", "Working Actual Cost",
+  "Approved Remaining Client Balance", "Working Remaining Client Balance",
+  "Larsa Revenue", "Company Net Profit",
+].every((t) => summary.includes(t));
+/* The exact production figures the corrective pass must reproduce. */
+const authoritativeNumbers = hasSummary && [
+  "12,000,000", // gross client funding
+  "960,000",    // initial consultancy fee (8%)
+  "11,040,000", // net construction funding
+  "7,000,000",  // approved actual cost
+  "400,000",    // pending / unapproved cost
+  "7,400,000",  // working actual cost
+  "4,040,000",  // approved remaining client balance
+  "3,640,000",  // working remaining client balance
+].every((t) => summary.includes(t));
+/* Client funding must never be presented as Larsa revenue or profit. */
+const noFundingAsRevenue = hasSummary
+  && !summary.includes("12,960,000")   // funding + fee dressed up as income
+  && !summary.includes("5,960,000");   // funding − spending dressed up as profit
+const refundNumber = authoritativeNumbers && noFundingAsRevenue;
 const costProgress = hasSummary && summary.includes("Not Available") === false;
-console.log("summary card:", hasSummary, "labels:", summaryChecks, "refund 9,936,000 shown:", refundNumber);
+console.log("summary card:", hasSummary, "labels:", summaryChecks,
+  "authoritative figures:", authoritativeNumbers, "funding kept out of revenue:", noFundingAsRevenue);
 
 // Add a funding entry through the REAL modal → must hit acct_post_transaction.
 await page.evaluate(`window.__larsaReturnProjectId = "prj1"; openEditor("funding", null);`);

@@ -39,7 +39,8 @@ for f in "$repo"/supabase/migrations/2026*_acct_*.sql; do
 done
 
 total=0
-for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" "$here/accounting-makerchecker-sql.test.sql"; do
+for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
+          "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"
