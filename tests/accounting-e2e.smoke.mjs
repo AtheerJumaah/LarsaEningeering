@@ -171,6 +171,29 @@ const summaryChecks = hasSummary && [
   "Approved Remaining Client Balance", "Working Remaining Client Balance",
   "Larsa Revenue", "Company Net Profit",
 ].every((t) => summary.includes(t));
+/* Opening a project gives the whole project: every ledger you can record
+   into, with its own Add button, on the one page. */
+const workspace = await page.evaluate(() => {
+  const el = document.getElementById("acct_workspace");
+  if (!el) return null;
+  const page_ = document.getElementById("view");
+  const addButtons = Array.from(page_.querySelectorAll("button"))
+    .map((b) => (b.getAttribute("onclick") || ""))
+    .filter((a) => a.includes("acctAddHere"));
+  const cards = Array.from(page_.querySelectorAll(".acct-ws-card h3")).map((h) => h.textContent.trim());
+  return { quickBar: el.textContent, addButtons, cards };
+});
+const workspaceOk = !!workspace
+  && workspace.quickBar.includes("Record in this project")
+  // every kind can be added without leaving the page
+  && ["funding", "materials", "projectLabor", "expenses", "revenue"]
+       .every((c) => workspace.addButtons.some((a) => a.includes("'" + c + "'")))
+  // and every ledger is shown inline
+  && ["Funding received", "Materials", "Workforce / Labour", "Other costs", "Revenue"]
+       .every((n) => workspace.cards.some((c) => c.startsWith(n)));
+console.log("project workspace:", workspaceOk,
+  workspace ? `(${workspace.addButtons.length} add buttons, ${workspace.cards.length} ledgers inline)` : "(missing)");
+
 /* The exact production figures the corrective pass must reproduce. */
 const authoritativeNumbers = hasSummary && [
   "12,000,000", // gross client funding
@@ -223,7 +246,7 @@ const fatal = errors.filter((e) => !/Failed to fetch/.test(e));
 console.log("page errors:", JSON.stringify(fatal));
 const pass = mirror.on && mirror.fundingCount === 1 && mirror.fundingFee === 800000 && mirror.fundingNet === 9200000
   && mirror.managed && mirror.fxRate === 1310 && mirror.projBudget === 100000000
-  && hasSummary && summaryChecks && refundNumber && costProgress
+  && hasSummary && summaryChecks && refundNumber && costProgress && workspaceOk
   && modalState.projectLocked && modalState.dateFilled && modalState.feePanel
   && posted.length === 1 && posted[0].body.txn.amount === 2000000 && posted[0].body.txn.status === "pending"
   && receiptModalUp && reviewMirror === "pending_review"

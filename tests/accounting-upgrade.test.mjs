@@ -290,7 +290,7 @@ test("dual control: approvers are assignable per area and per project; accountan
   const cloud = cloudNow();
   assert.match(cloud, /acct_prj_accountants/);
   assert.match(cloud, /acct_prj_approvers/);
-  assert.match(cloud, /acct-area-approver/);
+  assert.match(cloud, /acct_area_/);   // per-area approver picker
   assert.match(cloud, /approverScope\(/);
   assert.match(cloud, /entryScopeOk\(/);
 });
@@ -481,4 +481,53 @@ test("the service worker ships the corrected engine and the logo", () => {
   assert.match(sw, /larsa-control-v17/);
   assert.ok(!/larsa-control-v16"/.test(sw), "the cache name must be bumped past v16");
   assert.match(sw, /\/icons\/larsa-logo\.svg/);
+});
+
+test("assigning accountants and approvers picks real accounts from a dropdown", () => {
+  const cloud = cloudNow();
+  // A roster is built from the signed-in staff list, with sane fallbacks.
+  assert.match(cloud, /function acctRoster\(\)/);
+  assert.match(cloud, /window\.__larsaAccountingRoster/);
+  assert.match(cloud, /state\.users/);
+  // The pickers are real selects, not free-text email boxes.
+  assert.match(cloud, /function rosterPicker\(/);
+  assert.match(cloud, /<select id="' \+ id \+ '" multiple/);
+  assert.match(cloud, /function readPicker\(/);
+  assert.match(cloud, /rosterPicker\("acct_prj_accountants"/);
+  assert.match(cloud, /rosterPicker\("acct_prj_approvers"/);
+  assert.match(cloud, /rosterPicker\("acct_area_"/);
+  assert.ok(!/id="acct_prj_accountants" placeholder/.test(cloud),
+    "the assigned-accountants field must no longer be a typed email box");
+  assert.ok(!/class="acct-area-approver"/.test(cloud),
+    "area approvers must no longer be typed email boxes");
+  // Choosing who to grant permissions to is also a person picker.
+  assert.match(cloud, /Choose a person…/);
+  // An existing assignment stays selectable even if the person left the roster.
+  assert.match(cloud, /never silently dropped/);
+  // The parent hands over the roster with email, name and accounting role.
+  assert.match(page, /const accountingRoster = readStaffUsers\(\)/);
+  assert.match(page, /role: accountingRole\(person\)/);
+  assert.match(page, /window\.__larsaAccountingRoster=/);
+});
+
+test("a project page is a full workspace: add funding or any cost without leaving it", () => {
+  const cloud = cloudNow();
+  assert.match(cloud, /projectWorkspaceHTML/);
+  assert.match(cloud, /Record in this project/);
+  // Every ledger you can record into is present on the project page.
+  const kinds = /var WORKSPACE_KINDS = \[([\s\S]*?)\n  \];/.exec(cloud);
+  assert.ok(kinds, "the workspace must declare its ledgers");
+  for (const coll of ["funding", "materials", "projectLabor", "expenses", "revenue"]) {
+    assert.ok(kinds[1].includes(`coll: "${coll}"`), "workspace must include " + coll);
+  }
+  assert.match(cloud, /acctAddHere/);
+  // Entries stay locked to the project and come back to the same page.
+  assert.match(cloud, /addLinked310/);
+  assert.match(cloud, /__larsaReturnProjectTab = "summary"/);
+  // The engine's own tables are reused, so row actions, review chips and
+  // receipt buttons all work inline.
+  assert.match(cloud, /xExpenseTable/);
+  assert.match(cloud, /xMaterialTable/);
+  assert.match(cloud, /xLaborTable/);
+  assert.match(cloud, /workspaceTable/);
 });
