@@ -44,10 +44,17 @@ test("the six Home work-area cards are untouched", () => {
     "HR & Skills", "Accounting", "Administration"]) {
     assert.ok(page.includes(`title: "${title}"`), title + " must remain a work-area card");
   }
-  // My Pay is reachable as a quick action and a personal nav entry — never
-  // as a seventh large card.
+  // My Pay is reachable without taking a row in the sidebar: a personal
+  // control in the bar, a Home quick action, and an entry beside the portal
+  // that produces it. Never a seventh large card, and never a nav row.
   assert.match(page, /"quick-clock",\s*"my-pay",/);
+  assert.match(page, /className="theme pay-button"/);
+  assert.match(page, /aria-label="My Pay — salary, commissions, and payment history"/);
+  assert.match(page, /items: \["payroll-portal", "my-pay",/);
   assert.ok(!/title: "My Pay"/.test(page), "My Pay must not become a seventh work-area card");
+  const homeGroup = /label: "Home",\s*\n\s*items: \[([\s\S]*?)\n  \},/.exec(page);
+  assert.ok(homeGroup && !homeGroup[1].includes("my-pay"),
+    "My Pay must not take a row in the sidebar");
 });
 
 test("your own pay is yours; anybody else's is a backend permission", () => {
@@ -261,7 +268,7 @@ test("Payroll & People is one portal over the same records", () => {
   assert.match(page, /active\.native === "payrollPortal" \? "native active" : "native"/);
   assert.match(page, /if \(item\.id === "sales-commissions" \|\| item\.id === "payroll-portal"\) return "accounting";/);
   // It leads the Payroll & People group; the older entries stay reachable.
-  assert.match(page, /items: \["payroll-portal", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"\]/);
+  assert.match(page, /items: \["payroll-portal", "my-pay", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"\]/);
 
   // The whole cycle is on one page, in the order the work happens.
   for (const action of ["pay_open_period", "pay_add_item", "pay_submit_period", "pay_decide_period",

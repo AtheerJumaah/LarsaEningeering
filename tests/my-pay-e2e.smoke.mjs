@@ -125,14 +125,18 @@ await page.waitForTimeout(3200);
 const quick = page.locator(".quick-action-row button", { hasText: "My Pay" });
 const reachable = await quick.count();
 if (reachable) await quick.first().click();
-else await page.locator(".nav-item", { hasText: "My Pay" }).first().click();
+else await page.locator(".pay-button").first().click();
 await page.waitForTimeout(1600);
 
 const shell = await page.evaluate(() => ({
   heading: (document.querySelector(".page-heading h1") || {}).textContent,
-  onePlace: document.querySelectorAll(".pay-scroll").length,
+  // Scoped to the active view: the payroll portal shares this shell class,
+  // and every native view is mounted at once.
+  onePlace: document.querySelectorAll(".native.active .pay-scroll").length,
   ownHeader: document.querySelectorAll(".pay-scroll .topbar, .pay-scroll aside.sidebar").length,
   cards: document.querySelectorAll(".pay-card").length,
+  // Personal control in the bar, not a row in the sidebar.
+  sidebarRow: [...document.querySelectorAll("aside.sidebar .nav-item b")].some((b) => b.textContent === "My Pay"),
   // Scoped to Home: every native view is mounted at once, and Administration
   // has cards of its own.
   /* The Home cards are permission-filtered, so this account sees a subset.
@@ -173,7 +177,7 @@ const charts = await page.evaluate(() => ({
 await page.locator(".pay-period-head").first().click();
 await page.waitForTimeout(500);
 const detail = await page.evaluate(() => ({
-  stillOnMyPay: document.querySelectorAll(".pay-scroll").length === 1,
+  stillOnMyPay: document.querySelectorAll(".native.active .pay-scroll").length === 1,
   rows: document.querySelectorAll(".pay-period.is-open .pay-table tbody tr").length,
   hasDeduction: /Deduction/.test(document.querySelector(".pay-period.is-open .pay-table")?.textContent || ""),
   netRow: (document.querySelector(".pay-period.is-open .pay-total-row td:last-child") || {}).textContent,
@@ -269,6 +273,7 @@ console.log("page errors:", JSON.stringify(fatal));
 
 const pass = shell.onePlace === 1 && shell.ownHeader === 0 && shell.cards === 10
   && shell.homeCards.length > 0 && !shell.homeCards.includes("My Pay")
+  && shell.sidebarRow === false
   && summary.base === "3,000,000 IQD" && summary.approvedCommission === "500,000 IQD"
   && summary.pendingCommission === "250,000 IQD" && summary.reimbursement === "75,000 IQD"
   && summary.net === "3,325,000 IQD" && summary.paid === "1,000,000 IQD"
