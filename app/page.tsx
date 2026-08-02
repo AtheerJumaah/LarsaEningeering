@@ -2757,29 +2757,49 @@ function readAccountingSnapshot(): AccountingSnapshot {
 
 /* ============================================================
    Construction financials
-   One project's figures, and the same figures added up for a
-   region or the whole company. The arithmetic deliberately
-   mirrors xTotals() and v35ProjectLikeSeries() inside
-   public/engines/accounting.html so a number here always equals
-   the number on the engine's own Summary tab and client
-   statement:
-     income  = client funding + Larsa's consultancy fee on it
-               + any engineering revenue booked to the project
-     cost    = materials + labour + other project expenses
-     net     = income - cost
-   The consultancy fee counts as income even though it never
-   lands in the construction trust balance, because it is what
-   the project earned Larsa. A fee waived on a payment is not
-   counted for that payment.
+
+   Two separate things, never added together:
+
+   A) Client fund control — money Larsa holds and manages FOR a
+      project. Gross client funding, the consultancy fee taken
+      from it, the net construction funds that remain, what has
+      been spent on materials/labour/other, and the balance still
+      held for the client. None of this is Larsa's money.
+
+   B) Larsa company accounting — what the company actually earns.
+        larsaRevenue = consultancy fees earned
+                     + engineering revenue
+                     + other Larsa revenue
+        companyNet   = larsaRevenue - Larsa's own expenses
+      Client funding is NOT revenue, and materials or labour paid
+      out of client-controlled funds are NOT company expenses, so
+      company profit is never "funding minus construction spend".
+
+   The authoritative figures come from the backend
+   (acct_company_financials). These local sums are the offline
+   fallback and the worked example, and follow exactly the same
+   rules so the two can never tell different stories.
    ============================================================ */
 type ProjectFinancials = {
-  income: number; funding: number; fees: number; revenue: number;
-  materials: number; labor: number; expenses: number; cost: number; net: number;
-  margin: number;
+  /* A) client fund control */
+  funding: number; fees: number; netFunding: number;
+  materials: number; labor: number; expenses: number;
+  cost: number; workingCost: number; pendingCost: number;
+  balance: number; workingBalance: number;
+  /* B) Larsa company accounting */
+  revenue: number; larsaRevenue: number; companyExpenses: number;
+  companyNet: number; margin: number;
+  /* reliability */
+  unapproved: number; status: "green" | "yellow" | "red";
 };
 const ZERO_FINANCIALS: ProjectFinancials = {
-  income: 0, funding: 0, fees: 0, revenue: 0,
-  materials: 0, labor: 0, expenses: 0, cost: 0, net: 0, margin: 0,
+  funding: 0, fees: 0, netFunding: 0,
+  materials: 0, labor: 0, expenses: 0,
+  cost: 0, workingCost: 0, pendingCost: 0,
+  balance: 0, workingBalance: 0,
+  revenue: 0, larsaRevenue: 0, companyExpenses: 0,
+  companyNet: 0, margin: 0,
+  unapproved: 0, status: "green",
 };
 /* `within` lets the same arithmetic serve a whole-company total, one region,
    one project, or a single month, without a second copy of the rules. */
@@ -2794,11 +2814,38 @@ function sumLedger(
     return total + toUsd(row.amount, row.currency, rate, row.fxRate);
   }, 0);
 }
+/* Every live saved entry, whether or not it has been approved: working
+   totals move the moment something is entered. */
+const OPEN_STATUSES = ["Draft", "Pending", "Pending Approval", "Expected", "Requested", "Ordered", "Partially Paid"];
+function isLive(status: string) {
+  return SETTLED.includes(status) || OPEN_STATUSES.includes(status);
+}
+/* A cost only leaves the client's fund control when it is explicitly
+   Larsa's own money — never by default. */
+function isLarsaBorne(row: LedgerLine) {
+  const src = String((row as { paymentSource?: unknown }).paymentSource || "").toLowerCase();
+  return ["larsa", "larsa operating", "larsa funds", "company", "company funds",
+    "company account", "larsa account", "operating", "overhead", "larsa overhead"].includes(src);
+}
+function sumLive(
+  rows: LedgerLine[], ids: Set<string> | null, rate: number,
+  approvedOnly: boolean, larsaBorne: boolean,
+  within?: (row: LedgerLine) => boolean,
+) {
+  return rows.reduce((total, row) => {
+    if (ids && !ids.has(row.projectId)) return total;
+    if (!(approvedOnly ? SETTLED.includes(row.status) : isLive(row.status))) return total;
+    if (isLarsaBorne(row) !== larsaBorne) return total;
+    if (within && !within(row)) return total;
+    return total + toUsd(row.amount, row.currency, rate, row.fxRate);
+  }, 0);
+}
 function financialsFor(
   snapshot: AccountingSnapshot, ids: Set<string> | null,
   within?: (row: LedgerLine) => boolean,
 ): ProjectFinancials {
   const rate = snapshot.rate;
+  /* ---- A) client fund control ---- */
   const funding = sumLedger(snapshot.funding, ids, rate, within);
   const fees = snapshot.funding.reduce((total, row) => {
     if (ids && !ids.has(row.projectId)) return total;
@@ -2806,16 +2853,41 @@ function financialsFor(
     if (within && !within(row)) return total;
     return total + toUsd(row.consultancyFee, row.currency, rate, row.fxRate);
   }, 0);
-  const revenue = sumLedger(snapshot.revenue, ids, rate, within);
-  const materials = sumLedger(snapshot.materials, ids, rate, within);
-  const labor = sumLedger(snapshot.labor, ids, rate, within);
-  const expenses = sumLedger(snapshot.expenses, ids, rate, within);
-  const income = funding + fees + revenue;
+  const materials = sumLive(snapshot.materials, ids, rate, true, false, within);
+  const labor = sumLive(snapshot.labor, ids, rate, true, false, within);
+  const expenses = sumLive(snapshot.expenses, ids, rate, true, false, within);
   const cost = materials + labor + expenses;
-  const net = income - cost;
+  const workingCost =
+    sumLive(snapshot.materials, ids, rate, false, false, within)
+    + sumLive(snapshot.labor, ids, rate, false, false, within)
+    + sumLive(snapshot.expenses, ids, rate, false, false, within);
+  const netFunding = funding - fees;
+  /* ---- B) Larsa company accounting ---- */
+  const revenue = sumLedger(snapshot.revenue, ids, rate, within);
+  const companyExpenses =
+    sumLive(snapshot.materials, ids, rate, true, true, within)
+    + sumLive(snapshot.labor, ids, rate, true, true, within)
+    + sumLive(snapshot.expenses, ids, rate, true, true, within);
+  const larsaRevenue = fees + revenue;
+  const companyNet = larsaRevenue - companyExpenses;
+  /* ---- reliability ---- */
+  const ledgers = [snapshot.funding, snapshot.materials, snapshot.labor, snapshot.expenses, snapshot.revenue];
+  let unapproved = 0;
+  ledgers.forEach((list) => list.forEach((row) => {
+    if (ids && !ids.has(row.projectId)) return;
+    if (within && !within(row)) return;
+    if (OPEN_STATUSES.includes(row.status)) unapproved += 1;
+  }));
   return {
-    income, funding, fees, revenue, materials, labor, expenses, cost, net,
-    margin: income > 0 ? (net / income) * 100 : 0,
+    funding, fees, netFunding,
+    materials, labor, expenses,
+    cost, workingCost, pendingCost: workingCost - cost,
+    balance: netFunding - cost,
+    workingBalance: netFunding - workingCost,
+    revenue, larsaRevenue, companyExpenses, companyNet,
+    margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
+    unapproved,
+    status: unapproved > 0 ? "yellow" : "green",
   };
 }
 
@@ -2966,9 +3038,10 @@ function sampleConstructionSnapshot(rate: number): AccountingSnapshot {
    way out. Income shades of blue, cost shades of red, so the two sides stay
    distinguishable by hue and the parts by lightness, which survives colour
    blindness where six separate hues would not. CSS only, and it prints. */
-const INCOME_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[] = [
-  { key: "funding", label: "Client funding", tint: "#1e40af" },
-  { key: "fees", label: "Our fee", tint: "#3b82f6" },
+/* Client funds received, kept apart from what Larsa earned on them. */
+const INFLOW_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[] = [
+  { key: "netFunding", label: "Net client funds", tint: "#1e40af" },
+  { key: "fees", label: "Larsa fee earned", tint: "#3b82f6" },
   { key: "revenue", label: "Engineering revenue", tint: "#93c5fd" },
 ];
 const COST_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[] = [
@@ -2987,11 +3060,14 @@ function MonthBars({
   if (!points.length) return null;
   const peak = Math.max(
     1,
-    ...points.map((point) => Math.max(point.figures.income, point.figures.cost)),
+    ...points.map((point) => Math.max(
+      point.figures.netFunding + point.figures.fees + point.figures.revenue,
+      point.figures.workingCost,
+    )),
   );
   const column = (
     figures: ProjectFinancials,
-    parts: typeof INCOME_PARTS,
+    parts: typeof INFLOW_PARTS,
     total: number,
     heading: string,
   ) => (
@@ -3012,20 +3088,21 @@ function MonthBars({
   return (
     <div className="fin-chart">
       <div className="fin-chart-key">
-        {[...INCOME_PARTS, ...COST_PARTS].map((part) => (
+        {[...INFLOW_PARTS, ...COST_PARTS].map((part) => (
           <span key={part.key}><i style={{ background: part.tint }} /> {part.label}</span>
         ))}
-        <span><i style={{ background: "#0f7b45" }} /> Net</span>
+        <span><i style={{ background: "#0f7b45" }} /> Larsa net</span>
       </div>
       <div className="fin-chart-plot" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(46px, 1fr))` }}>
         {points.map((point) => (
           <div className="fin-month" key={point.key}>
             <span className="fin-month-bars">
-              {column(point.figures, INCOME_PARTS, point.figures.income, "Income")}
-              {column(point.figures, COST_PARTS, point.figures.cost, "Cost")}
+              {column(point.figures, INFLOW_PARTS,
+                point.figures.netFunding + point.figures.fees + point.figures.revenue, "Received")}
+              {column(point.figures, COST_PARTS, point.figures.workingCost, "Spent")}
             </span>
-            <b className={point.figures.net < 0 ? "fin-month-net down" : "fin-month-net"}>
-              {point.figures.net === 0 ? "\u2014" : formatCompact(point.figures.net, currency, rate)}
+            <b className={point.figures.companyNet < 0 ? "fin-month-net down" : "fin-month-net"}>
+              {point.figures.companyNet === 0 ? "\u2014" : formatCompact(point.figures.companyNet, currency, rate)}
             </b>
             <small>{point.label}</small>
           </div>
@@ -3064,6 +3141,66 @@ function installPlatform() {
   return { ios, wrongBrowser: ios ? wrongBrowser : "", standalone };
 }
 
+/* The authoritative backend figures, mapped into the same shape the page
+   already renders. USD equivalents are per-entry historical snapshots, so
+   nothing here ever re-converts history at today's rate. */
+type ServerFinancialRow = Record<string, unknown>;
+function num(source: unknown, path: string[]): number {
+  let node: unknown = source;
+  for (const key of path) {
+    if (!node || typeof node !== "object") return 0;
+    node = (node as Record<string, unknown>)[key];
+  }
+  const value = Number(node);
+  return Number.isFinite(value) ? value : 0;
+}
+function fromServerRow(row: ServerFinancialRow): ProjectFinancials {
+  const ap = ["client_funds", "approved"];
+  const wk = ["client_funds", "working"];
+  const pn = ["client_funds", "pending"];
+  const co = ["company"];
+  const larsaRevenue = num(row, [...co, "larsa_revenue_usd"]);
+  const companyNet = num(row, [...co, "company_net_profit_usd"]);
+  const status = String(num(row, ["review", "needs_correction_entries"]) > 0
+    ? "red" : num(row, ["review", "unapproved_entries"]) > 0 ? "yellow" : "green") as ProjectFinancials["status"];
+  return {
+    funding: num(row, [...ap, "gross_funding_usd"]),
+    fees: num(row, [...ap, "initial_fee_usd"]),
+    netFunding: num(row, [...ap, "net_construction_funding_usd"]),
+    materials: num(row, [...ap, "materials_usd"]),
+    labor: num(row, [...ap, "labor_usd"]),
+    expenses: num(row, [...ap, "other_costs_usd"]),
+    cost: num(row, [...ap, "construction_cost_usd"]),
+    workingCost: num(row, [...wk, "construction_cost_usd"]),
+    pendingCost: num(row, [...pn, "construction_cost_usd"]),
+    balance: num(row, [...ap, "remaining_balance_usd"]),
+    workingBalance: num(row, [...wk, "remaining_balance_usd"]),
+    revenue: num(row, [...co, "engineering_revenue_usd"]),
+    larsaRevenue,
+    companyExpenses: num(row, [...co, "company_expenses_usd"]),
+    companyNet,
+    margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
+    unapproved: num(row, ["review", "unapproved_entries"]),
+    status,
+  };
+}
+function addFinancials(a: ProjectFinancials, b: ProjectFinancials): ProjectFinancials {
+  const larsaRevenue = a.larsaRevenue + b.larsaRevenue;
+  const companyNet = a.companyNet + b.companyNet;
+  return {
+    funding: a.funding + b.funding, fees: a.fees + b.fees, netFunding: a.netFunding + b.netFunding,
+    materials: a.materials + b.materials, labor: a.labor + b.labor, expenses: a.expenses + b.expenses,
+    cost: a.cost + b.cost, workingCost: a.workingCost + b.workingCost, pendingCost: a.pendingCost + b.pendingCost,
+    balance: a.balance + b.balance, workingBalance: a.workingBalance + b.workingBalance,
+    revenue: a.revenue + b.revenue, larsaRevenue,
+    companyExpenses: a.companyExpenses + b.companyExpenses, companyNet,
+    margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
+    unapproved: a.unapproved + b.unapproved,
+    status: a.status === "red" || b.status === "red" ? "red"
+      : a.status === "yellow" || b.status === "yellow" ? "yellow" : "green",
+  };
+}
+
 function ConstructionFinancials({
   snapshot, viewer,
 }: {
@@ -3074,9 +3211,53 @@ function ConstructionFinancials({
   const [region, setRegion] = useState("All");
   const [currency, setCurrency] = useState<"IQD" | "USD">("IQD");
   const [openProject, setOpenProject] = useState("");
+  /* One authoritative calculation: when the shared ledger is reachable its
+     figures replace the local sums entirely, so this page, the engine's
+     summary, the client statement and every export agree by construction. */
+  const [serverRows, setServerRows] = useState<Record<string, ProjectFinancials> | null>(null);
+  const [ledgerNote, setLedgerNote] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    // Deferred a tick, matching the hydrate pattern used elsewhere here, so
+    // the effect never sets state synchronously during render.
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (useSample) { setServerRows(null); setLedgerNote(""); return; }
+      const client = supabaseConfigured() ? getSupabaseClient() : null;
+      if (!client) { setLedgerNote("Offline figures — the shared accounting ledger is not connected."); return; }
+      client.rpc("acct_company_financials", { p_project_ids: null, p_region: null }).then(({ data, error }) => {
+        if (cancelled) return;
+        if (error || !data) { setLedgerNote("Offline figures — could not reach the shared accounting ledger."); return; }
+        const payload = data as { rows?: ServerFinancialRow[] };
+        const map: Record<string, ProjectFinancials> = {};
+        (payload.rows || []).forEach((row) => {
+          const id = String((row as Record<string, unknown>).project_id || "");
+          if (id) map[id] = fromServerRow(row);
+        });
+        setServerRows(map);
+        setLedgerNote("");
+      }, () => { if (!cancelled) setLedgerNote("Offline figures — could not reach the shared accounting ledger."); });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [useSample]);
+
 
   const sample = useMemo(() => sampleConstructionSnapshot(snapshot.rate), [snapshot.rate]);
   const live = useSample ? sample : snapshot;
+  /* Server figures win whenever the ledger answered for a project; the local
+     sums remain as the offline fallback and for the worked example. */
+  const figuresFor = useCallback((ids: Set<string>) => {
+    if (serverRows && !useSample) {
+      let total = ZERO_FINANCIALS;
+      let found = false;
+      ids.forEach((id) => {
+        const row = serverRows[id];
+        if (row) { total = addFinancials(total, row); found = true; }
+      });
+      if (found) return total;
+    }
+    return financialsFor(live, ids);
+  }, [serverRows, useSample, live]);
   const rate = live.rate;
   const show = (value: number) => formatMoney(value, currency, rate);
   const brief = (value: number) => formatCompact(value, currency, rate);
@@ -3100,15 +3281,15 @@ function ConstructionFinancials({
     () => projects
       .map((project) => ({
         project,
-        figures: financialsFor(live, new Set([project.id])),
+        figures: figuresFor(new Set([project.id])),
         months: monthlySeries(live, new Set([project.id])),
       }))
-      .sort((a, b) => b.figures.income - a.figures.income),
-    [projects, live],
+      .sort((a, b) => b.figures.funding - a.figures.funding),
+    [projects, live, figuresFor],
   );
   const totals = useMemo(
-    () => (scopeIds.size ? financialsFor(live, scopeIds) : ZERO_FINANCIALS),
-    [scopeIds, live],
+    () => (scopeIds.size ? figuresFor(scopeIds) : ZERO_FINANCIALS),
+    [scopeIds, figuresFor],
   );
   const totalMonths = useMemo(
     () => (scopeIds.size ? monthlySeries(live, scopeIds) : []),
@@ -3118,23 +3299,28 @@ function ConstructionFinancials({
     const ids = new Set(live.projects
       .filter((row) => allowed.has(row.id) && isConstruction(row) && row.region === name)
       .map((row) => row.id));
-    return { name, count: ids.size, figures: ids.size ? financialsFor(live, ids) : ZERO_FINANCIALS };
-  }), [live, allowed]);
+    return { name, count: ids.size, figures: ids.size ? figuresFor(ids) : ZERO_FINANCIALS };
+  }), [live, allowed, figuresFor]);
 
-  const scale = Math.max(1, ...rows.map((row) => Math.max(row.figures.income, row.figures.cost)));
+  const scale = Math.max(1, ...rows.map((row) => Math.max(row.figures.netFunding, row.figures.workingCost)));
 
-  /* Money coming in reads blue, money going out red, and the result green
-     (or red if the project lost money) — so the three kinds of figure are
-     told apart by colour without a legend. */
-  const tiles: { label: string; value: number; note: string; tone: string }[] = [
-    { label: "Income", value: totals.income, note: "Funding + fee + revenue", tone: "in" },
-    { label: "Client funding", value: totals.funding, note: "Received into trust", tone: "in" },
-    { label: "Our fee", value: totals.fees, note: "Waivers excluded", tone: "in" },
-    { label: "Materials", value: totals.materials, note: "Supply cost", tone: "out" },
-    { label: "Labour", value: totals.labor, note: "Workforce cost", tone: "out" },
-    { label: "Other expenses", value: totals.expenses, note: "Supervision, hire", tone: "out" },
-    { label: "Total cost", value: totals.cost, note: "Materials + labour + expenses", tone: "out" },
-    { label: "Net", value: totals.net, note: `${totals.margin.toFixed(1)}% margin`, tone: totals.net < 0 ? "down" : "up" },
+  /* Two separate groups of tiles, never mixed into a single "income".
+     Client funds are money held for the project; company figures are what
+     Larsa earned. */
+  const clientTiles: { label: string; value: number; note: string; tone: string }[] = [
+    { label: "Gross client funding", value: totals.funding, note: "Received and held for projects", tone: "in" },
+    { label: "Consultancy fee", value: totals.fees, note: "Taken from funding", tone: "in" },
+    { label: "Net construction funds", value: totals.netFunding, note: "Available to spend", tone: "in" },
+    { label: "Approved cost", value: totals.cost, note: "Materials + labour + other", tone: "out" },
+    { label: "Working cost", value: totals.workingCost, note: totals.pendingCost > 0 ? `Incl. ${show(totals.pendingCost)} unapproved` : "All approved", tone: "out" },
+    { label: "Client balance held", value: totals.balance, note: `Working: ${show(totals.workingBalance)}`, tone: "hold" },
+  ];
+  const companyTiles: { label: string; value: number; note: string; tone: string }[] = [
+    { label: "Consultancy fee revenue", value: totals.fees, note: "Earned by Larsa", tone: "in" },
+    { label: "Engineering revenue", value: totals.revenue, note: "Booked to projects", tone: "in" },
+    { label: "Larsa revenue", value: totals.larsaRevenue, note: "Fees + engineering + other", tone: "in" },
+    { label: "Larsa expenses", value: totals.companyExpenses, note: "Costs Larsa itself paid", tone: "out" },
+    { label: "Company net profit", value: totals.companyNet, note: `${totals.margin.toFixed(1)}% margin`, tone: totals.companyNet < 0 ? "down" : "up" },
   ];
 
   return (
@@ -3187,14 +3373,65 @@ function ConstructionFinancials({
         </p>
       )}
 
-      <section className="fin-tiles">
-        {tiles.map((tile) => (
-          <article key={tile.label} className={`fin-tile ${tile.tone}`}>
-            <small>{tile.label}</small>
-            <b title={show(tile.value)}>{brief(tile.value)}</b>
-            <em>{tile.note}</em>
-          </article>
-        ))}
+      {ledgerNote && <p className="fin-note">{ledgerNote}</p>}
+      {serverRows && (
+        <p className="fin-note">
+          Figures come from the shared accounting ledger — the same calculation the accounting
+          engine, the client statement and every export use.
+        </p>
+      )}
+
+      {totals.unapproved > 0 && (
+        <p className="fin-note" style={{ borderInlineStartColor: "#b58900", color: "#7a5c00" }}>
+          ⏳ Contains {totals.unapproved} unapproved entr{totals.unapproved === 1 ? "y" : "ies"}. Working
+          figures include every saved entry — approval changes reliability, never the amounts.
+        </p>
+      )}
+
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">A · Client fund control</span>
+            <h3>Money held and managed for clients</h3>
+          </div>
+          <span className="black-badge">not Larsa revenue</span>
+        </div>
+        <p className="fin-note">
+          Client construction funding is held in trust for the project. It is never counted as
+          Larsa income, and construction spending out of it is never a Larsa company expense.
+        </p>
+        <section className="fin-tiles">
+          {clientTiles.map((tile) => (
+            <article key={tile.label} className={`fin-tile ${tile.tone}`}>
+              <small>{tile.label}</small>
+              <b title={show(tile.value)}>{brief(tile.value)}</b>
+              <em>{tile.note}</em>
+            </article>
+          ))}
+        </section>
+      </section>
+
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">B · Larsa company accounting</span>
+            <h3>What the company actually earned</h3>
+          </div>
+          <span className="black-badge">{show(totals.companyNet)} net profit</span>
+        </div>
+        <p className="fin-note">
+          Larsa revenue = consultancy fees earned + engineering revenue + other Larsa revenue.
+          Company net profit = Larsa revenue − Larsa&rsquo;s own expenses.
+        </p>
+        <section className="fin-tiles">
+          {companyTiles.map((tile) => (
+            <article key={tile.label} className={`fin-tile ${tile.tone}`}>
+              <small>{tile.label}</small>
+              <b title={show(tile.value)}>{brief(tile.value)}</b>
+              <em>{tile.note}</em>
+            </article>
+          ))}
+        </section>
       </section>
 
       <section className="panel">
@@ -3203,7 +3440,7 @@ function ConstructionFinancials({
             <span className="eyebrow">Month by month</span>
             <h3>{region === "All" ? "All construction projects" : `${region} construction`}</h3>
           </div>
-          <span className="black-badge">{show(totals.net)} net</span>
+          <span className="black-badge">{show(totals.companyNet)} company net</span>
         </div>
         {totalMonths.length
           ? <MonthBars points={totalMonths} currency={currency} rate={rate} />
@@ -3218,8 +3455,10 @@ function ConstructionFinancials({
           <table className="data-table fin-table">
             <thead>
               <tr>
-                <th>Region</th><th>Projects</th><th>Income</th><th>Our fee</th>
-                <th>Materials</th><th>Labour</th><th>Expenses</th><th>Cost</th><th>Net</th><th>Margin</th>
+                <th>Region</th><th>Projects</th>
+                <th>Client funding</th><th>Net funds</th>
+                <th>Approved cost</th><th>Working cost</th><th>Client balance</th>
+                <th>Larsa revenue</th><th>Company net</th><th>Margin</th>
               </tr>
             </thead>
             <tbody>
@@ -3227,26 +3466,26 @@ function ConstructionFinancials({
                 <tr key={row.name}>
                   <td><b>{row.name}</b></td>
                   <td>{row.count}</td>
-                  <td>{show(row.figures.income)}</td>
-                  <td>{show(row.figures.fees)}</td>
-                  <td>{show(row.figures.materials)}</td>
-                  <td>{show(row.figures.labor)}</td>
-                  <td>{show(row.figures.expenses)}</td>
+                  <td>{show(row.figures.funding)}</td>
+                  <td>{show(row.figures.netFunding)}</td>
                   <td>{show(row.figures.cost)}</td>
-                  <td className={row.figures.net < 0 ? "fin-neg" : "fin-pos"}>{show(row.figures.net)}</td>
+                  <td>{show(row.figures.workingCost)}</td>
+                  <td>{show(row.figures.balance)}</td>
+                  <td>{show(row.figures.larsaRevenue)}</td>
+                  <td className={row.figures.companyNet < 0 ? "fin-neg" : "fin-pos"}>{show(row.figures.companyNet)}</td>
                   <td>{row.figures.margin.toFixed(1)}%</td>
                 </tr>
               ))}
               <tr className="fin-total-row">
                 <td><b>Total</b></td>
                 <td>{regionRows.reduce((sum, row) => sum + row.count, 0)}</td>
-                <td>{show(totals.income)}</td>
-                <td>{show(totals.fees)}</td>
-                <td>{show(totals.materials)}</td>
-                <td>{show(totals.labor)}</td>
-                <td>{show(totals.expenses)}</td>
+                <td>{show(totals.funding)}</td>
+                <td>{show(totals.netFunding)}</td>
                 <td>{show(totals.cost)}</td>
-                <td className={totals.net < 0 ? "fin-neg" : "fin-pos"}>{show(totals.net)}</td>
+                <td>{show(totals.workingCost)}</td>
+                <td>{show(totals.balance)}</td>
+                <td>{show(totals.larsaRevenue)}</td>
+                <td className={totals.companyNet < 0 ? "fin-neg" : "fin-pos"}>{show(totals.companyNet)}</td>
                 <td>{totals.margin.toFixed(1)}%</td>
               </tr>
             </tbody>
@@ -3281,40 +3520,54 @@ function ConstructionFinancials({
                   <b>{project.code ? `${project.code} · ` : ""}{project.name}</b>
                   <small>{[project.clientName, project.region, project.status].filter(Boolean).join(" · ")}</small>
                 </span>
-                <span className="pf-figure"><small>Income</small><b>{brief(figures.income)}</b></span>
-                <span className="pf-figure"><small>Cost</small><b>{brief(figures.cost)}</b></span>
+                <span className="pf-figure"><small>Client funds</small><b>{brief(figures.netFunding)}</b></span>
+                <span className="pf-figure"><small>Spent</small><b>{brief(figures.workingCost)}</b></span>
                 <span className="pf-figure">
-                  <small>Net</small>
-                  <b className={figures.net < 0 ? "fin-neg" : undefined}>{brief(figures.net)}</b>
+                  <small>Larsa net</small>
+                  <b className={figures.companyNet < 0 ? "fin-neg" : undefined}>{brief(figures.companyNet)}</b>
                 </span>
+                {figures.unapproved > 0 && (
+                  <span className="pf-figure" title={`Contains ${figures.unapproved} unapproved entries`}>
+                    <small>Review</small><b style={{ color: "#b58900" }}>⏳ {figures.unapproved}</b>
+                  </span>
+                )}
                 <ChevronRight size={16} className={open ? "pf-caret open" : "pf-caret"} />
               </button>
-              {/* Income against cost on one scale across the whole list, so a
-                  project spending close to or past its income stands out. */}
+              {/* Net construction funds against what has been spent, on one
+                  scale across the list, so a project close to exhausting the
+                  client's funds stands out. */}
               <div className="pf-bars">
-                <span className="pf-bar income" style={{ width: `${(figures.income / scale) * 100}%` }} />
-                <span className="pf-bar cost" style={{ width: `${(figures.cost / scale) * 100}%` }} />
+                <span className="pf-bar income" style={{ width: `${(figures.netFunding / scale) * 100}%` }} />
+                <span className="pf-bar cost" style={{ width: `${(figures.workingCost / scale) * 100}%` }} />
               </div>
               {open && (
                 <div className="pf-open">
                   <div className="pf-detail">
                     {([
-                      ["Client funding", figures.funding],
-                      ["Our consultancy fee", figures.fees],
-                      ["Engineering revenue", figures.revenue],
+                      ["A · Gross client funding", figures.funding],
+                      ["Consultancy fee taken", figures.fees],
+                      ["Net construction funds", figures.netFunding],
                       ["Materials", figures.materials],
                       ["Labour", figures.labor],
-                      ["Other expenses", figures.expenses],
-                      ["Total cost", figures.cost],
-                      ["Net result", figures.net],
+                      ["Other construction costs", figures.expenses],
+                      ["Approved cost", figures.cost],
+                      ["Pending / unapproved cost", figures.pendingCost],
+                      ["Working cost", figures.workingCost],
+                      ["Approved client balance", figures.balance],
+                      ["Working client balance", figures.workingBalance],
+                      ["B · Consultancy fee earned", figures.fees],
+                      ["Engineering revenue", figures.revenue],
+                      ["Larsa revenue", figures.larsaRevenue],
+                      ["Larsa expenses", figures.companyExpenses],
+                      ["Company net profit", figures.companyNet],
                     ] as [string, number][]).map(([label, value]) => (
                       <div className="pf-row" key={label}>
                         <span>{label}</span>
-                        <b className={label === "Net result" && value < 0 ? "fin-neg" : undefined}>{show(value)}</b>
+                        <b className={label === "Company net profit" && value < 0 ? "fin-neg" : undefined}>{show(value)}</b>
                       </div>
                     ))}
                     <div className="pf-row total">
-                      <span>Margin on income</span><b>{figures.margin.toFixed(1)}%</b>
+                      <span>Margin on Larsa revenue</span><b>{figures.margin.toFixed(1)}%</b>
                     </div>
                   </div>
                   {months.length > 0 && <MonthBars points={months} currency={currency} rate={rate} />}
@@ -4059,6 +4312,12 @@ export default function Home() {
           .sort((a, b) => a.localeCompare(b));
         win.eval(`
           currentUser=${JSON.stringify(mappedUser)};
+          /* Running inside the authenticated Larsa Control work area. The
+             engine's own local-prototype plumbing — Supabase sync setup,
+             push/pull/replace of the serialized state, and the local audit
+             trail — is hidden here: the backend ledger and its append-only
+             history are the only source of truth in production. */
+          window.__larsaProductionMode=true;
           window.__larsaSalesRoster=${JSON.stringify(salesRoster)};
           window.__larsaCanProject=function(projectId){
             if(!currentUser)return false;
@@ -4311,9 +4570,25 @@ export default function Home() {
               var value=parseFloat(cleaned);
               return isFinite(value)?value:null;
             };
-            var larsaFmt=function(value){
-              try{ if(typeof money==="function")return money(value,"USD"); }catch(e){}
-              return (Math.round(value*100)/100).toLocaleString();
+            /* A cell says which currency it is in. Totals are grouped by that
+               currency and never merged: adding IQD to USD produces a number
+               that means nothing, and labelling it "$" makes it worse. */
+            var larsaCur=function(text){
+              var s=String(text||"");
+              if(s.indexOf("IQD")>=0||s.indexOf("د.ع")>=0)return "IQD";
+              if(s.indexOf("$")>=0||s.indexOf("USD")>=0)return "USD";
+              return "";
+            };
+            var larsaFmt=function(value,currency){
+              var rounded=Math.round(value*100)/100;
+              try{ if(typeof money==="function"&&currency)return money(rounded,currency); }catch(e){}
+              var text=rounded.toLocaleString();
+              return currency==="IQD"?text+" IQD":currency==="USD"?"$"+text:text;
+            };
+            /* An exchange rate is a rate, not an amount: a column of rates has
+               no total, so its footer cell stays descriptive instead. */
+            var larsaIsRateCol=function(label){
+              return /rate|سعر\s*الصرف|fx/i.test(String(label||""));
             };
             /* A row is kept when it carries no date at all, so summary rows and
                reference tables are never silently emptied by a period filter. */
@@ -4350,23 +4625,39 @@ export default function Home() {
                   row.style.display=keep?"":"none";
                   if(keep)shown++;
                 });
-                // Totals across every numeric column the engine marked as such.
+                /* Totals, per currency. Each numeric column is summed into a
+                   bucket per currency found in its own cells, so a table
+                   holding both IQD and USD rows reports "12,000,000 IQD ·
+                   $1,000" rather than one meaningless number. Rate columns
+                   are never summed. */
                 var old=table.querySelector("tfoot.larsa-totals");
                 if(old)old.remove();
-                var sums={},any=false;
+                var sums={},any=false,rateCols={};
                 heads.forEach(function(th,index){
                   if(!th.classList.contains("right"))return;
                   if(/action/i.test(th.textContent||""))return;
-                  var total=0,seen=false;
+                  if(larsaIsRateCol(th.textContent)){rateCols[index]=true;return}
+                  var buckets={},seen=false;
                   rows.forEach(function(row){
                     if(row.style.display==="none")return;
                     var cell=row.querySelectorAll("td")[index];
                     if(!cell)return;
                     var value=larsaNum(cell.textContent);
                     if(value===null)return;
-                    total+=value;seen=true;
+                    var cur=larsaCur(cell.textContent);
+                    if(!cur){
+                      // Fall back to the row's own currency column when the
+                      // cell itself is unlabelled.
+                      var rowCells=row.querySelectorAll("td");
+                      for(var ci=0;ci<rowCells.length;ci++){
+                        var found=larsaCur(rowCells[ci].textContent);
+                        if(found){cur=found;break}
+                      }
+                    }
+                    if(!cur)cur="—";
+                    buckets[cur]=(buckets[cur]||0)+value;seen=true;
                   });
-                  if(seen){sums[index]=total;any=true}
+                  if(seen){sums[index]=buckets;any=true}
                 });
                 if(!any)return;
                 var foot=document.createElement("tfoot");
@@ -4375,7 +4666,20 @@ export default function Home() {
                 heads.forEach(function(th,index){
                   var td=document.createElement("td");
                   if(index===0){td.textContent="Total · "+shown+" record"+(shown===1?"":"s")}
-                  else if(sums[index]!==undefined){td.textContent=larsaFmt(sums[index]);td.className="right"}
+                  else if(rateCols[index]){
+                    td.className="right";
+                    td.textContent="per entry";
+                    td.title="Exchange rates are per entry and are never added together";
+                  }
+                  else if(sums[index]!==undefined){
+                    var buckets=sums[index];
+                    var keys=Object.keys(buckets);
+                    td.className="right";
+                    td.textContent=keys.map(function(cur){
+                      return larsaFmt(buckets[cur],cur==="—"?"":cur);
+                    }).join(" · ");
+                    if(keys.length>1)td.title="Currencies are totalled separately and never added together";
+                  }
                   tr.appendChild(td);
                 });
                 foot.appendChild(tr);
