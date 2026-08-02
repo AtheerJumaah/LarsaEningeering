@@ -1545,3 +1545,39 @@ i.is-due { background: #d97706; }
   .pay-commission dl div { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .pay-identity { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
 }
+
+/* --- 24. The payroll portal ---------------------------------------------
+   The same card language as My Pay, because they are the same records seen
+   from two sides. The forms are inline rather than modal: running payroll is
+   a sequence, and a dialog for every step turns a sequence into a fight. */
+.pay-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--panel);
+}
+.pay-form label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 150px;
+  font-size: 10.5px;
+  font-weight: 850;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-2, var(--muted));
+}
+.pay-form :is(input, select) { width: 100%; padding: 9px 11px; font-size: 13px; }
+.pay-form button { flex: none; min-height: 40px; }
+.pay-run-figs { display: flex; flex-wrap: wrap; gap: 10px 28px; }
+.pay-run-figs span { display: grid; gap: 2px; }
+.pay-run-figs small { font-size: 10px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2, var(--muted)); }
+.pay-run-figs b { font-size: 17px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.pay-table td small.muted { font-size: 11px; font-weight: 650; }
+@media (max-width: 760px) {
+  .pay-form label { flex: 1 1 100%; }
+}

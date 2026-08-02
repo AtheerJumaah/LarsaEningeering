@@ -113,7 +113,8 @@ type NativeView =
   | "projects"
   | "notifications"
   | "constructionFinancials" | "orgStructure" | "platformSettings"
-  | "myPay";
+  | "myPay"
+  | "payrollPortal";
 type SignInMethod = "email" | "pin";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
@@ -725,7 +726,18 @@ const MY_PAY_ITEM: Item = {
   code: "MY",
   native: "myPay",
 };
-const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_ITEM, QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, ACCOUNTING_HUB_ITEM, SETTINGS_ITEM, REQUESTS_ITEM, PRESENCE_ITEM, MY_PAY_ITEM];
+/* One portal for the whole payroll cycle, replacing four scattered screens.
+   It is the accountant's lens on exactly the records My Pay shows the
+   employee — one payroll truth, two views of it. */
+const PAYROLL_PORTAL_ITEM: Item = {
+  id: "payroll-portal",
+  label: "Payroll & People",
+  description: "Employees, pay runs, commissions, and payslips",
+  labelAr: "الرواتب والموظفون",
+  code: "PP",
+  native: "payrollPortal",
+};
+const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_ITEM, QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, ACCOUNTING_HUB_ITEM, SETTINGS_ITEM, REQUESTS_ITEM, PRESENCE_ITEM, MY_PAY_ITEM, PAYROLL_PORTAL_ITEM];
 const DEFAULT_ITEM = ITEMS.find((item) => item.id === "overview")!;
 const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "my-points", "staff-development", "my-settings", "my-requests", "live-presence", "my-pay"]);
 const PERMISSION_ACTIONS: { id: PermissionAction; label: string }[] = [
@@ -922,8 +934,12 @@ const ACCOUNTING_TREE: { id: string; label: string; description: string; icon: s
   },
   {
     id: "acc-grp-people", tone: "violet", label: "Payroll & People", icon: "acc-payroll",
-    description: "Payroll, paystubs, employee records, and supplier references",
-    items: ["acc-payroll", "sales-commissions", "acc-employees", "acc-refs"],
+    description: "One place for people, pay runs, commissions and payslips",
+    /* The portal leads: it is the whole cycle in one screen. The older
+       single-purpose entries stay underneath it rather than being removed,
+       because they are still the way to reach the engine's own ledgers and
+       people who know them should not have to relearn where things are. */
+    items: ["payroll-portal", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"],
   },
   {
     id: "acc-grp-settings", tone: "rose", label: "Settings & Notices", icon: "acc-settings",
@@ -935,6 +951,7 @@ const ACCOUNTING_TREE: { id: string; label: string; description: string; icon: s
 const ICONS: Record<string, LucideIcon> = {
   overview: Gauge,
   "my-pay": Wallet,
+  "payroll-portal": BadgeDollarSign,
   "staff-dashboard": LayoutDashboard,
   "staff-clock": Timer,
   "staff-live": Radio,
@@ -1478,6 +1495,13 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
      seeing somebody ELSE's pay is a separate backend permission that no
      screen here can hand out. */
   if (item.id === "my-pay") return true;
+  /* The portal shows everybody's pay, so it follows the same permission the
+     accounting payroll area does — and the server independently demands the
+     confidential payroll permission before it returns a single row. */
+  if (item.id === "payroll-portal") {
+    const payrollItem = ITEMS.find((row) => row.id === "acc-payroll");
+    return payrollItem ? hasItemPermission(user, payrollItem, action) : isAdmin(user);
+  }
   if (item.id === "my-points") {
     const personalGrant = user.permissionProfile?.grants["staff-performance"]?.add;
     return personalGrant === undefined
@@ -1602,7 +1626,7 @@ function channelForItem(item: Item): NavChannel {
     || ["staff-people", "staff-rules", "staff-backup"].includes(item.id)
   ) return "admin";
   // Sits with payroll, because that is the permission it follows.
-  if (item.id === "sales-commissions") return "accounting";
+  if (item.id === "sales-commissions" || item.id === "payroll-portal") return "accounting";
   if (item.id === "my-settings" || item.id === "my-pay") return "home";
   if (item.id === "my-requests" || item.id === "live-presence") return "time";
   if (item.id === "quick-clock" || item.id === "week-schedule") return "time";
@@ -7527,6 +7551,9 @@ export default function Home() {
               payroll={accountingSnapshot.payroll}
             />
           </div>
+          <div className={active.native === "payrollPortal" ? "native active" : "native"}>
+            <PayrollPortal viewer={sessionUser} active={active.native === "payrollPortal"} />
+          </div>
           <div className={active.native === "myPay" ? "native active" : "native"}>
             <MyPay viewer={sessionUser} active={active.native === "myPay"} />
           </div>
@@ -9703,6 +9730,499 @@ function announcePayChanges(statement: PayStatement, viewer: StaffUser | null) {
 
     localStorage.setItem(PAY_SEEN_KEY, JSON.stringify(next));
   } catch { /* a device that cannot remember simply does not repeat itself */ }
+}
+
+/* ===========================================================================
+   Payroll & People — one portal for the whole payroll cycle.
+
+   Payroll used to be four scattered places: a payroll screen, a commissions
+   screen, an employee list, and a paystub print buried inside the first one.
+   This is all of it in one page, in the order the work actually happens:
+   people, then a run, then approval, then payment, then publication.
+
+   It reads and writes the same rows My Pay reads. One payroll truth, two
+   lenses: this one for whoever runs payroll, My Pay for the person being
+   paid. Every figure here is the figure the employee will see, because it is
+   literally the same record.
+   =========================================================================== */
+type PortalEmployee = {
+  id: string; email: string; employee_no?: string | null; full_name: string;
+  position?: string | null; department?: string | null; base_salary?: number | null;
+  salary_currency?: string | null; employment_start?: string | null; active?: boolean;
+};
+type PortalPeriod = {
+  id: string; period_no: string; label?: string | null;
+  period_start: string; period_end: string; pay_date?: string | null;
+  currency: string; status: string; published_at?: string | null;
+  submitted_by?: string | null; approved_by?: string | null; created_by_email?: string | null;
+};
+type PortalCommission = {
+  id: string; commission_no: string; employee_email: string; title: string;
+  original_amount: number; original_currency: string; status: string;
+  earning_start?: string | null; earning_end?: string | null; period_id?: string | null;
+};
+type PortalMapping = {
+  id: string; txn_id: string; txn_no?: string; description?: string | null;
+  category?: string | null; amount: number; currency: string; txn_date?: string | null;
+  suggested_email?: string | null;
+};
+type PortalData = {
+  ok?: boolean;
+  employees?: PortalEmployee[];
+  periods?: PortalPeriod[];
+  commissions?: PortalCommission[];
+  mapping_queue?: PortalMapping[];
+  hr_queue?: { employee_email: string; gap: string }[];
+};
+type PortalLine = {
+  employee_email: string; full_name: string; employee_no?: string | null; position?: string | null;
+  base_salary_iqd: number; commission_iqd: number; bonus_iqd: number;
+  deduction_iqd: number; advance_repayment_iqd: number; reimbursement_iqd: number;
+  net_iqd: number; paid_iqd: number; posted_items: number;
+  items: { id: string; item_type: string; description?: string | null; original_amount: number;
+    original_currency: string; exchange_rate: number; sign: number; amount_iqd: number;
+    status: string; txn_id?: string | null }[];
+};
+type PortalDetail = {
+  ok?: boolean; period?: PortalPeriod; lines?: PortalLine[];
+  payments?: { id: string; employee_email: string; paid_on: string; amount: number;
+    currency: string; amount_iqd: number; status: string; method?: string | null;
+    reversal_reason?: string | null }[];
+  net_iqd?: number; paid_iqd?: number; outstanding_iqd?: number;
+  by_currency?: Record<string, { net?: number }>;
+  employees_in_run?: number;
+};
+
+const PAY_ITEM_TYPES = [
+  { id: "base_salary", label: "Base salary" },
+  { id: "commission", label: "Commission" },
+  { id: "bonus", label: "Bonus" },
+  { id: "allowance", label: "Allowance" },
+  { id: "deduction", label: "Deduction" },
+  { id: "advance_repayment", label: "Advance repayment" },
+  { id: "reimbursement", label: "Reimbursement" },
+];
+
+function PayrollPortal({ viewer, active }: { viewer: StaffUser | null; active: boolean }) {
+  const [tab, setTab] = useState<"runs" | "people" | "commissions">("runs");
+  const [data, setData] = useState<PortalData | null>(null);
+  const [detail, setDetail] = useState<PortalDetail | null>(null);
+  const [openRun, setOpenRun] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [draft, setDraft] = useState({ employee_email: "", item_type: "base_salary", amount: "", currency: "IQD", description: "" });
+  const [newRun, setNewRun] = useState({ period_start: "", period_end: "", pay_date: "", label: "", currency: "IQD" });
+  const [newPerson, setNewPerson] = useState({ email: "", full_name: "", position: "", department: "", employment_start: "", base_salary: "", salary_currency: "IQD" });
+  const [payDraft, setPayDraft] = useState({ employee_email: "", amount: "", currency: "IQD", paid_on: "", reference: "" });
+
+  const actor = useMemo(() => (viewer ? {
+    email: viewer.email || "", name: viewer.name || "", role: accountingRole(viewer),
+  } : null), [viewer]);
+
+  const client = () => (supabaseConfigured() ? getSupabaseClient() : null);
+
+  /* Every action goes through here: call, report plainly what the server
+     said, reload. Server errors are shown as written — they explain the rule
+     that was broken, which is more use than "something went wrong". */
+  const run = (name: string, args: Record<string, unknown>, ok?: string) => {
+    const sb = client();
+    if (!sb || !actor) { setNote("The payroll ledger is not connected on this device."); return; }
+    setBusy(true);
+    sb.rpc(name, { actor, ...args }).then(({ error }) => {
+      setBusy(false);
+      if (error) { setNote(String(error.message || "That could not be completed.").replace(/^ACCT_[A-Z]+: /, "")); return; }
+      setNote(ok || "");
+      setTick((n) => n + 1);
+    }, () => { setBusy(false); setNote("Could not reach the payroll ledger."); });
+  };
+
+  useEffect(() => {
+    if (!active || !actor) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const sb = client();
+      if (!sb) { setNote("The payroll ledger is not connected on this device."); return; }
+      sb.rpc("pay_admin_overview", { actor, p_limit: 200 }).then(({ data: payload, error }) => {
+        if (cancelled) return;
+        if (error) { setNote(String(error.message || "").replace(/^ACCT_[A-Z]+: /, "") || "You do not have confidential payroll access."); setData(null); return; }
+        setData(payload as PortalData);
+      }, () => { if (!cancelled) setNote("Could not reach the payroll ledger."); });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, actor, tick]);
+
+  useEffect(() => {
+    if (!openRun || !actor) { setDetail(null); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const sb = client();
+      if (!sb) return;
+      sb.rpc("pay_period_detail", { actor, p_period_id: openRun }).then(({ data: payload, error }) => {
+        if (cancelled || error) return;
+        setDetail(payload as PortalDetail);
+      }, () => undefined);
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRun, actor, tick]);
+
+  if (!viewer) return <div className="native-scroll" />;
+  const employees = data?.employees || [];
+  const periods = data?.periods || [];
+  const commissions = data?.commissions || [];
+  const mapping = data?.mapping_queue || [];
+  const hrGaps = data?.hr_queue || [];
+  const openPeriods = periods.filter((p) => ["draft", "pending_review"].includes(p.status));
+
+  return (
+    <div className="native-scroll pay-scroll">
+      <section className="overview-hero pay-hero">
+        <div>
+          <span className="eyebrow">Accounting</span>
+          <h2>Payroll &amp; People</h2>
+          <p>Employees, pay runs, commissions and payslips — the same records your team sees in My Pay.</p>
+        </div>
+        <dl className="pay-identity">
+          <div><dt>People</dt><dd>{employees.length}</dd></div>
+          <div><dt>Pay runs</dt><dd>{periods.length}</dd></div>
+          <div><dt>Commissions awaiting a decision</dt><dd>{commissions.filter((c) => ["pending_review", "estimated"].includes(c.status)).length}</dd></div>
+          <div><dt>Unlinked salary entries</dt><dd>{mapping.length}</dd></div>
+        </dl>
+      </section>
+
+      {note && <p className="pay-note" role="status">{note}</p>}
+      {hrGaps.length > 0 && (
+        <p className="pay-note soft" role="status">
+          {hrGaps.length} employment start {hrGaps.length === 1 ? "date is" : "dates are"} missing
+          ({hrGaps.map((g) => g.employee_email).join(", ")}). Until HR records them, &ldquo;Since joining&rdquo; shows all
+          available history for those people rather than guessing a date.
+        </p>
+      )}
+
+      <section className="pay-controls">
+        <div className="pay-range" role="tablist" aria-label="Payroll section">
+          {([["runs", "Pay runs"], ["people", "People"], ["commissions", "Commissions"]] as const).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id}
+              className={tab === id ? "is-on" : ""} onClick={() => setTab(id)}>{label}</button>
+          ))}
+        </div>
+        <button type="button" className="btn small" onClick={() => setTick((n) => n + 1)} disabled={busy}>
+          <RotateCcw size={14} /> {busy ? "Working…" : "Refresh"}
+        </button>
+        <button type="button" className="btn small" onClick={() => run("pay_scan_unlinked_salary", {}, "Scanned the ledger for unlinked salary entries.")} disabled={busy}>
+          <Search size={14} /> Scan the ledger
+        </button>
+      </section>
+
+      {tab === "runs" && (
+        <>
+          <section className="pay-block">
+            <div className="section-head"><h3>Open a pay run</h3></div>
+            <div className="pay-form">
+              <label>From<input type="date" value={newRun.period_start} onChange={(e) => setNewRun({ ...newRun, period_start: e.target.value })} /></label>
+              <label>To<input type="date" value={newRun.period_end} onChange={(e) => setNewRun({ ...newRun, period_end: e.target.value })} /></label>
+              <label>Pay date<input type="date" value={newRun.pay_date} onChange={(e) => setNewRun({ ...newRun, pay_date: e.target.value })} /></label>
+              <label>Name<input value={newRun.label} placeholder="June 2026" onChange={(e) => setNewRun({ ...newRun, label: e.target.value })} /></label>
+              <label>Currency<select value={newRun.currency} onChange={(e) => setNewRun({ ...newRun, currency: e.target.value })}><option>IQD</option><option>USD</option></select></label>
+              <button type="button" className="primary" disabled={busy || !newRun.period_start || !newRun.period_end}
+                onClick={() => run("pay_open_period", { payload: newRun }, "Pay run opened.")}>Open run</button>
+            </div>
+          </section>
+
+          <section className="pay-block">
+            <div className="section-head"><h3>Pay runs</h3></div>
+            {periods.length === 0 ? <div className="empty compact">No pay runs yet.</div> : (
+              <div className="pay-periods">
+                {periods.map((p) => {
+                  const meta = payStatus(p.status);
+                  const Icon = meta.icon;
+                  const isOpen = openRun === p.id;
+                  return (
+                    <article key={p.id} className={isOpen ? "pay-period is-open" : "pay-period"}>
+                      <button type="button" className="pay-period-head" aria-expanded={isOpen}
+                        onClick={() => setOpenRun(isOpen ? "" : p.id)}>
+                        <span className="pay-period-when">
+                          <b>{p.label || `${payDate(p.period_start)} – ${payDate(p.period_end)}`}</b>
+                          <small>{p.period_no}{p.published_at ? " · published" : " · not published to employees"}</small>
+                        </span>
+                        <span className="pay-period-figs">
+                          <span><small>Pay date</small><b>{payDate(p.pay_date)}</b></span>
+                        </span>
+                        <span className={`pay-status is-${meta.tone}`}><Icon size={13} />{meta.label}</span>
+                        <ChevronRight size={16} className="pay-chev" />
+                      </button>
+                      {isOpen && detail?.period?.id === p.id && (
+                        <div className="pay-period-body">
+                          <div className="pay-run-figs">
+                            <span><small>Net</small><b>{payMoney(detail.net_iqd || 0, "IQD")}</b></span>
+                            <span><small>Paid</small><b>{payMoney(detail.paid_iqd || 0, "IQD")}</b></span>
+                            <span><small>Outstanding</small><b>{payMoney(detail.outstanding_iqd || 0, "IQD")}</b></span>
+                            <span><small>People</small><b>{detail.employees_in_run || 0}</b></span>
+                          </div>
+                          {Object.keys(detail.by_currency || {}).length > 1 && (
+                            <p className="pay-note soft">This run mixes currencies: {Object.entries(detail.by_currency || {})
+                              .map(([code, v]) => payMoney(Number(v?.net || 0), code)).join(" and ")} — reported apart, never added.</p>
+                          )}
+
+                          <table className="data-table pay-table">
+                            <thead><tr>
+                              <th>Employee</th><th className="right">Base</th><th className="right">Commission</th>
+                              <th className="right">Bonus</th><th className="right">Deductions</th>
+                              <th className="right">Reimbursed</th><th className="right">Net</th>
+                              <th className="right">Paid</th><th>In ledger</th>
+                            </tr></thead>
+                            <tbody>
+                              {(detail.lines || []).map((line) => (
+                                <tr key={line.employee_email}>
+                                  <td><b>{line.full_name}</b><br /><small className="muted">{line.employee_email}</small></td>
+                                  <td className="right">{payMoney(line.base_salary_iqd, "IQD")}</td>
+                                  <td className="right">{payMoney(line.commission_iqd, "IQD")}</td>
+                                  <td className="right">{payMoney(line.bonus_iqd, "IQD")}</td>
+                                  <td className="right">{line.deduction_iqd ? `−${payMoney(line.deduction_iqd, "IQD")}` : "—"}</td>
+                                  <td className="right">{payMoney(line.reimbursement_iqd, "IQD")}</td>
+                                  <td className="right"><b>{payMoney(line.net_iqd, "IQD")}</b></td>
+                                  <td className="right">{payMoney(line.paid_iqd, "IQD")}</td>
+                                  {/* The one-entry rule, visible: how many of this
+                                      person's costed items reached the ledger. */}
+                                  <td>{line.posted_items > 0
+                                    ? <span className="pay-status is-paid"><CheckCircle2 size={12} />{line.posted_items} posted</span>
+                                    : <span className="pay-status is-draft"><Clock size={12} />not posted</span>}</td>
+                                </tr>
+                              ))}
+                              {(detail.lines || []).length === 0 && (
+                                <tr><td colSpan={9}>Nothing in this run yet — add a line below.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+
+                          {["draft", "pending_review"].includes(p.status) && (
+                            <div className="pay-form">
+                              <label>Employee<select value={draft.employee_email} onChange={(e) => setDraft({ ...draft, employee_email: e.target.value })}>
+                                <option value="">Choose…</option>
+                                {employees.map((emp) => <option key={emp.email} value={emp.email}>{emp.full_name}</option>)}
+                              </select></label>
+                              <label>Component<select value={draft.item_type} onChange={(e) => setDraft({ ...draft, item_type: e.target.value })}>
+                                {PAY_ITEM_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                              </select></label>
+                              <label>Amount<input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} /></label>
+                              <label>Currency<select value={draft.currency} onChange={(e) => setDraft({ ...draft, currency: e.target.value })}><option>IQD</option><option>USD</option></select></label>
+                              <label>Detail<input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
+                              <button type="button" className="btn" disabled={busy || !draft.employee_email || !draft.amount}
+                                onClick={() => run("pay_add_item", { payload: { ...draft, period_id: p.id } }, "Added to the run.")}>Add line</button>
+                            </div>
+                          )}
+
+                          {p.status === "approved" || p.status === "partially_paid" || p.status === "paid" ? (
+                            <div className="pay-form">
+                              <label>Pay<select value={payDraft.employee_email} onChange={(e) => setPayDraft({ ...payDraft, employee_email: e.target.value })}>
+                                <option value="">Choose…</option>
+                                {(detail.lines || []).map((l) => <option key={l.employee_email} value={l.employee_email}>{l.full_name}</option>)}
+                              </select></label>
+                              <label>Amount<input type="number" value={payDraft.amount} onChange={(e) => setPayDraft({ ...payDraft, amount: e.target.value })} /></label>
+                              <label>Currency<select value={payDraft.currency} onChange={(e) => setPayDraft({ ...payDraft, currency: e.target.value })}><option>IQD</option><option>USD</option></select></label>
+                              <label>Paid on<input type="date" value={payDraft.paid_on} onChange={(e) => setPayDraft({ ...payDraft, paid_on: e.target.value })} /></label>
+                              <label>Reference<input value={payDraft.reference} onChange={(e) => setPayDraft({ ...payDraft, reference: e.target.value })} /></label>
+                              <button type="button" className="btn" disabled={busy || !payDraft.employee_email || !payDraft.amount}
+                                onClick={() => run("pay_record_payment", { payload: { ...payDraft, period_id: p.id } }, "Payment recorded.")}>Record payment</button>
+                            </div>
+                          ) : null}
+
+                          {(detail.payments || []).length > 0 && (
+                            <table className="data-table pay-table">
+                              <thead><tr><th>Payment</th><th>Employee</th><th>Method</th><th className="right">Amount</th><th>Status</th></tr></thead>
+                              <tbody>
+                                {(detail.payments || []).map((row) => (
+                                  <tr key={row.id}>
+                                    <td>{payDate(row.paid_on)}</td>
+                                    <td>{row.employee_email}</td>
+                                    <td>{row.method || "—"}</td>
+                                    <td className="right">{payMoney(row.amount, row.currency)}</td>
+                                    <td>{row.status === "reversed"
+                                      ? <span className="pay-status is-rejected"><RotateCcw size={12} />Reversed{row.reversal_reason ? ` · ${row.reversal_reason}` : ""}</span>
+                                      : <span className="pay-status is-paid"><CheckCircle2 size={12} />Paid</span>}
+                                      {row.status === "paid" && (
+                                        <button type="button" className="btn small" style={{ marginInlineStart: 8 }} disabled={busy}
+                                          onClick={() => {
+                                            const why = window.prompt("Why is this payment being reversed?");
+                                            if (why) run("pay_reverse_payment", { p_payment_id: row.id, p_reason: why }, "Payment reversed — the original stays in history.");
+                                          }}>Reverse</button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+
+                          {/* The lifecycle, as buttons, in order. Whether you may
+                              press one is the server's decision, not this
+                              screen's: it explains the rule if you may not. */}
+                          <div className="rowActions">
+                            {["draft", "pending_review"].includes(p.status) && (
+                              <button type="button" className="primary" disabled={busy}
+                                onClick={() => run("pay_submit_period", { p_period_id: p.id, p_note: null }, "Submitted for approval.")}>
+                                Submit for approval
+                              </button>
+                            )}
+                            {p.status === "pending_approval" && (
+                              <>
+                                <button type="button" className="primary" disabled={busy}
+                                  onClick={() => run("pay_decide_period", { p_period_id: p.id, p_decision: "approve", p_reason: null },
+                                    "Approved — each costed line posted one accounting expense.")}>Approve</button>
+                                <button type="button" className="btn" disabled={busy}
+                                  onClick={() => {
+                                    const why = window.prompt("Why is this run being rejected?");
+                                    if (why) run("pay_decide_period", { p_period_id: p.id, p_decision: "reject", p_reason: why }, "Rejected.");
+                                  }}>Reject</button>
+                              </>
+                            )}
+                            {["approved", "scheduled", "partially_paid", "paid"].includes(p.status) && !p.published_at && (
+                              <button type="button" className="primary" disabled={busy}
+                                onClick={() => run("pay_publish_period", { p_period_id: p.id }, "Published — payslips are now visible in My Pay.")}>
+                                Publish payslips
+                              </button>
+                            )}
+                            {p.published_at && <span className="pay-status is-paid"><CheckCircle2 size={13} />Visible in My Pay</span>}
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {mapping.length > 0 && (
+            <section className="pay-block">
+              <div className="section-head"><h3>Unlinked salary entries</h3></div>
+              <p className="pay-note soft">
+                Salary already in the ledger with no payroll record behind it. Linking records the missing
+                relationship — the original entry keeps its own amount, rate and history, and is never duplicated.
+              </p>
+              <table className="data-table pay-table">
+                <thead><tr><th>Entry</th><th>Description</th><th className="right">Amount</th><th>Employee</th><th>Pay run</th><th /></tr></thead>
+                <tbody>
+                  {mapping.map((m) => (
+                    <tr key={m.id}>
+                      <td>{m.txn_no}</td>
+                      <td>{m.description || m.category || "—"}</td>
+                      <td className="right">{payMoney(m.amount, m.currency)}</td>
+                      <td><select id={`map-e-${m.id}`} defaultValue={m.suggested_email || ""}>
+                        <option value="">Choose…</option>
+                        {employees.map((e) => <option key={e.email} value={e.email}>{e.full_name}</option>)}
+                      </select></td>
+                      <td><select id={`map-p-${m.id}`} defaultValue={openPeriods[0]?.id || ""}>
+                        <option value="">Choose…</option>
+                        {periods.map((p) => <option key={p.id} value={p.id}>{p.period_no}</option>)}
+                      </select></td>
+                      <td><button type="button" className="btn small" disabled={busy} onClick={() => {
+                        const email = (document.getElementById(`map-e-${m.id}`) as HTMLSelectElement)?.value;
+                        const period = (document.getElementById(`map-p-${m.id}`) as HTMLSelectElement)?.value;
+                        if (!email || !period) { setNote("Choose an employee and a pay run first."); return; }
+                        run("pay_link_transaction", { p_txn_id: m.txn_id, p_employee_email: email, p_period_id: period, p_note: "Linked from the payroll portal" },
+                          "Linked. The original accounting entry is unchanged.");
+                      }}>Link</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
+      )}
+
+      {tab === "people" && (
+        <>
+          <section className="pay-block">
+            <div className="section-head"><h3>Add or update a person</h3></div>
+            <div className="pay-form">
+              <label>Email<input value={newPerson.email} onChange={(e) => setNewPerson({ ...newPerson, email: e.target.value })} placeholder="name@larsaeng.com" /></label>
+              <label>Name<input value={newPerson.full_name} onChange={(e) => setNewPerson({ ...newPerson, full_name: e.target.value })} /></label>
+              <label>Position<input value={newPerson.position} onChange={(e) => setNewPerson({ ...newPerson, position: e.target.value })} /></label>
+              <label>Department<input value={newPerson.department} onChange={(e) => setNewPerson({ ...newPerson, department: e.target.value })} /></label>
+              <label>Started<input type="date" value={newPerson.employment_start} onChange={(e) => setNewPerson({ ...newPerson, employment_start: e.target.value })} /></label>
+              <label>Base salary<input type="number" value={newPerson.base_salary} onChange={(e) => setNewPerson({ ...newPerson, base_salary: e.target.value })} /></label>
+              <label>Currency<select value={newPerson.salary_currency} onChange={(e) => setNewPerson({ ...newPerson, salary_currency: e.target.value })}><option>IQD</option><option>USD</option></select></label>
+              <button type="button" className="primary" disabled={busy || !newPerson.email}
+                onClick={() => run("pay_upsert_employee", { payload: newPerson }, "Employee record saved.")}>Save person</button>
+            </div>
+          </section>
+          <section className="pay-block">
+            <div className="section-head"><h3>People</h3></div>
+            {employees.length === 0 ? <div className="empty compact">No employee records yet.</div> : (
+              <table className="data-table pay-table">
+                <thead><tr><th>Name</th><th>ID</th><th>Position</th><th>Department</th><th>Started</th><th className="right">Base salary</th></tr></thead>
+                <tbody>
+                  {employees.map((e) => (
+                    <tr key={e.email}>
+                      <td><b>{e.full_name}</b><br /><small className="muted">{e.email}</small></td>
+                      <td>{e.employee_no || "—"}</td>
+                      <td>{e.position || "—"}</td>
+                      <td>{e.department || "—"}</td>
+                      <td>{e.employment_start ? payDate(e.employment_start)
+                        : <span className="pay-status is-pending"><Clock size={12} />Not recorded</span>}</td>
+                      <td className="right">{e.base_salary ? payMoney(e.base_salary, e.salary_currency || "IQD") : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        </>
+      )}
+
+      {tab === "commissions" && (
+        <section className="pay-block">
+          <div className="section-head"><h3>Commissions</h3></div>
+          {commissions.length === 0 ? <div className="empty compact">No commissions recorded yet.</div> : (
+            <table className="data-table pay-table">
+              <thead><tr><th>Reference</th><th>Employee</th><th>Reason</th><th className="right">Amount</th><th>Status</th><th /></tr></thead>
+              <tbody>
+                {commissions.map((c) => {
+                  const meta = payStatus(c.status);
+                  const Icon = meta.icon;
+                  return (
+                    <tr key={c.id}>
+                      <td>{c.commission_no}</td>
+                      <td>{c.employee_email}</td>
+                      <td>{c.title}</td>
+                      <td className="right">{payMoney(c.original_amount, c.original_currency)}</td>
+                      <td><span className={`pay-status is-${meta.tone}`}><Icon size={12} />{meta.label}</span></td>
+                      <td>
+                        {["pending_review", "estimated"].includes(c.status) && (
+                          <>
+                            <button type="button" className="btn small" disabled={busy}
+                              onClick={() => run("pay_decide_commission", { p_commission_id: c.id, p_decision: "approve", p_reason: null }, "Commission approved.")}>Approve</button>
+                            <button type="button" className="btn small" style={{ marginInlineStart: 6 }} disabled={busy}
+                              onClick={() => {
+                                const why = window.prompt("Why is this commission being rejected?");
+                                if (why) run("pay_decide_commission", { p_commission_id: c.id, p_decision: "reject", p_reason: why }, "Commission rejected.");
+                              }}>Reject</button>
+                          </>
+                        )}
+                        {c.status === "approved" && openPeriods.length > 0 && (
+                          <select defaultValue="" disabled={busy} onChange={(event) => {
+                            if (event.target.value) run("pay_schedule_commission", { p_commission_id: c.id, p_period_id: event.target.value },
+                              "Scheduled into the run — it will be costed once, through payroll.");
+                          }}>
+                            <option value="">Schedule into…</option>
+                            {openPeriods.map((p) => <option key={p.id} value={p.id}>{p.period_no}</option>)}
+                          </select>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+    </div>
+  );
 }
 
 function MyPay({ viewer, active }: { viewer: StaffUser | null; active: boolean }) {
