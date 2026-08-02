@@ -573,7 +573,18 @@ test("assigning people is a dropdown — many people, no modifier keys", () => {
   assert.match(cloud, /function watchPickers\(/);
   assert.match(cloud, /pickerStyles\(\);\s*\n\s*watchPickers\(\);/);
   // Nobody chosen still means anyone holding the permission.
-  assert.match(cloud, /Anyone with the permission/);
+  assert.match(cloud, /Anyone with permission/);
+  /* The engine's own form styling sets every input to width:100%. As a flex
+     row that blew the checkbox out to the full card width and left the name a
+     sliver, wrapping one word per line under a horizontal scrollbar. A grid
+     with a fixed box track and a shrinkable name track is the fix. */
+  assert.match(cloud, /\.acct-dd-row\{display:grid;grid-template-columns:16px minmax\(0,1fr\) auto/);
+  assert.match(cloud, /\.acct-dd-row input\[type=checkbox\]\{width:16px;min-width:16px;max-width:16px/);
+  assert.match(cloud, /\.acct-dd-name\{overflow:hidden;text-overflow:ellipsis;white-space:nowrap/);
+  assert.match(cloud, /overflow-x:hidden/);
+  // A job title is context, not identity: one short word on the same line.
+  assert.match(cloud, /function shortRole\(/);
+  assert.match(cloud, /class="acct-dd-role"/);
   // The long instructions under every picker are gone.
   assert.ok(!/Tick everyone who should be assigned/.test(cloud),
     "the per-picker instructions should not be restated under each control");

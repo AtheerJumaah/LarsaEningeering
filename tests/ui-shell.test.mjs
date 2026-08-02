@@ -280,6 +280,27 @@ test("installed on a desktop, the bar keeps clear of the window controls", () =>
   assert.match(page, /meta\.setAttribute\("content", dark \? "#0d0f14" : "#f7f7f5"\)/);
 });
 
+test("Back steps through the app, on every page", () => {
+  /* The browser's own Back leaves a single-page app entirely, so the trail of
+     areas actually visited has to be kept here. */
+  assert.match(page, /const \[navHistory, setNavHistory\] = useState<Item\[\]>\(\[\]\)/);
+  assert.match(page, /className="top-back"/);
+  assert.match(page, /onClick=\{goBack\}/);
+  // Only shown when there is somewhere to go back to.
+  assert.match(page, /\{navHistory\.length > 0 && \(/);
+  // A step is recorded only once the navigation is certain to happen — after
+  // the access check and the accounting gate have had their say.
+  assert.match(page, /if \(record && activeRef\.current && activeRef\.current\.id !== item\.id\)/);
+  const chooseBody = /const choose = \(item: Item[\s\S]*?\n  \};/.exec(page)[0];
+  assert.ok(chooseBody.indexOf("canOpenInSession") < chooseBody.indexOf("setNavHistory"),
+    "a refused navigation must not record a step");
+  assert.ok(chooseBody.indexOf("setAccountingGate") < chooseBody.indexOf("setNavHistory"),
+    "a gated navigation must not record a step");
+  // Going back must not push the step it is undoing, or the two ping-pong.
+  assert.match(page, /choose\(previous, channelForItem\(previous\), false\)/);
+  assert.match(pass, /\.unified-app \.top-back,\s*\n\.unified-app \.top-home \{/);
+});
+
 test("the page title outweighs its own subtitle", () => {
   /* Tailwind's reset drops h1 to the body weight, which left the small grey
      description as the boldest text in the bar. */

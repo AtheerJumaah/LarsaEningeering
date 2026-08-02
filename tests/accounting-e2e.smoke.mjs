@@ -286,9 +286,9 @@ if (picker.found && picker.people) {
   }, picker.id);
 }
 const pickerOk = picker.found && picker.people >= 2 && picker.shutHeight < 56
-  && /Anyone with the permission/.test(picker.closedText || "")
+  && /Anyone with permission/.test(picker.closedText || "")
   && pickerLive && pickerLive.chosen === 1
-  && !/Anyone with the permission/.test(pickerLive.label || "");
+  && !/Anyone with permission/.test(pickerLive.label || "");
 console.log("people dropdown:", pickerOk, JSON.stringify({ ...picker, after: pickerLive }));
 
 await browser.close(); server.close();
