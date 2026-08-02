@@ -19,6 +19,13 @@
     "productivity",
     "finance"
   ],
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "https://larsaeng.app/manifest.webmanifest"
+    }
+  ],
   "icons": [
     {
       "src": "/icons/icon-192.png",
