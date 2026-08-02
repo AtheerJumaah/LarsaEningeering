@@ -491,7 +491,7 @@ test("assigning accountants and approvers picks real accounts from a dropdown", 
   assert.match(cloud, /state\.users/);
   // The pickers are real selects, not free-text email boxes.
   assert.match(cloud, /function rosterPicker\(/);
-  assert.match(cloud, /<select id="' \+ id \+ '" multiple/);
+  assert.match(cloud, /class="acct-people"/);   // a tick list, not a text box
   assert.match(cloud, /function readPicker\(/);
   assert.match(cloud, /rosterPicker\("acct_prj_accountants"/);
   assert.match(cloud, /rosterPicker\("acct_prj_approvers"/);
@@ -530,4 +530,41 @@ test("a project page is a full workspace: add funding or any cost without leavin
   assert.match(cloud, /xMaterialTable/);
   assert.match(cloud, /xLaborTable/);
   assert.match(cloud, /workspaceTable/);
+});
+
+test("the project form is simplified and keeps every stored value", () => {
+  const cloud = cloudNow();
+  assert.match(cloud, /function wrapProjectSchema/);
+  const off = /var PROJECT_FIELDS_OFF = \[([\s\S]*?)\];/.exec(cloud);
+  assert.ok(off, "the trimmed fields must be declared in one place");
+  for (const field of ["code", "priority", "country", "teamLeader",
+    "clickUpLink", "invoiceLink", "consultancyRate"]) {
+    assert.ok(off[1].includes(`"${field}"`), field + " must be off the project form");
+  }
+  // Region survives — it is what the whole system runs on.
+  assert.ok(!off[1].includes('"region"'), "region must stay on the form");
+  // The responsible engineer and project manager stay; only team leader goes.
+  assert.ok(!off[1].includes('"responsibleEngineer"'));
+  assert.ok(!off[1].includes('"projectManager"'));
+  // Nothing stored is deleted: the form is filtered, records are untouched.
+  assert.match(cloud, /SCHEMA\.projects = SCHEMA\.projects\.filter/);
+  assert.ok(!/delete .*\.priority|delete .*\.teamLeader/.test(cloud),
+    "trimming the form must never delete stored values");
+  // Documents still carry a project reference.
+  assert.match(cloud, /function derivedProjectCode/);
+  assert.match(cloud, /code: rec\.code \|\| derivedProjectCode/);
+});
+
+test("assigning people is a tick list — many people, no modifier keys", () => {
+  const cloud = cloudNow();
+  assert.match(cloud, /class="acct-people"/);
+  assert.match(cloud, /type="checkbox" class="acct-person"/);
+  assert.match(cloud, /Tick everyone who should be assigned/);
+  // Reading it back collects every ticked person.
+  assert.match(cloud, /querySelectorAll\("\.acct-person"\)/);
+  assert.match(cloud, /\.filter\(function \(b\) \{ return b\.checked; \}\)/);
+  // Still used for both project roles and every accounting area.
+  assert.match(cloud, /rosterPicker\("acct_prj_accountants"/);
+  assert.match(cloud, /rosterPicker\("acct_prj_approvers"/);
+  assert.match(cloud, /rosterPicker\("acct_area_"/);
 });
