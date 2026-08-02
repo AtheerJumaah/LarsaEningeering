@@ -4310,6 +4310,20 @@ export default function Home() {
           .map((person) => person.name)
           .filter(Boolean)
           .sort((a, b) => a.localeCompare(b));
+        /* Assigning who may enter or approve a project's accounting has to
+           pick a real Larsa Control account, not a typed-in address. The
+           roster of people who actually hold an accounting-capable role is
+           handed to the engine so those fields become dropdowns. */
+        const accountingRoster = readStaffUsers()
+          .filter((person) => person.enabled !== false && person.email)
+          .map((person) => ({
+            email: String(person.email || "").toLowerCase(),
+            name: person.name || person.email || "",
+            role: accountingRole(person),
+            access: person.access || "",
+          }))
+          .filter((person) => person.email.includes("@"))
+          .sort((a, b) => a.name.localeCompare(b.name));
         win.eval(`
           currentUser=${JSON.stringify(mappedUser)};
           /* Running inside the authenticated Larsa Control work area. The
@@ -4319,6 +4333,7 @@ export default function Home() {
              history are the only source of truth in production. */
           window.__larsaProductionMode=true;
           window.__larsaSalesRoster=${JSON.stringify(salesRoster)};
+          window.__larsaAccountingRoster=${JSON.stringify(accountingRoster)};
           window.__larsaCanProject=function(projectId){
             if(!currentUser)return false;
             if(currentUser.projectAccessMode==="all")return true;
