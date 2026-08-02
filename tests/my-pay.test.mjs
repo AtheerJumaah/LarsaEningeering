@@ -22,7 +22,7 @@ const sql = readdirSync(new URL("../supabase/migrations", import.meta.url))
 const payroll = read("supabase/migrations/20260803_acct_009_payroll.sql");
 
 test("My Pay lives inside the existing shell, not beside it", () => {
-  assert.match(page, /\| "myPay";/);
+  assert.match(page, /\|\s*"myPay"/);
   assert.match(page, /const MY_PAY_ITEM: Item = \{/);
   assert.match(page, /id: "my-pay"/);
   assert.match(page, /label: "My Pay"/);
@@ -30,7 +30,7 @@ test("My Pay lives inside the existing shell, not beside it", () => {
   assert.match(page, /labelAr: "رواتبي ومستحقاتي"/);
   // Registered where every other item is registered, so navigation, deep
   // links and the permission editor all see it.
-  assert.match(page, /PRESENCE_ITEM, MY_PAY_ITEM\]/);
+  assert.match(page, /PRESENCE_ITEM, MY_PAY_ITEM(?:, PAYROLL_PORTAL_ITEM)?\]/);
   assert.match(page, /active\.native === "myPay" \? "native active" : "native"/);
   assert.match(page, /<MyPay viewer=\{sessionUser\} active=\{active\.native === "myPay"\} \/>/);
   // It uses the shell's own header, sidebar and theme: no second shell.
@@ -249,4 +249,39 @@ test("pay notifications exist and never leak a figure", () => {
   // It only speaks about a change it has not already announced.
   assert.match(page, /const PAY_SEEN_KEY = "larsa-control-pay-seen";/);
   assert.match(page, /if \(seen\[key\] === stamp\)/);
+});
+
+test("Payroll & People is one portal over the same records", () => {
+  const portal = read("supabase/migrations/20260803_acct_010_payroll_portal.sql");
+  // One screen, in the accounting channel, behind the payroll permission.
+  assert.match(page, /\| "payrollPortal";/);
+  assert.match(page, /const PAYROLL_PORTAL_ITEM: Item = \{/);
+  assert.match(page, /id: "payroll-portal"/);
+  assert.match(page, /labelAr: "الرواتب والموظفون"/);
+  assert.match(page, /active\.native === "payrollPortal" \? "native active" : "native"/);
+  assert.match(page, /if \(item\.id === "sales-commissions" \|\| item\.id === "payroll-portal"\) return "accounting";/);
+  // It leads the Payroll & People group; the older entries stay reachable.
+  assert.match(page, /items: \["payroll-portal", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"\]/);
+
+  // The whole cycle is on one page, in the order the work happens.
+  for (const action of ["pay_open_period", "pay_add_item", "pay_submit_period", "pay_decide_period",
+    "pay_publish_period", "pay_record_payment", "pay_reverse_payment", "pay_upsert_employee",
+    "pay_decide_commission", "pay_schedule_commission", "pay_link_transaction", "pay_scan_unlinked_salary"]) {
+    assert.ok(page.includes(`"${action}"`), "the portal must be able to " + action);
+  }
+  assert.match(page, /Submit for approval/);
+  assert.match(page, /Publish payslips/);
+  assert.match(page, /Visible in My Pay/);
+
+  // Same store as My Pay — the portal reads a detail view of the same rows.
+  assert.match(portal, /create or replace function public\.pay_period_detail/);
+  assert.match(portal, /perform public\.acct_check_perm\(actor, 'payroll_view_all'\)/);
+  // Currencies stay apart in a run too.
+  assert.match(portal, /by_cur := by_cur \|\| jsonb_build_object\(cur_row\.cur/);
+  assert.match(page, /reported apart, never added/);
+  // The one-entry rule is visible on screen, not just enforced underneath.
+  assert.match(portal, /'posted_items', count\(\*\) filter \(where i\.txn_id is not null\)/);
+  assert.match(page, /\{line\.posted_items\} posted/);
+  // Additive: 010 changes nothing from 009.
+  assert.ok(!/drop (table|function|column)/i.test(portal), "010 must not drop anything");
 });

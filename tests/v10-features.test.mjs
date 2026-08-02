@@ -271,7 +271,10 @@ test("commission and salary are totalled together per person", () => {
 test("the new page is routed to the right module", () => {
   // Added to the permission table but not the channel router once, which filed
   // them under the wrong module and made them unreachable.
-  assert.match(page, /if \(item\.id === "sales-commissions"\) return "accounting";/);
+  /* Payroll & People joined this line when it became one portal, so the
+     assertion is that the rule still routes sales-commissions to accounting,
+     not that it is alone on the line. */
+  assert.match(page, /if \(item\.id === "sales-commissions"(?: \|\| item\.id === "payroll-portal")?\) return "accounting";/);
   // Approval chains are not duplicated here: the Timeclock engine's Leave and
   // Approvals page already owns "Approval Flow Setup" over the same flowConfig.
   assert.ok(!/approval-flows/.test(page), "the duplicate approval screen must stay gone");
