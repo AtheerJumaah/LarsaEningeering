@@ -72,6 +72,7 @@ import {
   UserRoundSearch,
   UsersRound,
   Video,
+  Wallet,
   WalletCards,
   X,
   type LucideIcon,
@@ -350,6 +351,7 @@ type AccountingProject = {
   progress: number;
   googleDriveLink: string;
   clickUpLink: string;
+  contractValue: number;
 };
 type AccountingDocument = {
   id?: string;
@@ -710,8 +712,15 @@ const ROLE_PRESETS = [
   "Construction Engineer",
   "Engineer",
   "Client",
+  "Trainee",
+  "Intern",
   "Viewer",
 ];
+/* Accounts an admin creates with just a username and password — no email
+ * address, so no email-verification gate ever applies to them. Clients see
+ * their own projects (including the financial summary); trainees and interns
+ * get the self-service staff basics with no money screens. */
+const USERNAME_ONLY_PRESETS = ["Client", "Trainee", "Intern"];
 const VIEW_ONLY: PermissionAction[] = ["view"];
 const VIEW_EXPORT: PermissionAction[] = ["view", "export"];
 const BASIC_EDIT: PermissionAction[] = ["view", "add", "edit"];
@@ -840,6 +849,12 @@ const ACCOUNTING_SECTIONS: Record<string, Set<string>> = {
   "Construction Engineer": new Set(["dashboard", "expenses", "materials", "labor", "projects", "boq", "review"]),
   Engineer: new Set(["dashboard", "projects", "materials", "labor", "boq", "review"]),
   Client: new Set(["projects"]),
+  // Trainees and interns get the engineer-style staff basics only — no
+  // accounting engine sections at all (explicit empty set so the Engineer
+  // fallback never applies to them). They still see assigned projects in the
+  // Project Portal, without the financial summary.
+  Trainee: new Set<string>([]),
+  Intern: new Set<string>([]),
 };
 // Accounting is organised into a few clear portals with sub-portals underneath.
 // Every existing item is still present — this only groups them.
@@ -1174,6 +1189,20 @@ function presetPermissionProfile(preset: string): PermissionProfile {
     );
   } else if (preset === "Client") {
     allow("project-portal", VIEW_ONLY);
+  } else if (preset === "Trainee" || preset === "Intern") {
+    // Training staff set up by an admin (username + password): clock in, see
+    // their own schedule, points and development, view assigned projects.
+    // No accounting or money screens by default; an admin can widen access
+    // per person through the same custom-permission editor as everyone else.
+    allow("staff-clock", BASIC_EDIT);
+    allow("staff-live");
+    allow("staff-schedule", ["view", "add"]);
+    allow("staff-performance", ["view", "add"]);
+    allow("performance-center", VIEW_ONLY);
+    allow("staff-development", ["view", "edit"]);
+    allow("performance-history", VIEW_ONLY);
+    allow("staff-timesheet", VIEW_ONLY);
+    allow("project-portal", VIEW_ONLY);
   } else {
     ["staff-dashboard", "staff-live", "staff-schedule", "performance-center", "staff-development", "performance-history", "staff-timesheet", "staff-reports", "hr-dashboard", "hr-reports", "acc-dashboard", "acc-reports"].forEach((id) =>
       allow(id, VIEW_EXPORT),
@@ -1246,6 +1275,7 @@ function accountingRole(user: StaffUser) {
   if (user.access === "Team Leader") return "Project Manager";
   if (user.access === "Construction Engineer") return "Construction Engineer";
   if (user.access === "Client") return "Client Viewer";
+  if (user.access === "Trainee" || user.access === "Intern") return "Viewer";
   if (user.access === "Viewer") return "Viewer";
   return "Engineer";
 }
@@ -2680,6 +2710,7 @@ function readAccountingSnapshot(): AccountingSnapshot {
       progress: Math.max(0, Math.min(100, finiteNumber(row.progress))),
       googleDriveLink: String(row.googleDriveLink || ""),
       clickUpLink: String(row.clickUpLink || ""),
+      contractValue: finiteNumber(row.contractValue),
     })).filter((project: AccountingProject) => project.id);
     const documents = Array.isArray(store.documents) ? store.documents as AccountingDocument[] : [];
     const commissions: CommissionRow[] = (Array.isArray(store.commissions) ? store.commissions : [])
@@ -2862,7 +2893,7 @@ function sampleConstructionSnapshot(rate: number): AccountingSnapshot {
     type: "Construction", phase: "Execution", status, priority: "Normal",
     responsibleEngineer: "", projectManager: "", teamLeader: "",
     startDate: "", dueDate: "", projectAddress: "", progress: 0,
-    googleDriveLink: "", clickUpLink: "",
+    googleDriveLink: "", clickUpLink: "", contractValue: 0,
   });
   const line = (
     projectId: string, date: string, amount: number, label: string,
@@ -3417,6 +3448,21 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated) return;
     console.log("[larsa-sync] effect fired, hydrated =", hydrated);
+    /* Hand the accounting engine (same-origin iframe) the Supabase
+       coordinates so its v4.0 cloud layer can reach the authoritative
+       relational accounting store (acct_* tables + RPCs). NEXT_PUBLIC_*
+       values are baked at build time and already public; the engine reuses
+       the session this page's supabase-js client established. Without them
+       the engine's accounting layer stays local-only, unchanged. */
+    try {
+      const bridgeUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const bridgeKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (bridgeUrl && bridgeKey) {
+        localStorage.setItem("larsaSupabaseBridgeV1", JSON.stringify({ url: bridgeUrl, anonKey: bridgeKey }));
+      } else {
+        localStorage.removeItem("larsaSupabaseBridgeV1");
+      }
+    } catch { /* engine stays local-only */ }
     const cleanup = initLarsaSync({
       onRemoteChange: () => {
         setStorageTick((value) => value + 1);
@@ -5996,6 +6042,28 @@ export default function Home() {
     } catch {
       // The native project portal already uses the saved project.
     }
+    /* The portal's progress slider is the schedule information that already
+       exists in Larsa Control — reuse it: every change is also appended to
+       the permanent accounting progress history (acct_progress_updates), so
+       the accounting engine, the client-facing summary, and this portal all
+       report the same number with full history. Best-effort: a sync hiccup
+       never blocks the local save. */
+    if (patch.progress !== undefined && supabaseConfigured()) {
+      const client = getSupabaseClient();
+      if (client) {
+        client.rpc("acct_record_progress", {
+          actor: {
+            email: actor.email || `${actor.username || actor.id}@larsaeng.com`,
+            name: actor.name,
+            role: accountingRole(actor),
+          },
+          p_project_id: projectId,
+          p_percent: Math.max(0, Math.min(100, finiteNumber(patch.progress))),
+          p_date: new Date().toISOString().slice(0, 10),
+          p_note: "Updated from the Project Portal",
+        }).then(() => {}, () => { /* history sync retries on the next update */ });
+      }
+    }
     setStorageTick((value) => value + 1);
     const project = snapshot.projects.find((row) => row.id === projectId);
     raiseNotification({
@@ -7079,7 +7147,10 @@ export default function Home() {
             {accessMode ? (<AccountAccess mode={accessMode} onCancel={() => setAccessMode(null)} onSwitchMode={(next, address) => { if (next === "signup" || next === "forgot") setAccessMode(next); if (address) setLoginEmail(address); }} />) : null}<form hidden={Boolean(accessMode)} onSubmit={signIn} id="auth-panel" role="tabpanel" aria-labelledby={loginMode === "pin" ? "auth-tab-pin" : "auth-tab-email"}>
               {loginMode === "email" ? (
                 <>
-                  <label>Work Email<input type="email" name="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" placeholder="name@larsaeng.com" /></label>
+                  {/* type="text", not "email": clients, trainees, and interns sign in
+                      with a bare username (no email account at all), and the native
+                      email constraint would block anything without an @. */}
+                  <label>Email or Username<input type="text" name="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="name@larsaeng.com or username" /></label>
                   <label>
                     Password
                     <span className="password-field">
@@ -8548,6 +8619,91 @@ function PerformanceHistory({
   );
 }
 
+/* The authoritative per-project money picture, fetched straight from the
+ * accounting backend (acct_project_summary — the same numbers the accounting
+ * engine shows), so clients can always see their project's calculations from
+ * the portal without an email account or any accounting access. Read-only.
+ * Visible to admins, Managers, Accountants, Team Leaders — and Clients, who
+ * only ever reach their own projects here. */
+function PortalFinancialSummary({ project, viewer }: { project: AccountingProject; viewer: StaffUser | null }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<Record<string, unknown> | null>(null);
+  const [note, setNote] = useState("");
+  const canSeeMoney = Boolean(viewer && (isAdmin(viewer)
+    || ["Manager", "Accountant", "Team Leader", "Client"].includes(viewer.access || "")));
+  useEffect(() => {
+    if (!open || rows) return;
+    // Deferred a tick (the codebase's hydrate pattern) so no state is set
+    // synchronously inside the effect itself.
+    const timer = window.setTimeout(() => {
+      const client = supabaseConfigured() ? getSupabaseClient() : null;
+      if (!client) { setNote("Financial figures appear when the shared accounting database is connected."); return; }
+      setNote("Loading the shared ledger…");
+      client.rpc("acct_project_summary", { p_project_id: project.id }).then(({ data, error }) => {
+        if (error || !data) { setNote("This project has no records in the shared accounting ledger yet."); return; }
+        setRows(data as Record<string, unknown>); setNote("");
+      }, () => setNote("Could not reach the accounting ledger. Try again."));
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [open, rows, project.id]);
+  if (!canSeeMoney) return null;
+  const iqd = (key: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
+    .format(finiteNumber(rows?.[key])) + " IQD";
+  const money = (value: number, currency: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: currency === "IQD" ? 0 : 2 }).format(value) + " " + currency;
+  const costProgress = () => {
+    const pct = rows?.["cost_progress_pct"];
+    if (pct == null) return "Not Available (no approved budget)";
+    const cur = String(rows?.["budget_currency"] || "IQD");
+    const cost = finiteNumber(cur === "IQD" ? rows?.["actual_construction_cost_iqd"] : rows?.["actual_construction_cost_usd"]);
+    return `${finiteNumber(pct)}% — ${money(cost, cur)} of ${money(finiteNumber(rows?.["approved_budget"]), cur)}`;
+  };
+  const schedule = () => {
+    const pct = rows?.["schedule_progress_pct"];
+    if (pct == null) return `${project.progress}% (portal)`;
+    return `${finiteNumber(pct)}%${rows?.["schedule_progress_date"] ? ` · ${String(rows["schedule_progress_date"])}` : ""}`;
+  };
+  const LINES: [string, string][] = [
+    ["Gross Funding Received", "gross_funding_iqd"],
+    ["Initial Consultancy Fee", "initial_fee_iqd"],
+    ["Net Construction Funding", "net_construction_funding_iqd"],
+    ["Materials", "materials_iqd"],
+    ["Labor", "labor_iqd"],
+    ["Other Project Expenses", "other_expenses_iqd"],
+    ["Actual Construction Cost", "actual_construction_cost_iqd"],
+    ["Total Used", "total_used_iqd"],
+    ["Remaining Unused Balance", "remaining_unused_iqd"],
+    ["Refundable Consultancy Fee", "refundable_fee_iqd"],
+    ["Total Refund Due to Client", "total_refund_due_iqd"],
+    ["Final Consultancy Fee Retained", "final_fee_retained_iqd"],
+    ["Pending Commitments", "pending_commitments_iqd"],
+  ];
+  return (
+    <div className="project-financials" style={{ marginTop: 10 }}>
+      <button type="button" className="project-room-button ghost" onClick={() => setOpen(!open)}>
+        <Wallet size={15} /> {open ? "Hide financial summary" : "Financial summary"}
+      </button>
+      {open ? (
+        rows ? (
+          <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.9 }}>
+            {project.contractValue ? (
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Contract Value</span><b>{money(project.contractValue, String(rows["currency"] || "IQD"))}</b></div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Approved Project Budget</span><b>{rows["approved_budget"] == null ? "Not Available" : money(finiteNumber(rows["approved_budget"]), String(rows["budget_currency"] || "IQD"))}</b></div>
+            {LINES.map(([label, key]) => (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>{label}</span><b>{iqd(key)}</b></div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Cost Progress</span><b>{costProgress()}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Schedule / Physical Progress</span><b>{schedule()}</b></div>
+            <p className="project-room-none" style={{ marginTop: 6 }}>Figures come from the shared accounting ledger with each entry&apos;s recorded exchange rate — they never change when today&apos;s rate changes.</p>
+          </div>
+        ) : (
+          <p className="project-room-none" style={{ marginTop: 8 }}>{note || "Loading…"}</p>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 function ProjectPortal({
   viewer,
   projects,
@@ -8760,6 +8916,7 @@ function ProjectPortal({
                 <p className="project-room-none">No group has been opened for this project yet.</p>
               )}
               {canEdit && !editing && <button type="button" className="project-edit-button" onClick={() => beginEdit(project)}><Pencil size={15} /> Update project progress</button>}
+              <PortalFinancialSummary project={project} viewer={viewer} />
             </article>
           );
         })}
@@ -9524,31 +9681,49 @@ function AccessCenter({
     if (!draft?.permissionProfile) return;
     const email = draft.email?.trim().toLowerCase() || "";
     const pinAlreadyStored = isHashed(draft.pin); const pin = pinAlreadyStored ? String(draft.pin) : (draft.pin?.replace(/\D/g, "") || "");
-    if (!draft.name.trim() || !email || !draft.password || !pin) {
-      setFormError("Name, work email, password, and PIN are required.");
+    /* Clients, trainees, and interns are username-and-password accounts an
+       admin sets up: no email address is required (so no email verification
+       ever applies), and the PIN is optional for them. Everyone else keeps
+       the full requirement. */
+    const usernameOnly = USERNAME_ONLY_PRESETS.includes(draft.access || "");
+    if (!draft.name.trim() || !draft.password || (!usernameOnly && (!email || !pin))) {
+      setFormError(usernameOnly
+        ? "Name and password are required."
+        : "Name, work email, password, and PIN are required.");
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setFormError("Enter a valid work email.");
       return;
     }
-    if (!pinAlreadyStored && (pin.length < 4 || pin.length > 8)) {
+    if (pin && !pinAlreadyStored && (pin.length < 4 || pin.length > 8)) {
       setFormError("PIN must contain 4 to 8 digits.");
       return;
     }
     const duplicate = users.find((user) =>
       user.id !== draft.id &&
+      Boolean(email) &&
       (user.email?.trim().toLowerCase() === email),
     );
-    const pinClash = pinAlreadyStored ? false : await pinTakenByOther(users, pin, draft.id); if (duplicate || pinClash) {
+    const pinClash = !pin || pinAlreadyStored ? false : await pinTakenByOther(users, pin, draft.id); if (duplicate || pinClash) {
       setFormError("That email or PIN is already assigned to another user.");
       return;
+    }
+    /* Username-only accounts sign in with the username alone, so it must
+       exist and be unique. Derived from the email's local part when there is
+       one, otherwise from the person's name. */
+    const usernameBase = (draft.username?.trim() || email.split("@")[0] || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "user");
+    let uniqueUsername = usernameBase.toLowerCase();
+    let usernameSuffix = 1;
+    while (users.some((user) => user.id !== draft.id && (user.username || "").trim().toLowerCase() === uniqueUsername)) {
+      usernameSuffix += 1;
+      uniqueUsername = `${usernameBase.toLowerCase()}${usernameSuffix}`;
     }
     const nextUser: StaffUser = {
       ...draft,
       email,
       pin,
-      username: draft.username || email.split("@")[0],
+      username: uniqueUsername,
       enabled: draft.enabled !== false,
       projectAccessMode: protectedAccount
         ? "all"
@@ -9556,7 +9731,7 @@ function AccessCenter({
       projectIds: protectedAccount ? [] : draft.projectIds || [],
       permissions: staffPermissionsForUser(draft),
     };
-    const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
+    const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
       if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = window.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
       setIsNew(false);
@@ -9672,7 +9847,10 @@ function AccessCenter({
               </div>
               <div className="access-fields">
                 <label>Full Name<input value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
-                <label>Work Email<input type="email" value={draft.email || ""} onChange={(event) => updateDraft("email", event.target.value)} /></label>
+                <label>{USERNAME_ONLY_PRESETS.includes(draft.access || "") ? "Email (optional)" : "Work Email"}<input type="email" value={draft.email || ""} onChange={(event) => updateDraft("email", event.target.value)} /></label>
+                {USERNAME_ONLY_PRESETS.includes(draft.access || "") ? (
+                  <p className="org-note">This account signs in with a username and password only — no email or verification codes. Username: <b>{(draft.username?.trim() || draft.email?.split("@")[0]?.trim() || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "user")}</b> (PIN optional).</p>
+                ) : null}
                 <label>
                   Password
                   <span className="password-field access-password">
