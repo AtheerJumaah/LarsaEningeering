@@ -225,30 +225,66 @@
     return out;
   }
 
-  /* Pick people — as many as you like. A tick list rather than a
-     multi-select: it is obvious that more than one person can be chosen,
-     and it needs no Ctrl/Cmd-click to do it. Ticking nobody keeps the
-     existing meaning: anyone who holds the permission. */
-  function rosterPicker(id, selected, emptyLabel) {
+  /* Pick people — as many as you like — from a dropdown that is one line
+     until you open it. A plain <select multiple> is a permanently open list
+     box that needs Ctrl/Cmd-click for a second name, and a bare tick list
+     took six lines of the form to offer one person. This closes to a single
+     summary line that says who is assigned, and opens to tick boxes so a
+     second name is one ordinary click. Nobody ticked keeps its existing
+     meaning: anyone who holds the permission. */
+  function pickerSummary(chosen, people, none) {
+    if (!chosen.length) return none;
+    var names = chosen.map(function (email) {
+      for (var i = 0; i < people.length; i++) if (people[i].email === email) return people[i].name;
+      return email;
+    });
+    if (names.length <= 2) return names.join(", ");
+    return names.slice(0, 2).join(", ") + " +" + (names.length - 2);
+  }
+  function rosterPicker(id, selected) {
     var chosen = emailList(selected);
     var people = acctRoster();
     if (!people.length) {
-      return '<input id="' + id + '" value="' + esc4(chosen.join(", ")) + '" placeholder="name@larsaeng.com">' +
-        '<span class="muted small">' + TT("No staff accounts found — enter emails separated by commas.",
-          "لا توجد حسابات موظفين — أدخل البريد مفصولاً بفواصل.") + "</span>";
+      return '<input id="' + id + '" value="' + esc4(chosen.join(", ")) + '" placeholder="name@larsaeng.com">';
     }
-    return '<div class="acct-people" id="' + id + '" data-people="1" style="max-height:132px;overflow:auto;' +
-      'border:1px solid var(--line,#d9d9d9);border-radius:6px;padding:5px 8px">' +
+    var none = TT("Anyone with the permission", "أي شخص لديه الصلاحية");
+    return '<details class="acct-dd" id="' + id + '" data-people="1" data-none="' + esc4(none) + '">' +
+      '<summary class="acct-dd-head"><span class="acct-dd-text">' +
+      esc4(pickerSummary(chosen, people, none)) + "</span></summary>" +
+      '<div class="acct-dd-list">' +
       people.map(function (p) {
-        return '<label class="small" style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer">' +
+        return '<label class="acct-dd-row">' +
           '<input type="checkbox" class="acct-person" data-for="' + id + '" value="' + esc4(p.email) + '"' +
           (chosen.indexOf(p.email) !== -1 ? " checked" : "") + ">" +
           "<span>" + esc4(p.name) + (p.role ? ' <span class="muted">— ' + esc4(p.role) + "</span>" : "") + "</span></label>";
-      }).join("") + "</div>" +
-      '<span class="muted small">' + esc4(emptyLabel || TT("Tick everyone who should be assigned. None ticked = anyone with the permission.",
-        "اختر كل من يجب تكليفه. بدون اختيار = أي شخص لديه الصلاحية.")) + "</span>";
+      }).join("") + "</div></details>";
   }
-  /* Reads the tick list, the older multi-select, or the plain-text fallback. */
+  /* The closed summary has to keep telling the truth as boxes are ticked.
+     Delegated from the document because these controls are rebuilt from HTML
+     strings on every render, so there is nothing stable to bind to. */
+  function syncPickerLabel(dd) {
+    if (!dd) return;
+    var text = dd.querySelector(".acct-dd-text");
+    if (!text) return;
+    var boxes = Array.prototype.slice.call(dd.querySelectorAll(".acct-person"));
+    var chosen = boxes.filter(function (b) { return b.checked; })
+      .map(function (b) { return String(b.value || "").toLowerCase().trim(); });
+    var people = boxes.map(function (b) {
+      var span = b.parentNode.querySelector("span");
+      return { email: String(b.value || "").toLowerCase().trim(), name: span ? span.textContent.replace(/\s*—.*$/, "").trim() : b.value };
+    });
+    text.textContent = pickerSummary(chosen, people, dd.getAttribute("data-none") || "");
+  }
+  function watchPickers() {
+    if (document.__acctPickerWatch) return;
+    document.__acctPickerWatch = true;
+    document.addEventListener("change", function (event) {
+      var box = event.target;
+      if (!box || !box.className || String(box.className).indexOf("acct-person") === -1) return;
+      syncPickerLabel(document.getElementById(box.getAttribute("data-for")));
+    });
+  }
+  /* Reads the dropdown, the older multi-select, or the plain-text fallback. */
   function readPicker(id) {
     var el = document.getElementById(id);
     if (!el) return null;
@@ -1202,13 +1238,12 @@
         ["deduct_from_funding", "project_expense", "larsa_revenue", "custom"].map(function (t) { return '<option value="' + t + '"' + (ap && ap.fee_treatment === t ? " selected" : "") + ">" + t + "</option>"; }).join("") + "</select></div>" +
         "</div></div>" +
         '<div class="form-grid" style="margin-top:6px">' +
-        '<div class="field wide"><label>' + TT("Assigned accountants — who enters data", "المحاسبون المكلفون — من يُدخل البيانات") + "</label>" +
+        '<div class="field wide"><label>' + TT("Accountants", "المحاسبون") + "</label>" +
         rosterPicker("acct_prj_accountants", ap && ap.assigned_accountants) + "</div>" +
-        '<div class="field wide"><label>' + TT("Assigned approvers — who reviews and approves", "المعتمِدون المكلفون — من يراجع ويعتمد") + "</label>" +
+        '<div class="field wide"><label>' + TT("Approvers", "المعتمِدون") + "</label>" +
         rosterPicker("acct_prj_approvers", ap && ap.assigned_approvers) + "</div>" +
         "</div>" +
-        '<p class="muted small">' + TT("The person who enters an entry never approves it — entries wait as Pending Approval for the assigned approver (self-approval only via the explicit permission).", "من يُدخل القيد لا يعتمده — تبقى القيود بانتظار الاعتماد للمعتمِد المكلف (الاعتماد الذاتي فقط عبر الصلاحية الصريحة).") + "</p>" +
-        '<p class="muted small">' + TT("Changing these defaults affects FUTURE entries only. Historical transactions keep their permanent rate and fee snapshots.", "تغيير هذه الافتراضيات يخص القيود المستقبلية فقط. القيود التاريخية تحتفظ بلقطاتها الدائمة للسعر والأتعاب.") + "</p>";
+        '<p class="muted small">' + TT("Whoever enters an entry cannot approve it. Defaults apply to future entries only.", "من يُدخل القيد لا يعتمده. الافتراضيات تخص القيود المستقبلية فقط.") + "</p>";
       body.appendChild(wrap);
       var inhEl = document.getElementById("acct_prj_fee_inherit");
       if (inhEl) inhEl.onchange = function () {
@@ -1745,15 +1780,14 @@
       ["deduct_from_funding", "project_expense", "larsa_revenue"].map(function (t) { return '<option value="' + t + '"' + (s.default_fee_treatment === t ? " selected" : "") + ">" + t + "</option>"; }).join("") + "</select></div>" +
       "</div>" +
       '<h4 style="margin:10px 0 2px">' + TT("Area approvers (dual control)", "معتمِدو الأقسام (رقابة مزدوجة)") + "</h4>" +
-      '<p class="muted small">' + TT("Assign who approves each accounting area. Empty = anyone holding the approve permission. Data is entered by the accountant and waits as Pending Approval until an assigned approver (a different user) approves it.",
-        "حدد من يعتمد كل قسم محاسبي. فارغ = أي شخص لديه صلاحية الاعتماد. يُدخل المحاسب البيانات وتبقى بانتظار الاعتماد حتى يعتمدها معتمِد مكلف (مستخدم آخر).") + "</p>" +
+      '<p class="muted small">' + TT("Who approves each area. The approver must be someone other than whoever entered it.",
+        "من يعتمد كل قسم. يجب أن يكون المعتمِد شخصاً غير من أدخل القيد.") + "</p>" +
       '<div class="form-grid">' +
       [["funding", TT("Funding", "التمويل")], ["material", TT("Materials", "المواد")], ["labor", TT("Labor", "العمالة")],
        ["expense", TT("Expenses", "المصاريف")], ["revenue", TT("Revenue", "الإيرادات")], ["adjustment", TT("Adjustments", "التسويات")]].map(function (a) {
         var cur_ = ((s.area_approvers || {})[a[0]] || []);
-        return '<div class="field wide"><label>' + a[1] + ' <span class="muted small">(' + a[0] + ')</span></label>' +
-          rosterPicker("acct_area_" + a[0], cur_,
-            TT("Select none = anyone with the approve permission.", "بدون اختيار = أي شخص لديه صلاحية الاعتماد.")) + "</div>";
+        return '<div class="field wide"><label>' + a[1] + "</label>" +
+          rosterPicker("acct_area_" + a[0], cur_) + "</div>";
       }).join("") +
       "</div>" +
       (ACCT.isPlatformAdmin
@@ -1979,6 +2013,30 @@
       /* The project title was disappearing under the sticky bar. */
       ".view-scroll{scroll-padding-top:64px}",
       ".page-head h1{scroll-margin-top:72px}",
+    ].join("\n");
+    (document.head || document.documentElement).appendChild(css);
+  }
+
+  /* The people dropdowns. Styled here rather than in the engine's stylesheet
+     because this whole layer is additive: the engine file stays untouched. */
+  function pickerStyles() {
+    if (document.getElementById("acct-dd-style")) return;
+    var css = document.createElement("style");
+    css.id = "acct-dd-style";
+    css.textContent = [
+      ".acct-dd{border:1px solid var(--line,#d9d9d9);border-radius:8px;background:var(--panel,#fff)}",
+      ".acct-dd-head{display:flex;align-items:center;justify-content:space-between;gap:8px;",
+      "padding:9px 11px;cursor:pointer;font-size:13px;font-weight:650;list-style:none}",
+      ".acct-dd-head::-webkit-details-marker{display:none}",
+      /* One chevron, drawn here, so the control reads as a dropdown when shut. */
+      '.acct-dd-head::after{content:"";width:7px;height:7px;flex:none;margin-inline-start:auto;',
+      "border-right:2px solid currentColor;border-bottom:2px solid currentColor;",
+      "transform:rotate(45deg) translate(-2px,-2px);opacity:.55;transition:transform .15s ease}",
+      ".acct-dd[open] .acct-dd-head::after{transform:rotate(-135deg) translate(-2px,-2px)}",
+      ".acct-dd-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".acct-dd-list{max-height:190px;overflow:auto;padding:4px 11px 9px;border-top:1px solid var(--line,#e6e6e6)}",
+      ".acct-dd-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;cursor:pointer}",
+      ".acct-dd-row input{flex:none;margin:0}",
     ].join("\n");
     (document.head || document.documentElement).appendChild(css);
   }
@@ -2752,6 +2810,8 @@
     wrapFundingSchema();
     wrapProjectSchema();
     suppressEmbeddedShell();
+    pickerStyles();
+    watchPickers();
     bootstrap();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") setTimeout(install, 0);
