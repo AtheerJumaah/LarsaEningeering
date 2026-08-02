@@ -15,7 +15,7 @@ const cloud = read("public/engines/accounting-cloud.js");
 const page = read("app/page.tsx");
 const sw = read("public/sw.js");
 const migrations = readdirSync(new URL("../supabase/migrations", import.meta.url))
-  .filter((f) => f.startsWith("20260801_acct_"))
+  .filter((f) => /^2026\d{4}_acct_/.test(f))
   .map((f) => read("supabase/migrations/" + f))
   .join("\n");
 
@@ -188,3 +188,65 @@ test("portal progress edits append to the permanent accounting progress history"
   // And the engine mirrors the latest recorded progress back to the portal field:
   assert.match(cloud, /latestProgress\[ap\.id\]/);
 });
+
+/* ---- upgrade part 6: review workflow, receipts, statements, permissions ---- */
+
+test("every entry carries a review status separate from its payment status", () => {
+  assert.match(migrations, /review_status text not null default 'unreviewed'/);
+  assert.match(migrations, /'unreviewed','pending_review','approved','needs_correction'/);
+  assert.match(migrations, /acct_submit_for_review/);
+  assert.match(migrations, /acct_review_entry/);
+  assert.match(migrations, /a correction request requires a comment/i);
+});
+
+test("working totals include unapproved entries; approval changes reliability, never amounts", () => {
+  assert.match(migrations, /acct_review_breakdown/);
+  assert.match(migrations, /working_iqd/);
+  assert.match(cloudNow(), /Working Totals — approval changes reliability, never the numbers|approval changes reliability/);
+  assert.match(cloudNow(), /Contains Unapproved Accounting Entries/);
+});
+
+test("client funding receipts: immediate, immutable, numbered by the server, print history kept", () => {
+  assert.match(migrations, /create table if not exists public\.acct_receipts/);
+  assert.match(migrations, /create table if not exists public\.acct_receipt_prints/);
+  assert.match(migrations, /acct_receipts are immutable/);
+  assert.match(migrations, /acct_issue_receipt/);
+  assert.match(migrations, /internal review never blocks proof that the money was received/i);
+  assert.match(cloudNow(), /Payment Received — Pending Internal Review/);
+  assert.match(cloudNow(), /acctPrintReceipt/);
+  assert.match(cloudNow(), /Client \/ Payer Signature/);
+  assert.match(cloudNow(), /Company Stamp/);
+  assert.match(cloudNow(), /amountInWords/);
+});
+
+test("corrected receipts reference the original and never reuse its number", () => {
+  assert.match(migrations, /CORRECTED receipt|corrects_receipt_id/);
+  assert.match(migrations, /replacement_of/);
+  assert.match(cloudNow(), /CORRECTED RECEIPT — replaces/);
+});
+
+test("the project funding statement stays complete and labels pending entries", () => {
+  assert.match(migrations, /acct_funding_statement/);
+  assert.match(migrations, /Contains Entries Pending Internal Approval/);
+  assert.match(cloudNow(), /acctFundingStatementPrint/);
+});
+
+test("granular multi-accountant permissions with role defaults and RLS-backed writes", () => {
+  assert.match(migrations, /create table if not exists public\.acct_permissions/);
+  assert.match(migrations, /acct_role_default_perms/);
+  for (const perm of ["edit_own_unapproved", "edit_any_unapproved", "submit_review", "reopen_approved",
+    "print_receipts", "reprint_receipts", "post_refunds", "export_working", "self_approve"]) {
+    assert.ok(migrations.includes(perm), perm + " must exist in the permission engine");
+  }
+  assert.match(migrations, /self-approval requires an explicit permission|SELF-APPROVED under explicit permission/);
+  assert.match(cloudNow(), /acctSavePerms/);
+});
+
+test("status indicators use text and icon in addition to color", () => {
+  assert.match(core, /Pending Review/);
+  assert.match(core, /Needs Correction/);
+  assert.match(core, /icon: "✔"/);
+  assert.match(core, /aggregateStatus/);
+});
+
+function cloudNow() { return readFileSync(new URL("../public/engines/accounting-cloud.js", import.meta.url), "utf8"); }

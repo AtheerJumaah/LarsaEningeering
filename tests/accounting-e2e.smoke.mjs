@@ -10,11 +10,13 @@ import { join } from "node:path";
 const root = "/home/claude/repo/public";
 const calls = [];
 const PROJECT = { id: "prj1", name: "E2E Villa", currency: "IQD", fee_inherit: true, approved_budget: 100000000, budget_currency: "IQD", contract_value: 150000000, is_sample: false, created_at: "2026-01-01" };
-const TXN = { id: "11111111-1111-4111-8111-111111111111", txn_no: "LRS-TXN-000001", project_id: "prj1", kind: "funding", category: "Client Funding", description: "First funding", txn_date: "2026-01-10", status: "received", original_amount: 10000000, original_currency: "IQD", exchange_rate: 1310, rate_source: "platform_default", amount_iqd: 10000000, amount_usd: 7633.59, fee_rule: { method: "percentage", rate: 0.08, basis: "funding", treatment: "deduct_from_funding", source: "platform_default" }, is_sample: false, meta: {}, created_at: "2026-01-10" };
+const TXN = { id: "11111111-1111-4111-8111-111111111111", review_status: "pending_review", txn_no: "LRS-TXN-000001", project_id: "prj1", kind: "funding", category: "Client Funding", description: "First funding", txn_date: "2026-01-10", status: "received", original_amount: 10000000, original_currency: "IQD", exchange_rate: 1310, rate_source: "platform_default", amount_iqd: 10000000, amount_usd: 7633.59, fee_rule: { method: "percentage", rate: 0.08, basis: "funding", treatment: "deduct_from_funding", source: "platform_default" }, is_sample: false, meta: {}, created_at: "2026-01-10" };
 const FEE = { id: "22222222-2222-4222-8222-222222222222", project_id: "prj1", source_txn_id: TXN.id, entry_type: "fee", calc_method: "percentage", fee_rate: 0.08, calc_basis: "funding", basis_amount: 10000000, fee_amount: 800000, currency: "IQD", exchange_rate: 1310, fee_iqd: 800000, fee_usd: 610.69, treatment: "deduct_from_funding", config_source: "platform_default", status: "posted", provisional: true, is_sample: false, created_at: "2026-01-10" };
+const RECEIPT = { id: "44444444-4444-4444-8444-444444444444", receipt_no: "LRS-RCP-000001", txn_id: TXN.id, project_id: "prj1", kind: "original", version: 1, status_at_issue: "pending_review", created_at: "2026-01-10",
+  snapshot: { receipt_no: "LRS-RCP-000001", txn_no: TXN.txn_no, project_id: "prj1", project_code: "E2E", project_name: "E2E Villa", payer_name: "Client X", amount: 10000000, currency: "IQD", amount_iqd: 10000000, amount_usd: 7633.59, exchange_rate: 1310, txn_date: "2026-01-10", payment_method: "Cash", fee_rate: 0.08, fee_amount: 800000, fee_treatment: "deduct_from_funding", net_after_fee: 9200000, received_by: "Site Office", entered_by_name: "E2E Accountant", review_status_at_issue: "pending_review", verify_code: "ABC123", timezone: "Asia/Baghdad", issued_at: "2026-01-10T10:00:00Z" } };
 const bootstrap = {
   settings: { default_exchange_rate: 1310, default_fee_method: "percentage", default_fee_rate: 0.08, default_fee_basis: "funding", default_fee_treatment: "deduct_from_funding", sample_state: "removed" },
-  projects: [PROJECT], transactions: [TXN], fee_ledger: [FEE], refund_settlements: [],
+  projects: [PROJECT], transactions: [TXN], fee_ledger: [FEE], refund_settlements: [], receipts: [RECEIPT], permissions: [],
   progress: [{ id: "p", project_id: "prj1", percent: 45, update_date: "2026-03-10", updated_by_name: "Site Eng", created_at: "x" }],
   approvals: [], review_queue: [], audit_recent: [], archives: [],
 };
@@ -29,7 +31,9 @@ const server = createServer((req, res) => {
       res.setHeader("Content-Type", "application/json");
       if (name === "acct_get_bootstrap") res.end(JSON.stringify(bootstrap));
       else if (name === "acct_is_platform_admin") res.end("false");
-      else if (name === "acct_post_transaction") res.end(JSON.stringify({ ok: true, txn: { ...TXN, id: "33333333-3333-4333-8333-333333333333", txn_no: "LRS-TXN-000002" }, fee: { fee_amount: 160000, currency: "IQD", status: "posted" } }));
+      else if (name === "acct_get_my_permissions") res.end(JSON.stringify({ view: true, create: true, submit_review: true, print_receipts: true, reprint_receipts: true, approve: false, reject: false, export_working: true, edit_own_unapproved: true }));
+      else if (name === "acct_post_transaction") res.end(JSON.stringify({ ok: true, txn: { ...TXN, id: "33333333-3333-4333-8333-333333333333", txn_no: "LRS-TXN-000002" }, fee: { fee_amount: 160000, currency: "IQD", status: "posted" },
+        receipt: { ...RECEIPT, id: "55555555-5555-4555-8555-555555555555", receipt_no: "LRS-RCP-000002", txn_id: "33333333-3333-4333-8333-333333333333", snapshot: { ...RECEIPT.snapshot, receipt_no: "LRS-RCP-000002", amount: 2000000, amount_iqd: 2000000 } } }));
       else res.end(JSON.stringify({ ok: true }));
     });
     return;
@@ -103,6 +107,12 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(800);
 const posted = calls.filter((c) => c.name === "acct_post_transaction");
+const receiptModalUp = await page.evaluate(() => {
+  const m = document.querySelector("#modalRoot .modal");
+  return m ? m.textContent.includes("LRS-RCP-000002") && m.textContent.includes("Print Receipt") : false;
+});
+const reviewMirror = await page.evaluate(() => state.funding[0] && state.funding[0].reviewStatus);
+console.log("receipt modal:", receiptModalUp, "| mirror review status:", reviewMirror);
 console.log("post calls:", posted.length, posted[0] ? JSON.stringify({ amount: posted[0].body.txn.amount, status: posted[0].body.txn.status, kind: posted[0].body.txn.kind, project: posted[0].body.txn.project_id, actor: posted[0].body.actor.role }) : "-");
 
 await browser.close(); server.close();
@@ -113,6 +123,7 @@ const pass = mirror.on && mirror.fundingCount === 1 && mirror.fundingFee === 800
   && hasSummary && summaryChecks && refundNumber && costProgress
   && modalState.projectLocked && modalState.dateFilled && modalState.feePanel
   && posted.length === 1 && posted[0].body.txn.amount === 2000000 && posted[0].body.txn.status === "received"
+  && receiptModalUp && reviewMirror === "pending_review"
   && fatal.length === 0;
 console.log(pass ? "E2E SMOKE OK" : "E2E SMOKE FAILED");
 process.exit(pass ? 0 : 1);

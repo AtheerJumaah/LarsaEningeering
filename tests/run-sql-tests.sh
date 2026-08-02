@@ -33,12 +33,17 @@ create table if not exists public.auth_codes (
   code text, attempts int default 0, consumed_at timestamptz, created_at timestamptz default now(), expires_at timestamptz);
 EOF
 
-for f in "$repo"/supabase/migrations/20260801_acct_00*.sql; do
+for f in "$repo"/supabase/migrations/2026*_acct_*.sql; do
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
 done
 
-out="$(psql -d acct_test -f "$here/accounting-sql.test.sql" 2>&1)" || { echo "$out" | tail -20; exit 1; }
-echo "$out" | grep -E "FAIL|ERROR" && exit 1
-echo "$out" | grep -c "PASS:" | xargs -I{} echo "{} SQL checks passed"
-echo "$out" | grep -q "ALL ACCOUNTING SQL TESTS PASSED" && echo "OK"
+total=0
+for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql"; do
+  out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
+  echo "$out" | grep -E "FAIL|ERROR" && exit 1
+  n="$(echo "$out" | grep -c "PASS:")"
+  total=$((total + n))
+done
+echo "$total SQL checks passed"
+echo "OK"

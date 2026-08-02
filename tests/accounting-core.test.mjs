@@ -192,3 +192,26 @@ test("no-budget cost progress is Not Available (null), never contract value or f
     [{ id: "x", project_id: "p3", kind: "expense", status: "approved", txn_date: "2026-01-01", amount_iqd: 50, amount_usd: 0.04, original_currency: "IQD", exchange_rate: 1310 }], [], []);
   assert.equal(s.cost_progress_pct, null);
 });
+
+test("amounts in words for receipts — English and Arabic, both currencies", () => {
+  assert.equal(Core.numberToWordsEn(2_376_000), "Two Million Three Hundred Seventy-Six Thousand");
+  assert.equal(Core.numberToWordsEn(960_000), "Nine Hundred Sixty Thousand");
+  assert.equal(Core.amountInWords(2_376_000, "IQD", "en"), "Two Million Three Hundred Seventy-Six Thousand Iraqi Dinars Only");
+  assert.equal(Core.amountInWords(1_500.25, "USD", "en"), "One Thousand Five Hundred US Dollars and Twenty-Five Cents Only");
+  assert.equal(Core.numberToWordsAr(2_000_000), "مليونان");
+  assert.equal(Core.numberToWordsAr(800_000), "ثمانمائة ألف");
+  assert.ok(Core.amountInWords(10_000_000, "IQD", "ar").includes("دينار عراقي"));
+  assert.ok(Core.amountInWords(10_000_000, "IQD", "ar").endsWith("لا غير"));
+});
+
+test("aggregate review status: red beats yellow beats green; approval never changes amounts", () => {
+  assert.equal(Core.aggregateStatus(["approved", "approved"]), "green");
+  assert.equal(Core.aggregateStatus(["approved", "pending_review"]), "yellow");
+  assert.equal(Core.aggregateStatus(["approved", "unreviewed"]), "yellow");
+  assert.equal(Core.aggregateStatus(["pending_review", "needs_correction"]), "red");
+  assert.equal(Core.aggregateStatus([]), null);
+  assert.equal(Core.reviewMeta("pending_review").color, "yellow");
+  assert.equal(Core.reviewMeta("approved").icon, "✔");
+  // Text label + icon accompany the color (never color alone):
+  assert.ok(Core.reviewMeta("needs_correction").en.length > 0 && Core.reviewMeta("needs_correction").ar.length > 0);
+});
