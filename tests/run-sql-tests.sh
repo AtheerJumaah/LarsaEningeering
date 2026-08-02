@@ -40,7 +40,8 @@ done
 
 total=0
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
-          "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql"; do
+          "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
+          "$here/accounting-payroll-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"

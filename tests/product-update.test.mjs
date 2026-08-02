@@ -17,7 +17,9 @@ test("home, clocks, presence, and notifications keep the simplified contracts", 
   const [page, css] = await Promise.all([read("app/page.tsx"), read("app/globals.css")]);
   assert.match(page, /<b>Iraq<\/b>/);
   assert.match(page, /<b>US Central<\/b>/);
-  assert.match(page, /"quick-clock",\s*"my-points",\s*"my-requests"/);
+  /* The personal quick actions still lead the row. My Pay joined them, so
+     this asserts the ordering rather than the exact adjacency it used to. */
+  assert.match(page, /"quick-clock",\s*(?:"my-pay",\s*)?"my-points",\s*"my-requests"/);
   assert.match(page, /push: true/);
   assert.match(page, /className="presence-stack"/);
   assert.match(css, /\.presence-stack \{ display: grid/);
