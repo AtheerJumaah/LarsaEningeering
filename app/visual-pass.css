@@ -1581,3 +1581,11 @@ i.is-due { background: #d97706; }
 @media (max-width: 760px) {
   .pay-form label { flex: 1 1 100%; }
 }
+
+/* My Pay lives in the bar with the other personal controls rather than in
+   the list of places to work: it is about you, like your notifications and
+   your settings, not a work area. Same round icon button as its neighbours,
+   and it steps aside when you are already looking at it. */
+.unified-app .pay-button { color: var(--ink); }
+.unified-app .pay-button:hover { border-color: var(--ink); background: var(--soft); }
+.unified-app.dark .pay-button:hover { border-color: #6b7484; background: #232833; }

@@ -572,14 +572,6 @@ const GROUPS: Group[] = [
         code: "OV",
         native: "overview",
       },
-      {
-        id: "my-pay",
-        label: "My Pay",
-        description: "Salary, commissions, and payment history",
-        labelAr: "رواتبي ومستحقاتي",
-        code: "MY",
-        native: "myPay",
-      },
     ],
   },
   {
@@ -939,7 +931,7 @@ const ACCOUNTING_TREE: { id: string; label: string; description: string; icon: s
        single-purpose entries stay underneath it rather than being removed,
        because they are still the way to reach the engine's own ledgers and
        people who know them should not have to relearn where things are. */
-    items: ["payroll-portal", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"],
+    items: ["payroll-portal", "my-pay", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"],
   },
   {
     id: "acc-grp-settings", tone: "rose", label: "Settings & Notices", icon: "acc-settings",
@@ -7372,6 +7364,17 @@ export default function Home() {
               <span><b>Iraq</b>{clock.baghdad}</span>
               <span><b>US Central</b>{clock.texas}</span>
             </div>}
+            {sessionUser && active.id !== "my-pay" && (
+              <button
+                type="button"
+                className="theme pay-button"
+                onClick={() => choose(MY_PAY_ITEM, "home")}
+                aria-label="My Pay — salary, commissions, and payment history"
+                title="My Pay"
+              >
+                <Wallet size={18} />
+              </button>
+            )}
             {sessionUser && (
               <button type="button" className="theme notif-button" onClick={() => choose(SETTINGS_ITEM, "home")} aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications and settings"}>
                 <Bell size={18} />
