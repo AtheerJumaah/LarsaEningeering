@@ -250,3 +250,11 @@ test("status indicators use text and icon in addition to color", () => {
 });
 
 function cloudNow() { return readFileSync(new URL("../public/engines/accounting-cloud.js", import.meta.url), "utf8"); }
+
+test("the accounting identity gate is usable: confirm mode prefills the signed-in email and only locks a filled field", () => {
+  const access = readFileSync(new URL("../app/AccountAccess.tsx", import.meta.url), "utf8");
+  assert.match(access, /mode === "reset" \|\| mode === "confirm" \? String\(currentUser\?\.email \|\| ""\) : ""/);
+  assert.match(access, /readOnly=\{\(mode === "reset" \|\| mode === "confirm"\) && Boolean\(currentUser\?\.email\)\}/);
+  // Username-only accounts (no mailbox) skip the accounting email gate entirely:
+  assert.match(page, /sessionUserRef\.current\.email && accountingNeedsVerification/);
+});
