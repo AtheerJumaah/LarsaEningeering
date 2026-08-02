@@ -140,12 +140,71 @@ test("Home stops repeating the same figure three times", () => {
   assert.match(page, /larsa-control-recent-trail/);
 });
 
+test("Install uses the browser's real install when there is one", () => {
+  const layout = read("app/layout.tsx");
+  // The event is caught in the document head, before React exists.
+  assert.match(layout, /larsa-install-capture/);
+  assert.match(layout, /beforeinstallprompt/);
+  assert.match(layout, /window\.__larsaInstall/);
+  // The page adopts what the head parked instead of only listening from mount.
+  assert.match(page, /__larsaInstall\?\.event/);
+  assert.match(page, /"larsa:installable"/);
+  // prompt() is reached from the click, with no await before it.
+  assert.match(page, /const prompt = installPrompt \|\| \(window as WindowWithInstall\)\.__larsaInstall\?\.event \|\| null;/);
+  // Exactly one beforeinstallprompt registration is left in the page.
+  assert.equal((page.match(/window\.addEventListener\("beforeinstallprompt"/g) || []).length, 1,
+    "the duplicate listener is gone");
+  assert.equal((page.match(/window\.removeEventListener\("beforeinstallprompt"/g) || []).length, 1,
+    "and it is still cleaned up");
+  // The manual steps are the fallback, and say which platform is yours.
+  assert.match(page, /step\.id === os \? "match" : undefined/);
+  assert.match(pass, /\.install-grid article\.match/);
+});
+
+test("hovering a card is unmistakable", () => {
+  // Grows and lifts, with a ring in the card's own colour.
+  const hover = /\n  \.module-bubble:hover \{([\s\S]*?)\n  \}/.exec(pass);
+  assert.ok(hover, "the cards need a hover rule in the refinement layer");
+  assert.match(hover[1], /transform: translateY\(-\d+px\) scale\(1\.0\d+\)/);
+  assert.match(hover[1], /box-shadow:[\s\S]*?0 0 0 2px/);
+  // Only for real pointers: a sticky :hover after a tap would strand a card.
+  assert.match(pass, /@media \(hover: hover\) and \(pointer: fine\) \{/);
+  // Keyboard focus matches, and pressing still reads as a press.
+  assert.match(pass, /\.module-bubble:focus-visible \{[\s\S]*?transform: translateY\(-\d+px\) scale\(1\.0\d+\)/);
+  assert.match(pass, /\.module-bubble:active \{[\s\S]*?scale\(\.99\d*\)/);
+  assert.match(pass, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.module-bubble:hover, \.module-bubble:focus-visible \{ transform: none; \}/);
+});
+
+test("density changes rounding and spacing, not just padding", () => {
+  for (const token of ["--radius-card", "--radius-panel", "--radius-tile", "--grid-gap"]) {
+    assert.ok(new RegExp(`:root \\{[\\s\\S]*?${token}:`).test(pass), token + " must be a token");
+    assert.ok(new RegExp(`\\[data-density="compact"\\] \\{[\\s\\S]*?${token}:`).test(pass),
+      token + " must have a compact value");
+  }
+  const roomy = Number(/:root \{[\s\S]*?--radius-card: (\d+)px/.exec(pass)[1]);
+  const tight = Number(/\[data-density="compact"\] \{[\s\S]*?--radius-card: (\d+)px/.exec(pass)[1]);
+  assert.ok(roomy > tight, "comfortable must be rounder than compact");
+  const roomyGap = Number(/:root \{[\s\S]*?--grid-gap: (\d+)px/.exec(pass)[1]);
+  const tightGap = Number(/\[data-density="compact"\] \{[\s\S]*?--grid-gap: (\d+)px/.exec(pass)[1]);
+  assert.ok(roomyGap > tightGap, "comfortable must be more spaced than compact");
+  assert.match(pass, /\.unified-app \.module-bubble \{ border-radius: var\(--radius-card\); \}/);
+  /* The cards are buttons, and the generic control radius is written at the
+     same weight. Losing that tie is what squared them off, so the card rule
+     must stay both prefixed and last. */
+  assert.ok(pass.indexOf(".unified-app .module-bubble { border-radius: var(--radius-card); }")
+    > pass.indexOf(".unified-app :is(button, .btn) { border-radius:"),
+    "the card radius must be stated after the generic control radius");
+  assert.match(pass, /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) \{ gap: var\(--grid-gap\); \}/);
+  // Compact must actually reach the six home cards, whose own rule is stronger.
+  assert.match(pass, /\[data-density="compact"\] \.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) > \.module-bubble \{/);
+});
+
 test("responsive rules keep the six cards as cards on small screens", () => {
   assert.match(pass, /@media \(max-width: 700px\) \{/);
   // On a phone the grid becomes one column of full-width cards...
   assert.match(pass, /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) \{ grid-template-columns: minmax\(0, 1fr\) !important; \}/);
   // ...that keep a card's height and rounding rather than becoming rows.
-  assert.match(pass, /> \.module-bubble \{ min-height: \d+px; padding: \d+px; border-radius: \d+px; \}/);
+  assert.match(pass, /> \.module-bubble \{ min-height: \d+px; padding: \d+px; border-radius: (?:\d+px|var\(--radius-card-sm\)); \}/);
   // Decorations scale down rather than disappear.
   assert.match(pass, /\.module-bubble::after, \.module-bubble \.module-blob \{ width: \d+px/);
 });
