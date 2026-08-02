@@ -662,7 +662,7 @@ aside.sidebar .nav-item.active small { color: #ffffff !important; }
    Same size, same rounding, same decorative circles. Only the geometry is
    tightened: equal heights, one shared decoration origin, and states that
    were previously invisible. */
-.module-grid:not(.quick-grid):not(.accounting-grid) { gap: 18px; }
+.module-grid:not(.quick-grid):not(.accounting-grid) { gap: var(--grid-gap); }
 .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble {
   min-height: 232px;
   padding: 22px;
@@ -857,6 +857,8 @@ aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offs
 .unified-app.dark .data-table thead th { background: #1b1f27; color: #b6bdc9; }
 .unified-app :is(.modal, .dialog, .group-dialog, .sheet) { border-radius: 24px; }
 .unified-app :is(input, select, textarea) { border-radius: 12px; }
+/* Cards that happen to be buttons are cards first — see the card rounding
+   section, which restates their radius at a strength this cannot outrank. */
 .unified-app :is(button, .btn) { border-radius: 12px; }
 .unified-app :is(.pill, .badge, .black-badge, .access-pill, .eyebrow) { border-radius: 999px; }
 
@@ -973,9 +975,156 @@ aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offs
   .unified-app :is(.modal, .dialog, .group-dialog) { max-width: 96vw; border-radius: 20px; }
   /* The six cards stack as cards, never as plain rows. */
   .module-grid:not(.quick-grid):not(.accounting-grid) { grid-template-columns: minmax(0, 1fr) !important; }
-  .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble { min-height: 150px; padding: 18px; border-radius: 24px; }
+  .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble { min-height: 150px; padding: 18px; border-radius: var(--radius-card-sm); }
   .module-bubble::after, .module-bubble .module-blob { width: 118px; height: 118px; top: -56px; inset-inline-end: -56px; right: -56px; }
   .topbar, .app-header { flex-wrap: wrap; row-gap: 8px; }
 }
 /* Financial figures must never be clipped or wrapped mid-number. */
 .unified-app :is(.money, .amount, td.right, .fin-tile b) { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* --- 16. Rounding and spacing, driven by density -------------------------
+   Comfortable and Compact were only ever a padding difference, which is the
+   least of what those words mean. They now carry the shape of the app as
+   well: Comfortable is softer and stands further apart, Compact squares up a
+   little and closes the gaps, so more fits on a screen without anything being
+   shrunk to unreadability. One set of tokens, so a card, a panel and a tile
+   can never drift out of step with each other. */
+:root {
+  --radius-card: 36px;
+  --radius-card-sm: 28px;
+  --radius-panel: 24px;
+  --radius-tile: 18px;
+  --grid-gap: 18px;
+}
+[data-density="compact"] {
+  --radius-card: 22px;
+  --radius-card-sm: 18px;
+  --radius-panel: 16px;
+  --radius-tile: 12px;
+  --grid-gap: 8px;
+}
+
+/* The .unified-app prefix is doing real work here, not decoration. Every one
+   of these cards is a <button>, and the control radius in section 10 is
+   written as `.unified-app :is(button, .btn)` — two classes' worth of weight
+   against a bare `.module-bubble`. The cards were losing that contest and
+   rendering at the 12px control radius no matter what their own rule said,
+   which is what made them look squared off. Matched here and stated later, so
+   the card wins. */
+.unified-app .module-bubble { border-radius: var(--radius-card); }
+@media (max-width: 760px) { .unified-app .module-bubble { border-radius: var(--radius-card-sm); } }
+
+.unified-app :is(
+  .panel, .focus-card, .settings-panel, .points-form, .clock-face,
+  .build-rules, .architecture, .portal-node, .week-lock, .install-modal
+) { border-radius: var(--radius-panel); }
+.unified-app :is(
+  .data-actions article, .access-section, .coverage-list, .install-grid article,
+  .home-continue, .home-recent-list button, .quick-action-row button
+) { border-radius: var(--radius-tile); }
+
+/* Compact was being ignored on the six home cards: the geometry rule above is
+   the more specific selector, so it kept the comfortable padding no matter
+   what was chosen. Stated at matching strength, it now actually applies. */
+[data-density="compact"] .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble {
+  min-height: 168px;
+  padding: 14px 16px;
+  row-gap: 8px;
+}
+[data-density="compact"] .module-bubble::after,
+[data-density="compact"] .module-bubble .module-blob {
+  width: 116px;
+  height: 116px;
+  top: -58px;
+  right: -58px;
+  inset-inline-end: -58px;
+}
+[data-density="compact"] .module-orb { width: 48px; height: 48px; }
+[data-density="compact"] .module-orb svg { width: 22px; height: 22px; }
+[data-density="compact"] .module-copy b { font-size: 17px; }
+
+/* --- 17. Pointer feedback ------------------------------------------------
+   Hover was a 3px lift and a slightly darker edge — real, but easy to miss on
+   a large card, and on a touch-first layout there was nothing to say which
+   card the pointer had landed on. The card now grows slightly, lifts further,
+   carries a ring in its own colour and brings its artwork with it, so the
+   answer to "which one am I about to open" is unmistakable. Guarded to real
+   pointers: on a touchscreen :hover sticks after a tap, which would leave one
+   card permanently enlarged. */
+.module-orb { transition: transform .18s ease; }
+.module-open { transition: letter-spacing .18s ease, gap .18s ease; }
+
+@media (hover: hover) and (pointer: fine) {
+  .module-bubble:hover {
+    transform: translateY(-5px) scale(1.025);
+    border-color: color-mix(in srgb, var(--bubble-ink) 55%, var(--line));
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--bubble-ink) 34%, transparent),
+      0 24px 46px rgba(30, 30, 28, .17);
+    z-index: 3;
+  }
+  .unified-app.dark .module-bubble:hover {
+    border-color: color-mix(in srgb, var(--bubble-ink) 60%, #2f3542);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--bubble-ink) 45%, transparent),
+      0 24px 46px rgba(0, 0, 0, .5);
+  }
+  .module-bubble:hover .module-orb { transform: scale(1.07); }
+  .module-bubble:hover .module-blob { transform: scale(1.22); }
+  .module-bubble:hover .module-open { letter-spacing: .12em; }
+
+  /* The smaller clickable cards get the same idea at a smaller amplitude. */
+  .unified-app :is(
+    .quick-action-row button, .home-recent-list button, .data-actions article,
+    .home-continue:not(:disabled)
+  ):hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--ink) 35%, var(--line));
+    box-shadow: 0 12px 24px rgba(30, 30, 28, .12);
+  }
+}
+.unified-app :is(
+  .quick-action-row button, .home-recent-list button, .data-actions article, .home-continue
+) { transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+
+/* Keyboard focus mirrors hover exactly — same size, same ring — so tabbing
+   through the cards reads the same as pointing at them. */
+.module-bubble:focus-visible {
+  transform: translateY(-5px) scale(1.025);
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+/* Press has to beat hover, and comes after it to do so. */
+.module-bubble:active {
+  transform: translateY(-1px) scale(.995);
+  box-shadow: 0 8px 18px rgba(30, 30, 28, .14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .module-bubble, .module-orb, .module-blob, .module-open { transition: none; }
+  .module-bubble:hover, .module-bubble:focus-visible { transform: none; }
+  .module-bubble:hover .module-orb, .module-bubble:hover .module-blob { transform: none; }
+}
+
+/* --- 18. Install panel ---------------------------------------------------
+   Shown only when the browser genuinely has no install to offer. Four sets of
+   instructions with no indication of which one applies is a puzzle, so the
+   reader's own platform is sorted to the front and labelled. */
+.install-note.lead { padding-top: 0; border-top: 0; margin: 14px 0 0; }
+.install-grid article.match {
+  border-color: var(--ink);
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--ink) inset;
+}
+.install-grid article b { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.install-grid article b i {
+  flex: none;
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--panel);
+}

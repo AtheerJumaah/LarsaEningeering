@@ -253,7 +253,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   overflow: hidden;
   padding: 20px;
   border: 1px solid var(--line);
-  border-radius: 30px;
+  border-radius: 36px;
   background: var(--panel);
   color: var(--ink);
   text-align: left;
@@ -1261,7 +1261,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .hero-actions button { flex: 1 1 180px; }
   .module-grid, .module-grid.quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-scroll > .module-grid:not(.quick-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .module-bubble { min-height: 160px; gap: 10px; padding: 16px; border-radius: 24px; }
+  .module-bubble { min-height: 160px; gap: 10px; padding: 16px; border-radius: 28px; }
   .module-orb { width: 52px; height: 52px; }
   .module-copy b { font-size: 16px; }
   .module-copy small { font-size: 11px; }

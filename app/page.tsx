@@ -223,6 +223,10 @@ type InstallEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
+/* Written by the capture script in the document head, which runs before this
+   bundle exists — see app/layout.tsx. */
+type InstallBridge = { event: InstallEvent | null; installed: boolean };
+type WindowWithInstall = Window & { __larsaInstall?: InstallBridge };
 type PerformanceDraft = {
   workDate: string;
   // Only asked for when the week is closed: why this is arriving late.
@@ -3133,9 +3137,10 @@ function MonthBars({
    of "it will not install on iPhone". Every iOS browser reports "Safari"
    somewhere in its user agent, so the dependable test is the presence of
    another browser's own token rather than looking for Safari itself. */
-function installPlatform() {
+type InstallOs = "ios" | "android" | "mac" | "windows" | "";
+function installPlatform(): { ios: boolean; wrongBrowser: string; standalone: boolean; os: InstallOs } {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
-    return { ios: false, wrongBrowser: "", standalone: false };
+    return { ios: false, wrongBrowser: "", standalone: false, os: "" };
   }
   const ua = navigator.userAgent || "";
   const ios = /iPad|iPhone|iPod/.test(ua)
@@ -3152,7 +3157,12 @@ function installPlatform() {
     standalone = window.matchMedia("(display-mode: standalone)").matches
       || (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
   } catch { /* matchMedia missing on very old browsers */ }
-  return { ios, wrongBrowser: ios ? wrongBrowser : "", standalone };
+  const os: InstallOs = ios ? "ios"
+    : /Android/.test(ua) ? "android"
+    : /Mac/.test(ua) ? "mac"
+    : /Win/.test(ua) ? "windows"
+    : "";
+  return { ios, wrongBrowser: ios ? wrongBrowser : "", standalone, os };
 }
 
 /* The authoritative backend figures, mapped into the same shape the page
@@ -5317,11 +5327,38 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, []);
 
+  /* Everything to do with installing lives in this one effect. It used to be
+     two, each registering its own beforeinstallprompt listener, which was both
+     redundant and beside the point: by the time either of them ran the browser
+     had already fired that event and thrown it away, so Install could never do
+     anything but show the manual steps. The head script now catches it first
+     and parks it; this picks it up on mount and stays listening in case a later
+     one arrives. */
   useEffect(() => {
     const standalone =
       matchMedia("(display-mode: standalone)").matches ||
+      matchMedia("(display-mode: window-controls-overlay)").matches ||
+      matchMedia("(display-mode: minimal-ui)").matches ||
       (navigator as Navigator & { standalone?: boolean }).standalone === true;
-    const standaloneTimer = window.setTimeout(() => setInstalled(standalone), 0);
+    const bridge = (window as WindowWithInstall).__larsaInstall;
+    const adopt = () => {
+      const parked = (window as WindowWithInstall).__larsaInstall?.event;
+      if (parked) setInstallPrompt(parked);
+    };
+    const startupTimer = window.setTimeout(() => {
+      setInstalled(standalone || Boolean(bridge?.installed));
+      adopt();
+      /* Already installed and opened in a normal tab: the browser stays silent
+         rather than firing beforeinstallprompt, so without this the button
+         would sit there offering an install that can never happen. Chromium
+         only; everywhere else this is simply absent. */
+      const related = (navigator as Navigator & {
+        getInstalledRelatedApps?: () => Promise<Array<{ platform?: string }>>;
+      }).getInstalledRelatedApps;
+      related?.call(navigator)
+        .then((apps) => { if (apps?.length) setInstalled(true); })
+        .catch(() => undefined);
+    }, 0);
     const onPrompt = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as InstallEvent);
@@ -5329,15 +5366,21 @@ export default function Home() {
     const onInstalled = () => {
       setInstalled(true);
       setInstallPrompt(null);
+      setInstallHelp(false);
+      notify("Larsa Control is installed — open it from your home screen, Dock, or Start menu.");
     };
-    addEventListener("beforeinstallprompt", onPrompt);
-    addEventListener("appinstalled", onInstalled);
+    window.addEventListener("larsa:installable", adopt);
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
     navigator.serviceWorker?.register("/sw.js").catch(() => undefined);
     return () => {
-      clearTimeout(standaloneTimer);
-      removeEventListener("beforeinstallprompt", onPrompt);
-      removeEventListener("appinstalled", onInstalled);
+      clearTimeout(startupTimer);
+      window.removeEventListener("larsa:installable", adopt);
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
     };
+    // notify is stable for the life of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -5369,41 +5412,29 @@ export default function Home() {
     setMenuOpen(false);
   };
 
-  /* Chrome, Edge and Android fire beforeinstallprompt when the app is
-     installable, and hand over an event that installs it in one tap. Nothing
-     was listening for it, so that event was dropped every time and Install
-     always fell back to the instructions panel — even on the platforms that
-     can genuinely do it automatically. Safari on iOS never fires this and
-     offers no equivalent, which is why iPhone still needs Share → Add to Home
-     Screen; there is no API to automate it there. */
-  useEffect(() => {
-    const onPrompt = (event: Event) => {
-      event.preventDefault(); // keeps the browser's own mini-banner from racing us
-      setInstallPrompt(event as InstallEvent);
-    };
-    const onInstalled = () => { setInstallPrompt(null); setInstallHelp(false); };
-    window.addEventListener("beforeinstallprompt", onPrompt);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onPrompt);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
-
   const install = async () => {
-    if (!installPrompt) {
+    /* Prefer the real thing. prompt() must be reached from the click without an
+       await in front of it, or the browser treats the gesture as spent and
+       refuses — so the event is read straight out of state here, never waited
+       for. */
+    const prompt = installPrompt || (window as WindowWithInstall).__larsaInstall?.event || null;
+    if (!prompt) {
       setInstallHelp(true);
       return;
     }
     try {
-      await installPrompt.prompt();
-      const choice = await installPrompt.userChoice;
-      if (choice?.outcome === "accepted") notify("Larsa Control installed.");
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
+      /* Dismissed is a decision, not a failure: showing the manual steps to
+         somebody who just said "not now" would be nagging. */
+      if (choice?.outcome === "accepted") notify("Installing Larsa Control…");
     } catch {
-      // The event is single-use and expires; fall back to showing the steps.
+      // Single-use and already spent, or refused; the steps still work.
       setInstallHelp(true);
     }
     setInstallPrompt(null);
+    const bridge = (window as WindowWithInstall).__larsaInstall;
+    if (bridge) bridge.event = null;
   };
 
   /* Pushes the saved logs into the embedded engine so both views agree
@@ -7437,12 +7468,39 @@ export default function Home() {
                 </div>
               );
             })()}
-            <div className="install-grid">
-              <article><b>iPhone / iPad</b><p>Open in <b>Safari</b> (not Chrome), tap Share, then choose Add to Home Screen.</p></article>
-              <article><b>Android</b><p>Open in Chrome, open the browser menu, then choose Install app.</p></article>
-              <article><b>Mac</b><p>Use Safari Add to Dock, or choose Install from the Chrome address bar.</p></article>
-              <article><b>Windows</b><p>Open in Edge or Chrome, then choose Install app from the address bar or browser menu.</p></article>
-            </div>
+            {(() => {
+              /* This panel is now the fallback it was always meant to be: it
+                 only appears when the browser has no install to offer. Saying
+                 so, and leading with the device the reader is actually holding,
+                 beats four sets of steps in a row. */
+              const { os, ios, standalone } = installPlatform();
+              const steps = [
+                { id: "ios", label: "iPhone / iPad", text: "Open in Safari (not Chrome), tap Share, then choose Add to Home Screen." },
+                { id: "android", label: "Android", text: "Open in Chrome, open the browser menu, then choose Install app." },
+                { id: "mac", label: "Mac", text: "Use Safari Add to Dock, or choose Install from the Chrome address bar." },
+                { id: "windows", label: "Windows", text: "Open in Edge or Chrome, then choose Install app from the address bar or browser menu." },
+              ];
+              const ordered = [...steps].sort((a, b) => Number(b.id === os) - Number(a.id === os));
+              return (
+                <>
+                  {!ios && !standalone && (
+                    <p className="install-note lead">
+                      Your browser did not offer a one-tap install here — usually because Larsa
+                      Control is already installed on this device, or because the page needs one
+                      reload before the browser will offer it. These steps always work.
+                    </p>
+                  )}
+                  <div className="install-grid">
+                    {ordered.map((step) => (
+                      <article key={step.id} className={step.id === os ? "match" : undefined}>
+                        <b>{step.label}{step.id === os ? <i>Your device</i> : null}</b>
+                        <p>{step.text}</p>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
             <p className="install-note">The installed app opens in its own window from your home screen, Dock, Start menu, or desktop.</p>
           </section>
         </div>

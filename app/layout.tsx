@@ -50,6 +50,27 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Chrome, Edge and Android announce "this app can be installed" exactly
+            once, with a beforeinstallprompt event fired as soon as the manifest
+            and service worker are read — normally well before a page this size
+            has hydrated. The event is not queued: if nothing is listening at
+            that instant it is gone for the rest of the visit, and Install then
+            has nothing to call and can only fall back to the manual steps.
+            This runs in the document head, ahead of React, parks the event on
+            window, and tells the app it has arrived. iOS Safari never fires it
+            and exposes no install API at all, which is why Add to Home Screen
+            remains the honest answer there. */}
+        <script
+          id="larsa-install-capture"
+          dangerouslySetInnerHTML={{
+            __html:
+              '(function(){try{var s=window.__larsaInstall={event:null,installed:false};' +
+              'window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();' +
+              's.event=e;window.dispatchEvent(new CustomEvent("larsa:installable"));});' +
+              'window.addEventListener("appinstalled",function(){s.event=null;s.installed=true;});' +
+              "}catch(e){}})();",
+          }}
+        />
       </head>
       <body>{children}<CardTools /></body>
     </html>
