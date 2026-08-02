@@ -27,6 +27,42 @@
    ============================================================ */
 (function () {
   "use strict";
+
+  /* ---------------- direct-access guard ----------------
+     The Accounting portal is reached through the authenticated Larsa
+     Control work area, which loads this engine in a frame and injects
+     the signed-in identity. Opening /engines/accounting.html directly
+     bypasses that, so it must never look like the real portal: it is
+     sent back to Larsa Control to sign in. ?demo=1 keeps a clearly
+     labelled, isolated preview for development. */
+  try {
+    var framed = window.top !== window.self;
+    var wantsDemo = /[?&]demo=1\b/.test(window.location.search);
+    if (!framed && !wantsDemo && /\/engines\/accounting\.html/i.test(window.location.pathname)) {
+      var target = window.location.origin + "/";
+      document.documentElement.innerHTML =
+        '<body style="margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:#0f1115;color:#e8eaed;' +
+        'display:flex;align-items:center;justify-content:center;height:100vh;text-align:center">' +
+        "<div><h1 style=\"font-size:18px;margin:0 0 8px\">Larsa Control — Accounting</h1>" +
+        '<p style="color:#9aa0a6;font-size:13px;margin:0 0 14px">The Accounting portal opens inside Larsa Control.<br>' +
+        "Taking you to sign in…</p>" +
+        '<a href="' + target + '" style="color:#8ab4f8;font-size:13px">Continue to Larsa Control</a></div></body>';
+      window.location.replace(target);
+      return;
+    }
+    if (!framed && wantsDemo) {
+      window.__larsaIsolatedDemo = true;
+      document.addEventListener("DOMContentLoaded", function () {
+        var bar = document.createElement("div");
+        bar.setAttribute("role", "status");
+        bar.style.cssText = "position:sticky;top:0;z-index:99999;background:#7a2e00;color:#fff;padding:7px 12px;" +
+          "font:600 12px/1.4 system-ui,Segoe UI,Arial,sans-serif;letter-spacing:.02em;text-align:center";
+        bar.textContent = "ISOLATED DEMO — not production. No Larsa Control account is signed in and nothing here is the real accounting ledger.";
+        if (document.body) document.body.insertBefore(bar, document.body.firstChild);
+      });
+    }
+  } catch (e) { /* cross-origin frame checks can throw; the engine still gates itself */ }
+
   var BRIDGE_KEY = "larsaSupabaseBridgeV1";
   var Core = window.LarsaAcctCore;
   if (!Core) { console.warn("[acct-cloud] accounting-core.js missing — layer off"); return; }
@@ -323,6 +359,151 @@
   }
 
   var bootDone = false;
+  /* ============================================================
+     THE authoritative financial model (backend migration 008).
+
+     One backend calculation feeds every accounting surface. The
+     engine's own xTotals() and totals() are replaced by thin
+     readers over the cached server figures, so the project
+     summary, project cards, client statement, funding statement,
+     reports, dashboard, charts, receipts and every export can no
+     longer disagree with each other.
+
+     Two things this fixes, precisely:
+       * Client construction funding is money held FOR the project.
+         It is never Larsa revenue, and company profit is never
+         "funding minus construction spending".
+       * "Actual spending" is the project's real construction cost.
+         It no longer depends on a payment-source label that
+         server-side records do not carry, which is why the client
+         statement used to read 0 while approved spending existed.
+     ============================================================ */
+  var FIN = { byProject: {}, company: null, loadedAt: 0 };
+  ACCT.fin = FIN;
+
+  function loadFinancials(then) {
+    return rpc("acct_company_financials", { p_project_ids: null, p_region: null })
+      .then(function (co) {
+        if (!co) return;
+        FIN.company = co;
+        FIN.byProject = {};
+        (co.rows || []).forEach(function (row) { FIN.byProject[row.project_id] = row; });
+        FIN.loadedAt = Date.now();
+        if (then) then();
+      })
+      .catch(function (e) { console.warn("[acct-cloud] financials:", e); });
+  }
+  ACCT.reloadFinancials = loadFinancials;
+
+  function finFor(pid) { return FIN.byProject[pid] || null; }
+  /* The engine holds money in USD internally. Each *_usd figure is the
+     sum of per-entry USD snapshots taken at that entry's own historical
+     rate, which is exactly what the engine's usd(amount,cur,fxRate)
+     produced — so nothing downstream needs to change. */
+  function finUsd(node, key) {
+    if (!node) return 0;
+    var v = node[key + "_usd"];
+    return typeof v === "number" ? v : Number(v || 0);
+  }
+  function finIqd(node, key) {
+    if (!node) return 0;
+    var v = node[key + "_iqd"];
+    return typeof v === "number" ? v : Number(v || 0);
+  }
+
+  /* Replace the engine's per-project totals with the server's. Every
+     field the old function returned is still returned, plus the
+     approved/working pair the corrected model requires. */
+  var origXTotals = null;
+  function wrapTotals() {
+    if (origXTotals || typeof window.xTotals !== "function") return;
+    origXTotals = window.xTotals;
+    window.xTotals = function (pid) {
+      var base = origXTotals.apply(this, arguments);
+      var row = ACCT.on ? finFor(pid) : null;
+      if (!row) return base;
+      var cf = row.client_funds || {}, ap = cf.approved || {}, wk = cf.working || {},
+          pn = cf.pending || {}, co = row.company || {};
+      var approvedCost = finUsd(ap, "construction_cost");
+      var workingCost = finUsd(wk, "construction_cost");
+      var out = Object.assign({}, base, {
+        // ---- client fund control (held for the project) ----
+        gross: finUsd(ap, "gross_funding"),
+        fee: finUsd(ap, "initial_fee"),
+        netFunding: finUsd(ap, "net_construction_funding"),
+        mat: finUsd(ap, "materials"),
+        lab: finUsd(ap, "labor"),
+        exp: finUsd(ap, "other_costs"),
+        total: approvedCost,
+        clientSpent: approvedCost,
+        pending: finUsd(pn, "construction_cost"),
+        balance: finUsd(ap, "remaining_balance"),
+        // ---- approved vs working, both always available ----
+        approvedCost: approvedCost,
+        workingCost: workingCost,
+        pendingCost: finUsd(pn, "construction_cost"),
+        approvedBalance: finUsd(ap, "remaining_balance"),
+        workingBalance: finUsd(wk, "remaining_balance"),
+        // ---- Larsa company accounting (kept strictly apart) ----
+        larsaRevenue: finUsd(co, "larsa_revenue"),
+        companyNet: finUsd(co, "company_net_profit"),
+        companyExpenses: finUsd(co, "company_expenses"),
+        // `result` used to mean "funding-side profit". It is now the
+        // company result on the authoritative definition.
+        result: finUsd(co, "company_net_profit"),
+        reliability: (row.review || {}).status || "green",
+        reliabilityLabel: (row.review || {}).label || "",
+        unapprovedEntries: (row.review || {}).unapproved_entries || 0,
+        _authoritative: true,
+        _iqd: {
+          gross: finIqd(ap, "gross_funding"), fee: finIqd(ap, "initial_fee"),
+          netFunding: finIqd(ap, "net_construction_funding"),
+          approvedCost: finIqd(ap, "construction_cost"),
+          workingCost: finIqd(wk, "construction_cost"),
+          pendingCost: finIqd(pn, "construction_cost"),
+          approvedBalance: finIqd(ap, "remaining_balance"),
+          workingBalance: finIqd(wk, "remaining_balance"),
+          larsaRevenue: finIqd(co, "larsa_revenue"),
+          companyNet: finIqd(co, "company_net_profit"),
+        },
+      });
+      return out;
+    };
+  }
+
+  /* Company-wide totals: client funds held are reported as client
+     funds, never folded into revenue or profit. */
+  var origCompanyTotals = null;
+  function wrapCompanyTotals() {
+    if (origCompanyTotals || typeof window.totals !== "function") return;
+    origCompanyTotals = window.totals;
+    window.totals = function () {
+      var base = origCompanyTotals.apply(this, arguments);
+      var co = ACCT.on ? FIN.company : null;
+      if (!co) return base;
+      var cf = co.client_funds || {}, k = co.company || {};
+      var rate = Number((ACCT.settings || {}).default_exchange_rate) || 1310;
+      var toUsd = function (iqd) { return rate > 0 ? Core.round2(Number(iqd || 0) / rate) : 0; };
+      return Object.assign({}, base, {
+        fees: toUsd(k.consultancy_fee_revenue_iqd),
+        rev: toUsd(k.engineering_revenue_iqd) + toUsd(k.other_revenue_iqd),
+        realRevenue: toUsd(k.larsa_revenue_iqd),
+        larsaCosts: toUsd(k.company_expenses_iqd),
+        net: toUsd(k.company_net_profit_iqd),
+        // Client construction funds — held, not earned.
+        fundingGross: toUsd(cf.gross_funding_iqd),
+        netConstruction: toUsd(cf.net_construction_funding_iqd),
+        constructionSpend: toUsd(cf.construction_cost_approved_iqd),
+        constructionSpendWorking: toUsd(cf.construction_cost_working_iqd),
+        fundsHeld: toUsd(cf.remaining_balance_approved_iqd),
+        fundsHeldWorking: toUsd(cf.remaining_balance_working_iqd),
+        reliability: (co.review || {}).status || "green",
+        reliabilityLabel: (co.review || {}).label || "",
+        _authoritative: true,
+      });
+    };
+  }
+
   function bootstrap(then) {
     rpc("acct_get_bootstrap", { p_audit_limit: 300 }).then(function (b) {
       if (!b) throw new Error("empty bootstrap");
@@ -341,6 +522,7 @@
       ACCT.on = true;
       ACCT.lastError = "";
       applyMirrors();
+      loadFinancials();
       var email = (actor().email || "").toLowerCase();
       if (email) {
         rpc("acct_is_platform_admin", { admin_email: email })
@@ -704,6 +886,20 @@
     } catch (e) { console.warn(e); }
   }
 
+  /* One consultancy-fee source of truth. The funding form used to carry
+     a second, legacy "Consultancy %" box that sat at 0 and had no say in
+     the posted fee — two visible rates for one number. The field is
+     removed; the resolved rule panel below the form is the only place a
+     rate is shown or overridden. */
+  function wrapFundingSchema() {
+    try {
+      if (typeof SCHEMA === "undefined" || !SCHEMA || !SCHEMA.funding) return;
+      SCHEMA.funding = SCHEMA.funding.filter(function (f) {
+        return !f || f.k !== "consultancyRate";
+      });
+    } catch (e) { /* engine not ready; the fee panel still governs */ }
+  }
+
   var origOpenEditor = null;
   function wrapOpenEditor() {
     if (origOpenEditor) return;
@@ -795,9 +991,29 @@
         var div = document.createElement("div");
         div.id = "acct_fee_panel";
         div.className = "preview";
+        // The single fee source of truth, stated in full: what rate applies,
+        // where the rate comes from, what it is charged on, how it is
+        // treated, and — live as the amount is typed — the fee and the net
+        // construction funding that results.
+        var RULE_SOURCE_TEXT = {
+          transaction_override: TT("this entry's override", "تجاوز خاص بهذا القيد"),
+          category_override: TT("category rule", "قاعدة البند"),
+          project_default: TT("project default", "افتراضي المشروع"),
+          platform_default: TT("platform default", "افتراضي المنصة"),
+        };
         div.innerHTML =
-          "<b>" + TT("Consultancy fee rule", "قاعدة أتعاب الاستشارة") + ":</b> " + esc4(ruleText) +
-          ' <span class="muted small">(' + esc4(rule.source) + (eligible ? "" : TT(" — not applicable to this entry", " — لا تنطبق على هذا القيد")) + ")</span>" +
+          "<b>" + TT("Consultancy fee rule", "قاعدة أتعاب الاستشارة") + "</b>" +
+          '<div class="form-grid" style="margin-top:4px">' +
+          '<div class="field"><label class="small">' + TT("Effective rate", "النسبة الفعلية") + "</label><div><b>" +
+            esc4(rule.method === "percentage" ? Core.round2(rule.rate * 100) + "%" : (rule.method === "waived" ? TT("Waived", "معفاة") : nmoney(rule.fixed || 0, (proj || {}).currency || "IQD"))) + "</b></div></div>" +
+          '<div class="field"><label class="small">' + TT("Rule source", "مصدر القاعدة") + "</label><div>" +
+            esc4(RULE_SOURCE_TEXT[rule.source] || rule.source || "—") + "</div></div>" +
+          '<div class="field"><label class="small">' + TT("Fee basis", "أساس الاحتساب") + "</label><div>" + esc4(rule.basis || "—") + "</div></div>" +
+          '<div class="field"><label class="small">' + TT("Accounting treatment", "المعالجة المحاسبية") + "</label><div>" + esc4(rule.treatment || "—") + "</div></div>" +
+          '<div class="field"><label class="small">' + TT("Fee amount", "مبلغ الأتعاب") + '</label><div><b id="acct_fee_amt">—</b></div></div>' +
+          '<div class="field"><label class="small">' + TT("Net construction funding", "صافي أموال التنفيذ") + '</label><div><b id="acct_fee_net">—</b></div></div>' +
+          "</div>" +
+          (eligible ? "" : '<p class="muted small">' + TT("This fee rule does not apply to this entry.", "لا تنطبق قاعدة الأتعاب على هذا القيد.") + "</p>") +
           (canWriteAcct()
             ? '<label class="small" style="display:block;margin-top:6px"><input type="checkbox" id="acct_fee_ov_on"> ' + TT("Override for this transaction only", "تجاوز لهذه الحركة فقط") + "</label>" +
               '<div id="acct_fee_ov" style="display:none;margin-top:6px" class="form-grid">' +
@@ -815,7 +1031,45 @@
         if (ov) ov.onchange = function () {
           var p = document.getElementById("acct_fee_ov");
           if (p) p.style.display = ov.checked ? "" : "none";
+          recalcFeePreview();
         };
+        var recalcFeePreview = function () {
+          var amtEl = document.getElementById("ed_amount");
+          var curEl = document.getElementById("ed_currency");
+          var amt = amtEl ? Number(amtEl.value || 0) : 0;
+          var c = (curEl ? curEl.value : (proj || {}).currency) || "IQD";
+          var live = rule;
+          var ovOnEl = document.getElementById("acct_fee_ov_on");
+          if (ovOnEl && ovOnEl.checked) {
+            live = {
+              method: (document.getElementById("acct_fee_method") || {}).value || "percentage",
+              rate: Number((document.getElementById("acct_fee_rate") || {}).value || 0) / 100,
+              fixed: Number((document.getElementById("acct_fee_fixed") || {}).value || 0),
+              treatment: (document.getElementById("acct_fee_treatment") || {}).value || rule.treatment,
+              basis: rule.basis,
+            };
+          }
+          var feeAmt = 0;
+          if (eligible && amt > 0) {
+            if (live.method === "percentage") feeAmt = Core.round2(amt * Number(live.rate || 0));
+            else if (live.method === "fixed_per_transaction") feeAmt = Core.round2(Number(live.fixed || 0));
+            else if (live.method === "fixed_per_project") feeAmt = Core.round2(Number(live.fixed || 0));
+          }
+          var feeEl = document.getElementById("acct_fee_amt");
+          var netEl = document.getElementById("acct_fee_net");
+          if (feeEl) feeEl.textContent = amt > 0 ? nmoney(feeAmt, c) : "—";
+          if (netEl) {
+            netEl.textContent = amt > 0
+              ? nmoney(Core.round2(amt - (live.treatment === "deduct_from_funding" ? feeAmt : 0)), c)
+              : "—";
+          }
+        };
+        ["ed_amount", "ed_currency", "acct_fee_rate", "acct_fee_fixed", "acct_fee_method", "acct_fee_treatment"]
+          .forEach(function (elId) {
+            var el = document.getElementById(elId);
+            if (el) { el.addEventListener("input", recalcFeePreview); el.addEventListener("change", recalcFeePreview); }
+          });
+        recalcFeePreview();
       }
     }
     if (coll === "projects" && !document.getElementById("acct_prj_panel_present")) {
@@ -943,8 +1197,20 @@
     var label = st === "green" ? TT("Approved", "مُعتمد") : st === "yellow" ? TT("Pending review", "قيد المراجعة") : TT("Needs correction", "يحتاج تصحيحاً");
     return ' <span title="' + label + '" style="color:' + color + '">●</span>';
   }
+  /* Sample records are marked wherever they appear, so a demonstration
+     figure is never mistaken for a real one. */
+  function sampleBadge(isSample) {
+    return isSample
+      ? ' <span class="acct-sample-badge" title="' + TT("Demonstration record — removable through the protected action in Settings", "سجل تجريبي — يُزال عبر الإجراء المحمي في الإعدادات") +
+        '" style="display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#eef2ff;color:#3949ab;border:1px solid #c5cae9;vertical-align:middle">' +
+        TT("SAMPLE", "تجريبي") + "</span>"
+      : "";
+  }
+
   function summaryCardHTML(p) {
     var s = Core.projectSummary(p._acct || { id: p.id, currency: p.currency, approved_budget: p.approvedBudget, budget_currency: p.budgetCurrency, contract_value: p.contractValue }, ACCT.txns, ACCT.fees, ACCT.progress);
+    var fin = finFor(p.id);
+    if (fin) return authoritativeSummaryHTML(p, fin, s);
     var rv = {
       funding: kindReviewInfo(p.id, ["funding"]),
       material: kindReviewInfo(p.id, ["material"]),
@@ -1004,6 +1270,119 @@
       (canWriteAcct() && s.total_refund_due_iqd > 0
         ? '<button class="btn sm ghost" onclick="acctRefundModal(\'' + p.id + '\')">' + TT("Refund unused funding…", "إرجاع التمويل غير المستخدم…") + "</button>" : "") +
       '<button class="btn sm ghost" onclick="acctFundingStatementPrint(\'' + p.id + '\')">' + TT("Funding Statement", "كشف التمويل") + "</button>" +
+      '<button class="btn sm ghost" onclick="acctShowHistory(\'' + p.id + '\')">' + TT("Accounting History", "السجل المحاسبي") + "</button>" +
+      "</div></div>"
+    );
+  }
+
+  /* ---------------- the authoritative project summary card ----------------
+     Two clearly separated blocks. Client construction funds are money
+     held and managed for the project; Larsa company accounting is what
+     the company actually earned. Approved and Working figures are shown
+     side by side — approval changes reliability, never the amount. */
+  function reliabilityBanner(review) {
+    var st = (review || {}).status || "green";
+    if (st === "green") {
+      return '<p class="small" style="color:#1a7f37;margin:6px 0 0">✔ ' +
+        TT("All entries approved.", "جميع القيود معتمدة.") + "</p>";
+    }
+    var icon = st === "red" ? "✖" : "⏳";
+    var color = st === "red" ? "#c62828" : "#b58900";
+    return '<p class="small" style="color:' + color + ';margin:6px 0 0">' + icon + " " +
+      esc4((review || {}).label || "") + " — " +
+      TT("Working Totals include every saved entry. Approval changes reliability, never the amounts.",
+        "الإجماليات العملية تشمل كل قيد محفوظ. الاعتماد يغيّر الموثوقية لا المبالغ.") + "</p>";
+  }
+
+  function authoritativeSummaryHTML(p, fin, s) {
+    var cf = fin.client_funds || {}, ap = cf.approved || {}, wk = cf.working || {},
+        pn = cf.pending || {}, co = fin.company || {}, rev = fin.review || {};
+    var rv = {
+      funding: kindReviewInfo(p.id, ["funding"]),
+      material: kindReviewInfo(p.id, ["material"]),
+      labor: kindReviewInfo(p.id, ["labor"]),
+      expense: kindReviewInfo(p.id, ["expense"]),
+      cost: kindReviewInfo(p.id, ["material", "labor", "expense"]),
+    };
+    var row = function (label, val, cls) {
+      return "<tr><td>" + label + '</td><td class="right ' + (cls || "") + '">' + val + "</td></tr>";
+    };
+    var pair = function (label, approvedVal, workingVal, dot) {
+      return "<tr><td>" + label + (dot || "") + '</td><td class="right">' + approvedVal +
+        '<div class="muted small">' + TT("working: ", "عملي: ") + workingVal + "</div></td></tr>";
+    };
+    var grp = function (title) {
+      return '<tr class="grp-row"><td colspan="2"><b>' + title + "</b></td></tr>";
+    };
+    var costTxt = fin.cost_progress_pct == null
+      ? TT("Not Available (no approved budget)", "غير متاح (لا توجد موازنة معتمدة)")
+      : Core.round2(fin.cost_progress_pct) + "% — " + iqd(ap.construction_cost_iqd) +
+        TT(" of ", " من ") + nmoney(fin.approved_budget, fin.budget_currency || p.currency || "IQD");
+    var schedTxt = fin.schedule_progress_pct == null
+      ? TT("No updates yet", "لا توجد تحديثات بعد")
+      : Core.round2(fin.schedule_progress_pct) + "% · " + esc4(fin.schedule_progress_date || "") +
+        (fin.schedule_progress_by ? " · " + esc4(fin.schedule_progress_by) : "");
+    var byCur = fin.by_currency || {};
+    var curLine = Object.keys(byCur).length > 1
+      ? '<p class="muted small">' + TT("Original-currency totals (never added together): ", "الإجماليات بالعملة الأصلية (لا تُجمع معاً): ") +
+        Object.keys(byCur).map(function (c) {
+          return "<b>" + esc4(c) + "</b> " + nmoney(byCur[c].gross_funding_working, c);
+        }).join(" · ") + "</p>"
+      : "";
+
+    return (
+      '<div class="card" id="acct_summary_card"><h3>' +
+        TT("Project Financial Summary (authoritative ledger)", "الملخص المالي للمشروع (السجل المعتمد)") +
+        sampleBadge(fin.is_sample) + "</h3>" +
+      '<p class="muted small">' +
+        TT("Client construction funds are held and managed for the project. They are not Larsa revenue.",
+          "أموال تنفيذ العميل محتجزة ومُدارة للمشروع، وليست إيراداً لـ لارسا.") + "</p>" +
+      '<div class="table-wrap"><table><tbody>' +
+      row(TT("Contract Value", "قيمة العقد"), fin.contract_value != null ? nmoney(fin.contract_value, p.currency || "IQD") : "—") +
+      row(TT("Approved Project Budget", "الموازنة المعتمدة"),
+        fin.approved_budget ? nmoney(fin.approved_budget, fin.budget_currency || p.currency || "IQD") : TT("Not Available", "غير متاح")) +
+
+      grp(TT("A · Client Fund Control", "أ · حسابات أموال العميل")) +
+      row(TT("Gross Client Funding", "إجمالي تمويل العميل") + statusDot(rv.funding.status), iqd(ap.gross_funding_iqd)) +
+      row(TT("Initial Consultancy Fee", "أتعاب الاستشارة الأولية"), iqd(ap.initial_fee_iqd)) +
+      row("<b>" + TT("Net Construction Funding", "صافي تمويل التنفيذ") + "</b>", "<b>" + iqd(ap.net_construction_funding_iqd) + "</b>") +
+      row(TT("Materials", "المواد") + statusDot(rv.material.status), iqd(ap.materials_iqd)) +
+      row(TT("Labor", "العمالة") + statusDot(rv.labor.status), iqd(ap.labor_iqd)) +
+      row(TT("Other Construction Costs", "تكاليف التنفيذ الأخرى") + statusDot(rv.expense.status), iqd(ap.other_costs_iqd)) +
+      row(TT("Approved Actual Cost", "الكلفة الفعلية المعتمدة") + statusDot("green"), "<b>" + iqd(ap.construction_cost_iqd) + "</b>") +
+      row(TT("Pending / Unapproved Cost", "الكلفة المعلقة/غير المعتمدة") + statusDot(pn.construction_cost_iqd > 0 ? "yellow" : "green"), iqd(pn.construction_cost_iqd)) +
+      row("<b>" + TT("Working Actual Cost", "الكلفة الفعلية العملية") + "</b>" + statusDot(rv.cost.status), "<b>" + iqd(wk.construction_cost_iqd) + "</b>") +
+      row(TT("Total Used (incl. fee charged to project)", "إجمالي المستخدم (شامل الأتعاب المحمّلة)"), iqd(ap.total_used_iqd)) +
+      row("<b>" + TT("Approved Remaining Client Balance", "رصيد العميل المتبقي المعتمد") + "</b>", "<b>" + iqd(ap.remaining_balance_iqd) + "</b>") +
+      row("<b>" + TT("Working Remaining Client Balance", "رصيد العميل المتبقي العملي") + "</b>", "<b>" + iqd(wk.remaining_balance_iqd) + "</b>") +
+      row(TT("Refundable Principal", "أصل المبلغ القابل للإرجاع"), iqd(cf.refundable_principal_iqd)) +
+      row(TT("Refundable Consultancy Fee", "أتعاب الاستشارة القابلة للإرجاع"), iqd(cf.refundable_fee_iqd)) +
+      row("<b>" + TT("Total Refund Due to Client", "إجمالي المسترجع المستحق للعميل") + "</b>", "<b>" + iqd(cf.total_refund_due_iqd) + "</b>") +
+      row(TT("Refunded so far (principal)", "المسترجع حتى الآن (أصل)"), iqd(cf.refunded_principal_to_date_iqd)) +
+
+      grp(TT("B · Larsa Company Accounting", "ب · حسابات شركة لارسا")) +
+      row(TT("Consultancy Fee Revenue", "إيراد أتعاب الاستشارة"), iqd(co.consultancy_fee_revenue_iqd)) +
+      row(TT("Engineering Revenue", "الإيراد الهندسي"), iqd(co.engineering_revenue_iqd)) +
+      row(TT("Other Larsa Revenue", "إيرادات لارسا الأخرى"), iqd(co.other_revenue_iqd)) +
+      row("<b>" + TT("Larsa Revenue", "إيراد لارسا") + "</b>", "<b>" + iqd(co.larsa_revenue_iqd) + "</b>") +
+      row(TT("Larsa Operating Expenses", "مصاريف تشغيل لارسا"), iqd(co.operating_expenses_iqd)) +
+      row(TT("Larsa-attributable Project Costs", "تكاليف المشروع على لارسا"), iqd(co.larsa_attributable_project_costs_iqd)) +
+      row(TT("Refund / Reversal of Consultancy Fees", "إرجاع/عكس أتعاب الاستشارة"), iqd(co.fee_refunds_reversals_iqd)) +
+      row("<b>" + TT("Company Net Profit", "صافي ربح الشركة") + "</b>", "<b>" + iqd(co.company_net_profit_iqd) + "</b>") +
+
+      grp(TT("C · Progress", "ج · التقدم")) +
+      row("<b>" + TT("Cost Progress", "التقدم الكلفوي") + "</b>", costTxt) +
+      row("<b>" + TT("Schedule / Physical Progress", "التقدم الزمني/الفعلي") + "</b>", schedTxt) +
+      "</tbody></table></div>" +
+      curLine +
+      reliabilityBanner(rev) +
+      '<div class="rpt-actions" style="margin-top:8px">' +
+      (canWriteAcct() || engineUser().role === "Project Manager" || engineUser().role === "Construction Engineer"
+        ? '<button class="btn sm" onclick="acctUpdateProgress(\'' + p.id + '\')">' + TT("Update Progress", "تحديث التقدم") + "</button>" : "") +
+      (canWriteAcct() && Number(cf.total_refund_due_iqd) > 0
+        ? '<button class="btn sm ghost" onclick="acctRefundModal(\'' + p.id + '\')">' + TT("Refund unused funding…", "إرجاع التمويل غير المستخدم…") + "</button>" : "") +
+      '<button class="btn sm ghost" onclick="acctFundingStatementPrint(\'' + p.id + '\')">' + TT("Funding Statement", "كشف التمويل") + "</button>" +
+      '<button class="btn sm ghost" onclick="acctClientStatement(\'' + p.id + '\')">' + TT("Client Statement", "كشف حساب العميل") + "</button>" +
       '<button class="btn sm ghost" onclick="acctShowHistory(\'' + p.id + '\')">' + TT("Accounting History", "السجل المحاسبي") + "</button>" +
       "</div></div>"
     );
@@ -1249,6 +1628,128 @@
       TT("Only records marked as samples are removed. Real records are never touched, an archive snapshot is kept, and samples are never seeded again.", "تُزال السجلات المعلّمة كتجريبية فقط. لا تُمس السجلات الحقيقية، وتُحفظ نسخة أرشيفية، ولن تُزرع البيانات التجريبية مجدداً."));
   };
 
+  /* ---------------- permanent accounting history browser ----------------
+     The backend append-only history is the authoritative audit. It is
+     never truncated here: filters and paging only choose what to show,
+     and the total always reports the whole history. */
+  var HIST = { rows: [], total: 0, actions: [], before: null, pages: [] };
+  var HF = { project: "", search: "", action: "", actor: "", from: "", to: "" };
+  ACCT.history = HIST;
+
+  function loadHistory(then) {
+    return rpc("acct_audit_page", {
+      p_project_id: HF.project || null,
+      p_search: HF.search || null,
+      p_action: HF.action || null,
+      p_actor: HF.actor || null,
+      p_from: HF.from || null,
+      p_to: HF.to || null,
+      p_record_type: null,
+      p_before: HIST.before,
+      p_limit: 50,
+    }).then(function (a) {
+      if (!a) return;
+      HIST.rows = a.rows || [];
+      HIST.total = a.total || 0;
+      HIST.actions = a.actions || [];
+      if (then) then();
+    }).catch(function (e) { console.warn("[acct-cloud] history:", e); });
+  }
+  window.acctHistFilter = function (key, value) {
+    HF[key] = value; HIST.before = null; HIST.pages = [];
+    loadHistory(function () { renderHistoryInto(document.getElementById("acct_hist_body")); });
+  };
+  window.acctHistPage = function (dir) {
+    if (dir === "next") {
+      var last = HIST.rows[HIST.rows.length - 1];
+      if (!last) return;
+      HIST.pages.push(HIST.before);
+      HIST.before = last.id;
+    } else {
+      HIST.before = HIST.pages.pop() || null;
+    }
+    loadHistory(function () { renderHistoryInto(document.getElementById("acct_hist_body")); });
+  };
+
+  function changedFieldsHTML(list) {
+    if (!list || !list.length) return "";
+    return '<div class="muted small">' + list.slice(0, 6).map(function (c) {
+      return esc4(c.field) + ": " + esc4(String(c.before == null ? "—" : c.before)).slice(0, 40) +
+        " → " + esc4(String(c.after == null ? "—" : c.after)).slice(0, 40);
+    }).join(" · ") + (list.length > 6 ? " · +" + (list.length - 6) : "") + "</div>";
+  }
+
+  function renderHistoryInto(host) {
+    if (!host) return;
+    host.innerHTML =
+      '<div class="table-wrap"><table><thead><tr><th>' + TT("When", "الوقت") + "</th><th>" + TT("Who", "من") +
+        "</th><th>" + TT("Action", "الإجراء") + "</th><th>" + TT("Record / change", "السجل / التغيير") +
+        "</th><th>" + TT("Reason", "السبب") + "</th></tr></thead><tbody>" +
+      (HIST.rows.length ? HIST.rows.map(function (r) {
+        return "<tr><td class=\"nowrap\">" + esc4(tzStamp(r.at, (ACCT.settings || {}).display_timezone)) + "</td>" +
+          "<td>" + esc4(r.actor_name || r.actor_email || "—") + '<div class="muted small">' + esc4(r.actor_role || "") + "</div></td>" +
+          "<td>" + esc4(r.action || "") + "</td>" +
+          "<td>" + esc4(r.details || r.record_id || "") + changedFieldsHTML(r.changed_fields) +
+            (r.approval_id ? '<div class="muted small">' + TT("Approval ref: ", "مرجع الموافقة: ") + esc4(String(r.approval_id).slice(0, 8)) + "</div>" : "") + "</td>" +
+          "<td>" + esc4(r.reason || "") + "</td></tr>";
+      }).join("") : '<tr><td colspan="5" class="muted small">' + TT("No events match these filters.", "لا توجد أحداث مطابقة.") + "</td></tr>") +
+      "</tbody></table></div>" +
+      '<div class="rpt-actions"><button class="btn sm ghost" onclick="acctHistPage(\'prev\')">← ' + TT("Newer", "أحدث") + '</button>' +
+      '<button class="btn sm ghost" onclick="acctHistPage(\'next\')">' + TT("Older", "أقدم") + " →</button>" +
+      '<span class="muted small">' + TT("Showing ", "عرض ") + HIST.rows.length + TT(" of ", " من ") + HIST.total + TT(" permanent events", " حدثاً دائماً") + "</span></div>";
+  }
+
+  function historyCardHTML() {
+    return '<div class="card"><h3>' + TT("Permanent Accounting History", "سجل المحاسبة الدائم") + "</h3>" +
+      '<p class="muted small">' + TT("The authoritative append-only accounting audit. Events are never edited or deleted; filters and paging only choose what is shown.",
+        "سجل التدقيق المحاسبي الدائم غير القابل للتعديل. لا تُحذف الأحداث أو تُعدّل؛ عوامل التصفية والصفحات تختار المعروض فقط.") + "</p>" +
+      '<div class="form-grid">' +
+      '<div class="field wide"><label class="small">' + TT("Search", "بحث") + '</label><input value="' + esc4(HF.search) + '" placeholder="' + TT("description, reference, person…", "وصف، مرجع، شخص…") + '" onchange="acctHistFilter(\'search\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("Project", "المشروع") + '</label><select onchange="acctHistFilter(\'project\',this.value)"><option value="">' + TT("All", "الكل") + "</option>" +
+        ACCT.projects.map(function (p) { return '<option value="' + esc4(p.id) + '"' + (HF.project === p.id ? " selected" : "") + ">" + esc4(p.name || p.id) + "</option>"; }).join("") + "</select></div>" +
+      '<div class="field"><label class="small">' + TT("Action", "الإجراء") + '</label><select onchange="acctHistFilter(\'action\',this.value)"><option value="">' + TT("All", "الكل") + "</option>" +
+        HIST.actions.map(function (a) { return '<option value="' + esc4(a) + '"' + (HF.action === a ? " selected" : "") + ">" + esc4(a) + "</option>"; }).join("") + "</select></div>" +
+      '<div class="field"><label class="small">' + TT("Person", "الشخص") + '</label><input value="' + esc4(HF.actor) + '" onchange="acctHistFilter(\'actor\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("From", "من") + '</label><input type="date" value="' + esc4(HF.from) + '" onchange="acctHistFilter(\'from\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("To", "إلى") + '</label><input type="date" value="' + esc4(HF.to) + '" onchange="acctHistFilter(\'to\',this.value)"></div>' +
+      "</div><div id=\"acct_hist_body\"></div></div>";
+  }
+
+  /* ---------------- production hygiene ----------------
+     Inside the authenticated Larsa Control work area the engine's own
+     local-prototype plumbing is not just redundant, it is dangerous:
+     it offers to replace the production ledger from a serialized blob
+     and shows a local audit trail beside the authoritative one. When
+     the parent signals production, those cards are removed. */
+  function inProduction() {
+    try { if (window.__larsaProductionMode === true) return true; } catch (e) {}
+    return ACCT.on === true;
+  }
+  var LEGACY_SETTINGS_CARDS = [
+    /supabase\s*sync/i, /production\s*setup/i, /restore\s*points?/i,
+    /local[-\s]?first/i, /audit\s*trail/i, /audit\s*log/i,
+  ];
+  function stripLegacySettings(view) {
+    if (!inProduction() || !view) return;
+    Array.prototype.forEach.call(view.querySelectorAll(".card"), function (card) {
+      var head = card.querySelector("h1,h2,h3,h4");
+      var title = head ? (head.textContent || "") : "";
+      if (!title) return;
+      if (LEGACY_SETTINGS_CARDS.some(function (re) { return re.test(title); })) {
+        card.setAttribute("data-acct-legacy-removed", title.trim());
+        card.remove();
+      }
+    });
+    // Any stray push/pull/replace control that lived outside a card.
+    Array.prototype.forEach.call(view.querySelectorAll("button,a"), function (b) {
+      var fn = String(b.getAttribute("onclick") || "");
+      if (/v35(Push|Pull)StateToSupabase|v35PullStateFromSupabase|v35SaveSupabaseSettings/.test(fn)) {
+        var host = b.closest ? (b.closest(".card") || b.parentNode) : b.parentNode;
+        if (host && host.remove) host.remove(); else b.remove();
+      }
+    });
+  }
+
   var origRenderSettings = null;
   function wrapSettings() {
     if (origRenderSettings) return;
@@ -1259,18 +1760,137 @@
       try {
         if (!ACCT.on) return out;
         var view = document.getElementById("view");
+        stripLegacySettings(view);
         if (view && !document.getElementById("acct_settings_flag")) {
           var d = document.createElement("div");
           d.id = "acct_settings_flag";
-          d.innerHTML = settingsCardsHTML();
+          d.innerHTML = settingsCardsHTML() + historyCardHTML();
           view.appendChild(d);
+          renderHistoryInto(document.getElementById("acct_hist_body"));
+          loadHistory(function () { renderHistoryInto(document.getElementById("acct_hist_body")); });
         }
       } catch (e) { console.warn(e); }
       return out;
     };
   }
 
-  /* ---------------- review section: server review queue + deleted records ---------------- */
+  /* ---------------- the Accounting Approval Queue ----------------
+     Distinct from the severity/risk queue the engine already had (now
+     shown under its real name, Flags / Risk Reviews). This one lists
+     the records actually waiting for an accounting decision, with the
+     ONE outstanding action each of them needs. */
+  var QUEUE = { rows: [], total: 0, by_kind: {}, loading: false };
+  var QF = { project: "", kind: "", accountant: "", approver: "", age: "", status: "" };
+  ACCT.queue = QUEUE;
+
+  function loadQueue(then) {
+    QUEUE.loading = true;
+    return rpc("acct_approval_queue", {
+      p_project_id: QF.project || null,
+      p_kind: QF.kind || null,
+      p_created_by: QF.accountant || null,
+      p_approver: QF.approver || null,
+      p_min_age_days: QF.age ? Number(QF.age) : null,
+      p_status: QF.status || null,
+      p_limit: 500,
+    }).then(function (q) {
+      QUEUE.loading = false;
+      if (!q) return;
+      QUEUE.rows = q.rows || [];
+      QUEUE.total = q.total || 0;
+      QUEUE.by_kind = q.by_kind || {};
+      if (then) then();
+    }).catch(function (e) { QUEUE.loading = false; console.warn("[acct-cloud] queue:", e); });
+  }
+  ACCT.reloadQueue = loadQueue;
+
+  window.acctQueueFilter = function (key, value) {
+    QF[key] = value;
+    loadQueue(function () { renderQueueInto(document.getElementById("acct_queue_body")); });
+  };
+  window.acctQueueAct = function (id, action) {
+    if (action === "approve_entry") {
+      var t = ACCT.txns.filter(function (x) { return x.id === id; })[0];
+      if (t && typeof window.xApprove === "function") { window.xApprove(KIND_COLL[t.kind] || "expenses", id); return; }
+    }
+    if (action === "review_entry") { window.acctReviewEntry(id, "approved"); return; }
+    if (action === "decide_protected") {
+      var req = ACCT.approvals.filter(function (x) { return x.id === id; })[0];
+      if (req) { approvalCodeModal(req, true); return; }
+    }
+    toast4(TT("Open the record to complete this action.", "افتح السجل لإتمام هذا الإجراء."));
+  };
+
+  function queueRowHTML(r) {
+    var amount = r.amount != null && r.currency
+      ? nmoney(Number(r.amount), r.currency)
+      : (r.amount != null ? nmoney(Number(r.amount), "IQD") : "—");
+    var mine = String(r.entered_by || "").toLowerCase() === myEmailLc();
+    var canAct = r.action === "approve_entry" ? (myPerm("approve") && (!mine || myPerm("self_approve")))
+      : r.action === "review_entry" ? myPerm("approve")
+      : ACCT.isPlatformAdmin;
+    var blocked = mine && !myPerm("self_approve") && r.action !== "decide_protected";
+    return "<tr>" +
+      "<td><b>" + esc4(r.reference || "") + "</b><div class=\"muted small\">" + esc4(r.project_name || r.project_id || "") + "</div></td>" +
+      "<td>" + esc4(r.record_kind || "") + "<div class=\"muted small\">" + esc4(r.description || r.category || "") + "</div></td>" +
+      "<td class=\"right\">" + esc4(amount) + "</td>" +
+      "<td>" + esc4(r.entered_by_name || r.entered_by || "—") + "</td>" +
+      "<td>" + esc4(r.assigned_approver || "—") + "</td>" +
+      "<td class=\"right\">" + esc4(String(r.age_days == null ? "—" : r.age_days + "d")) + "</td>" +
+      "<td>" + esc4(r.action_label || "") + "</td>" +
+      "<td class=\"right nowrap\">" +
+        (blocked
+          ? '<span class="muted small">' + TT("You entered this", "أنت من أدخله") + "</span>"
+          : canAct
+            ? '<button class="mini" onclick="acctQueueAct(\'' + r.id + "','" + esc4(r.action) + "')\">" + TT("Approve", "اعتماد") + "</button>"
+            : '<span class="muted small">' + TT("Not yours to decide", "ليس من صلاحيتك") + "</span>") +
+      "</td></tr>";
+  }
+
+  function renderQueueInto(host) {
+    if (!host) return;
+    host.innerHTML = QUEUE.rows.length
+      ? '<div class="table-wrap"><table><thead><tr>' +
+        "<th>" + TT("Reference", "المرجع") + "</th><th>" + TT("Type", "النوع") + '</th><th class="right">' + TT("Amount", "المبلغ") + "</th>" +
+        "<th>" + TT("Entered by", "أدخله") + "</th><th>" + TT("Approver", "المعتمِد") + '</th><th class="right">' + TT("Waiting", "الانتظار") + "</th>" +
+        "<th>" + TT("Action needed", "الإجراء المطلوب") + "</th><th></th></tr></thead><tbody>" +
+        QUEUE.rows.map(queueRowHTML).join("") + "</tbody></table></div>"
+      : '<p class="muted small">' + TT("Nothing is waiting for an accounting decision.", "لا يوجد ما ينتظر قراراً محاسبياً.") + "</p>";
+  }
+
+  function approvalQueueHTML() {
+    var projOpts = '<option value="">' + TT("All projects", "كل المشاريع") + "</option>" +
+      ACCT.projects.map(function (p) {
+        return '<option value="' + esc4(p.id) + '"' + (QF.project === p.id ? " selected" : "") + ">" + esc4(p.name || p.id) + "</option>";
+      }).join("");
+    var kindOpts = '<option value="">' + TT("All types", "كل الأنواع") + "</option>" +
+      ["funding", "material", "labor", "expense", "revenue", "refund", "adjustment"].map(function (k) {
+        return '<option value="' + k + '"' + (QF.kind === k ? " selected" : "") + ">" + k + "</option>";
+      }).join("");
+    var counts = Object.keys(QUEUE.by_kind).map(function (k) {
+      return esc4(k) + " " + QUEUE.by_kind[k];
+    }).join(" · ");
+    return '<div class="card"><h3>' + TT("Accounting Approval Queue", "قائمة الاعتماد المحاسبي") +
+      ' <span class="muted small">(' + QUEUE.total + ")</span></h3>" +
+      '<p class="muted small">' + TT("Records waiting for an accounting decision — funding, expenses, materials, labour, revenue, fee and rate overrides, refunds and protected actions. Each record shows the one action it still needs.",
+        "السجلات التي تنتظر قراراً محاسبياً — التمويل والمصاريف والمواد والعمالة والإيرادات وتجاوزات الأتعاب والأسعار والمستردات والإجراءات المحمية. يعرض كل سجل الإجراء الوحيد المتبقي له.") +
+      (counts ? " · " + counts : "") + "</p>" +
+      '<div class="form-grid">' +
+      '<div class="field"><label class="small">' + TT("Project", "المشروع") + '</label><select onchange="acctQueueFilter(\'project\',this.value)">' + projOpts + "</select></div>" +
+      '<div class="field"><label class="small">' + TT("Type", "النوع") + '</label><select onchange="acctQueueFilter(\'kind\',this.value)">' + kindOpts + "</select></div>" +
+      '<div class="field"><label class="small">' + TT("Accountant (entered by)", "المحاسب (المُدخِل)") + '</label><input value="' + esc4(QF.accountant) + '" placeholder="name@larsaeng.com" onchange="acctQueueFilter(\'accountant\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("Approver", "المعتمِد") + '</label><input value="' + esc4(QF.approver) + '" placeholder="name@larsaeng.com" onchange="acctQueueFilter(\'approver\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("Waiting at least (days)", "الانتظار على الأقل (أيام)") + '</label><input type="number" min="0" value="' + esc4(QF.age) + '" onchange="acctQueueFilter(\'age\',this.value)"></div>' +
+      '<div class="field"><label class="small">' + TT("Status", "الحالة") + '</label><select onchange="acctQueueFilter(\'status\',this.value)">' +
+        '<option value="">' + TT("Any", "أي") + "</option>" +
+        ["draft", "pending", "approved", "received", "paid"].map(function (s) {
+          return '<option value="' + s + '"' + (QF.status === s ? " selected" : "") + ">" + s + "</option>";
+        }).join("") + "</select></div>" +
+      "</div>" +
+      '<div id="acct_queue_body"></div></div>';
+  }
+
+  /* ---------------- review section: approval queue, risk flags, deleted ---------------- */
   var origRenderReview = null;
   function wrapReview() {
     if (origRenderReview) return;
@@ -1282,11 +1902,26 @@
         if (!ACCT.on) return out;
         var view = document.getElementById("view");
         if (!view || document.getElementById("acct_review_flag")) return out;
+        // The engine's own queue is a severity/risk-flag list, not an
+        // approval list. Say so, so the two are never confused again.
+        try {
+          Array.prototype.forEach.call(view.querySelectorAll("h1, h2, h3"), function (h) {
+            if (/^\s*(Review Queue|Open flags by severity)\s*$/i.test(h.textContent || "")) {
+              h.textContent = TT("Flags / Risk Reviews", "التنبيهات / مراجعات المخاطر");
+            }
+          });
+          var pageH1 = view.querySelector(".page-head h1");
+          if (pageH1 && /review/i.test(pageH1.textContent || "") && !/flag/i.test(pageH1.textContent || "")) {
+            pageH1.textContent = TT("Flags / Risk Reviews", "التنبيهات / مراجعات المخاطر");
+          }
+        } catch (e) {}
+
         var open = ACCT.review;
         var deleted = ACCT.txns.filter(function (t) { return t.deleted_at; });
         var d = document.createElement("div");
         d.id = "acct_review_flag";
-        var h = '<div class="card"><h3>' + TT("Accounting Review Queue (server)", "قائمة المراجعة المحاسبية (الخادم)") + "</h3>";
+        var h = approvalQueueHTML();
+        h += '<div class="card"><h3>' + TT("Flags / Risk Reviews (server)", "التنبيهات / مراجعات المخاطر (الخادم)") + "</h3>";
         h += open.length
           ? '<div class="table-wrap"><table><thead><tr><th>' + TT("Type", "النوع") + "</th><th>" + TT("Note", "الملاحظة") + "</th><th></th></tr></thead><tbody>" +
             open.map(function (q) {
@@ -1306,6 +1941,8 @@
         h += "</div>";
         d.innerHTML = h;
         view.appendChild(d);
+        renderQueueInto(document.getElementById("acct_queue_body"));
+        loadQueue(function () { renderQueueInto(document.getElementById("acct_queue_body")); });
       } catch (e) { console.warn(e); }
       return out;
     };
@@ -1338,77 +1975,219 @@
       ? "Payment Received — Approved / تم استلام المبلغ — مُعتمد"
       : "Payment Received — Pending Internal Review / تم استلام المبلغ — بانتظار المراجعة الداخلية";
   }
-  function receiptRowsHTML(rows) {
-    return rows.map(function (r) {
-      return '<tr><td style="width:42%;color:#555">' + esc4(r[0]) + "</td><td><b>" + (r[2] ? r[1] : esc4(r[1])) + "</b></td></tr>";
+  /* ---------------- the funding receipt document ----------------
+     A Larsa statement, not a long table: the official logo, a company
+     block, then labelled sections. Language follows the engine (EN /
+     AR / bilingual) with the document direction set to match, and the
+     page is sized so A4 and US Letter both hold it on one sheet.
+     Every value comes from the immutable server snapshot. */
+  /* The real Larsa logo asset, unaltered, addressed absolutely so it also
+     resolves inside a print window opened with document.write. */
+  var RECEIPT_LOGO = (function () {
+    try { return window.location.origin + "/icons/larsa-logo.svg"; }
+    catch (e) { return "/icons/larsa-logo.svg"; }
+  })();
+  function receiptLang() {
+    try { if (window.__acctReceiptLang) return window.__acctReceiptLang; } catch (e) {}
+    return "both";
+  }
+  function RL(en, ar) {
+    var L = receiptLang();
+    if (L === "en") return en;
+    if (L === "ar") return ar;
+    return en + " / " + ar;
+  }
+  function receiptSection(title, rows) {
+    var body = rows.filter(Boolean).map(function (r) {
+      return '<tr><th scope="row">' + esc4(r[0]) + "</th><td" + (r[2] ? ' class="strong"' : "") + ">" +
+        (r[3] ? r[1] : esc4(r[1])) + "</td></tr>";
     }).join("");
+    if (!body) return "";
+    return '<section class="rc-sec"><h2>' + esc4(title) + "</h2>" +
+      '<table class="rc-tbl"><tbody>' + body + "</tbody></table></section>";
   }
   function acctReceiptHTML(sn, currentStatus, printMeta) {
-    var logo = window.LOGO || window.LARSA_LOGO || "";
     var tz = sn.timezone || "Asia/Baghdad";
-    var wordsEn = Core.amountInWords(sn.amount, sn.currency, "en");
-    var wordsAr = Core.amountInWords(sn.amount, sn.currency, "ar");
-    var rows = [
-      ["Receipt No. / رقم الوصل", sn.receipt_no],
-      ["Transaction No. / رقم الحركة", sn.txn_no],
-      ["Project Code / رمز المشروع", sn.project_code || "—"],
-      ["Project / المشروع", sn.project_name || ""],
-      ["Client / Payer — العميل / الدافع", sn.payer_name || sn.client_name || ""],
-      ["Amount Received / المبلغ المستلم", nfmt(sn.amount, sn.currency), true],
-      ["Amount in Words (EN)", wordsEn],
-      ["المبلغ كتابةً", wordsAr],
-      ["Currency / العملة", sn.currency],
-      ["Transaction Date / تاريخ الحركة", String(sn.txn_date || "")],
-      ["Time Received / وقت الاستلام", tzStamp(sn.received_at, tz)],
-      ["Payment Method / طريقة الدفع", sn.payment_method || "—"],
-      ["Payment Reference / مرجع الدفع", sn.payment_ref || "—"],
-      ["Exchange Rate / سعر الصرف", "1 USD = " + nfmt(sn.exchange_rate, "IQD") + " (" + esc4(sn.rate_source || "") + ")"],
-      ["IQD Equivalent / المعادل بالدينار", nfmt(sn.amount_iqd, "IQD")],
-      ["USD Equivalent / المعادل بالدولار", nfmt(sn.amount_usd, "USD")],
-    ];
-    if (Number(sn.fee_amount) > 0) {
-      rows.push(["Consultancy Fee Rate / نسبة أتعاب الاستشارة", (Core.round2(Number(sn.fee_rate || 0) * 100)) + "%"]);
-      rows.push(["Consultancy Fee / أتعاب الاستشارة", nfmt(sn.fee_amount, sn.currency)]);
-      if ((sn.fee_treatment || "") === "deduct_from_funding") {
-        rows.push(["Net Construction Funding / صافي تمويل التنفيذ", nfmt(sn.net_after_fee, sn.currency), true]);
-      }
-    }
-    rows = rows.concat([
-      ["Received By / استلمه", sn.received_by || "—"],
-      ["Entered By / أدخله", (sn.entered_by_name || "") + (sn.entered_by_role ? " — " + sn.entered_by_role : "")],
-      ["Notes / ملاحظات", sn.notes || "—"],
-      ["Verification Code / رمز التحقق", sn.verify_code || "—"],
-    ]);
+    var lang = receiptLang();
+    var dir = lang === "ar" ? "rtl" : "ltr";
+    var approved = (currentStatus || sn.review_status_at_issue) === "approved";
+    var co = (ACCT.settings || {});
+    var contact = [co.company_address, co.company_phone, co.company_email, co.company_website]
+      .filter(Boolean).join("  ·  ");
+
+    var head =
+      '<header class="rc-head">' +
+        '<div class="rc-brand">' +
+          '<img class="rc-logo" src="' + RECEIPT_LOGO + '" alt="Larsa Engineering">' +
+          '<div class="rc-co"><div class="rc-name">Larsa Engineering</div>' +
+            '<div class="rc-ar">شركة لارسا للهندسة</div>' +
+            (contact ? '<div class="rc-contact">' + esc4(contact) + "</div>" : "") +
+          "</div>" +
+        "</div>" +
+        '<div class="rc-title"><h1>Funding Receipt</h1><div class="rc-title-ar">وصل استلام تمويل</div>' +
+          '<div class="rc-no">' + esc4(sn.receipt_no || "") + "</div></div>" +
+      "</header>";
+
+    var statusChip = '<div class="rc-status ' + (approved ? "ok" : "wait") + '">' +
+      esc4(approvalPhrase(currentStatus || sn.review_status_at_issue)) + "</div>";
+
     var corrected = sn.kind === "corrected" && sn.corrects_receipt_no
-      ? '<div style="border:1.5px solid #b00;color:#b00;padding:6px 10px;margin:8px 0;font-weight:700">CORRECTED RECEIPT — replaces ' + esc4(sn.corrects_receipt_no) + " / وصل مُصحح يحل محل الوصل المذكور</div>"
+      ? '<div class="rc-corrected">CORRECTED RECEIPT — replaces ' + esc4(sn.corrects_receipt_no) +
+        " / وصل مُصحح يحل محل الوصل المذكور</div>"
       : "";
     var reprint = printMeta && printMeta.isReprint
-      ? '<div style="color:#555;font-size:11px;margin:4px 0">REPRINT — original receipt number preserved / إعادة طباعة مع الحفاظ على رقم الوصل الأصلي</div>'
+      ? '<div class="rc-reprint">REPRINT — original receipt number preserved / إعادة طباعة مع الحفاظ على رقم الوصل الأصلي</div>'
       : "";
-    return (
-      '<div style="max-width:720px;margin:0 auto">' + corrected + reprint +
-      '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
-      '<tbody>' + receiptRowsHTML(rows) + "</tbody></table>" +
-      '<div style="margin:10px 0;padding:8px 12px;border:1px solid #ccc;background:#f7f7f7;font-weight:700">' +
-      esc4(approvalPhrase(currentStatus || sn.review_status_at_issue)) + "</div>" +
-      '<table style="width:100%;margin-top:34px;font-size:12px;text-align:center"><tr>' +
-      '<td style="width:33%"><div style="border-top:1px solid #333;margin:0 18px;padding-top:6px">Client / Payer Signature<br>توقيع العميل / الدافع</div></td>' +
-      '<td style="width:33%"><div style="border-top:1px solid #333;margin:0 18px;padding-top:6px">Larsa Receiver Signature<br>توقيع المستلم</div></td>' +
-      '<td style="width:33%"><div style="border-top:1px solid #333;margin:0 18px;padding-top:6px">Company Stamp<br>ختم الشركة</div></td>' +
-      "</tr></table>" +
-      '<div style="color:#777;font-size:11px;margin-top:18px">' +
-      "Printed / طُبع: " + esc4(tzStamp(new Date().toISOString(), tz)) + (logo ? "" : " — Larsa Engineering") + "</div>" +
-      "</div>"
-    );
+    // An unapproved receipt is still valid proof of payment, and says so
+    // plainly across the page so it can never be mistaken for a reviewed one.
+    var watermark = approved ? "" :
+      '<div class="rc-wm"><span>PENDING REVIEW · بانتظار المراجعة</span></div>';
+
+    var docSec = receiptSection(RL("Document", "المستند"), [
+      [RL("Receipt No.", "رقم الوصل"), sn.receipt_no || "—", true],
+      [RL("Transaction No.", "رقم الحركة"), sn.txn_no || "—"],
+      [RL("Transaction Date", "تاريخ الحركة"), String(sn.txn_date || "—")],
+      [RL("Issued", "تاريخ الإصدار"), tzStamp(sn.issued_at || sn.received_at, tz)],
+      [RL("Approval Status", "حالة الاعتماد"),
+        approved ? RL("Approved", "مُعتمد") : RL("Pending internal review", "بانتظار المراجعة الداخلية")],
+    ]);
+    var partySec = receiptSection(RL("Client & Project", "العميل والمشروع"), [
+      [RL("Client / Payer", "العميل / الدافع"), sn.payer_name || sn.client_name || "—"],
+      [RL("Project", "المشروع"), sn.project_name || "—"],
+      [RL("Project Code", "رمز المشروع"), sn.project_code || "—"],
+    ]);
+    var paySec = receiptSection(RL("Payment", "الدفع"), [
+      [RL("Payment Method", "طريقة الدفع"), sn.payment_method || "—"],
+      [RL("Payment Reference", "مرجع الدفع"), sn.payment_ref || "—"],
+      [RL("Time Received", "وقت الاستلام"), tzStamp(sn.received_at, tz)],
+    ]);
+
+    var feeRows = [];
+    if (Number(sn.fee_amount) > 0) {
+      feeRows.push([RL("Consultancy Fee Rate", "نسبة أتعاب الاستشارة"),
+        (Core.round2(Number(sn.fee_rate || 0) * 100)) + "%"]);
+      feeRows.push([RL("Consultancy Fee", "أتعاب الاستشارة"), nfmt(sn.fee_amount, sn.currency)]);
+      if ((sn.fee_treatment || "") === "deduct_from_funding") {
+        feeRows.push([RL("Net Construction Funding", "صافي تمويل التنفيذ"),
+          nfmt(sn.net_after_fee, sn.currency), true]);
+      }
+    }
+    var amountSec = receiptSection(RL("Amount", "المبلغ"), [
+      [RL("Gross Amount Received", "إجمالي المبلغ المستلم"), nfmt(sn.amount, sn.currency), true],
+    ].concat(feeRows));
+
+    var curSec = receiptSection(RL("Currency & Exchange Rate", "العملة وسعر الصرف"), [
+      [RL("Currency", "العملة"), sn.currency || "—"],
+      [RL("Exchange Rate (snapshot)", "سعر الصرف (لقطة دائمة)"),
+        "1 USD = " + nfmt(sn.exchange_rate, "IQD") + " (" + (sn.rate_source || "") + ")"],
+      [RL("IQD Equivalent", "المعادل بالدينار"), nfmt(sn.amount_iqd, "IQD")],
+      [RL("USD Equivalent", "المعادل بالدولار"), nfmt(sn.amount_usd, "USD")],
+    ]);
+
+    var wordsSec =
+      '<section class="rc-sec rc-words"><h2>' + esc4(RL("Amount in Words", "المبلغ كتابةً")) + "</h2>" +
+      '<div class="rc-word-en"><small>English</small>' + esc4(Core.amountInWords(sn.amount, sn.currency, "en")) + "</div>" +
+      '<div class="rc-word-ar" dir="rtl"><small>بالعربية</small>' + esc4(Core.amountInWords(sn.amount, sn.currency, "ar")) + "</div>" +
+      "</section>";
+
+    var peopleSec = receiptSection(RL("Handled By", "الجهات المسؤولة"), [
+      [RL("Received By", "استلمه"), sn.received_by || "—"],
+      [RL("Entered By", "أدخله"), (sn.entered_by_name || "—") + (sn.entered_by_role ? " — " + sn.entered_by_role : "")],
+      [RL("Reviewed By", "راجعه"), sn.reviewed_by || (approved ? "—" : RL("Pending", "قيد المراجعة"))],
+      [RL("Approved By", "اعتمده"), sn.approved_by || (approved ? "—" : RL("Pending", "قيد الاعتماد"))],
+    ]);
+    var noteSec = receiptSection(RL("Notes & Verification", "ملاحظات والتحقق"), [
+      [RL("Notes", "ملاحظات"), sn.notes || "—"],
+      [RL("Verification Code", "رمز التحقق"), sn.verify_code || "—"],
+    ]);
+
+    var signs =
+      '<section class="rc-signs"><div><span></span>' + esc4(RL("Client / Payer Signature", "توقيع العميل / الدافع")) + "</div>" +
+      '<div><span></span>' + esc4(RL("Larsa Receiver Signature", "توقيع المستلم")) + "</div>" +
+      '<div class="rc-stamp"><span></span>' + esc4(RL("Company Stamp", "ختم الشركة")) + "</div></section>";
+
+    var css =
+      "<style>" +
+      "@page{size:A4;margin:14mm}" +
+      "@media print{.rc-doc{box-shadow:none;margin:0}}" +
+      ".rc-doc{max-width:190mm;margin:0 auto;color:#111;font-size:11.5px;line-height:1.45}" +
+      ".rc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;" +
+        "border-bottom:2.5px solid #111;padding-bottom:10px;margin-bottom:4px}" +
+      ".rc-brand{display:flex;align-items:center;gap:12px}" +
+      ".rc-logo{height:52px;width:auto;max-width:170px;object-fit:contain}" +
+      ".rc-name{font-size:15px;font-weight:700;letter-spacing:.02em}" +
+      ".rc-ar{font-size:12px;color:#333}" +
+      ".rc-contact{font-size:9.5px;color:#666;margin-top:3px;max-width:260px}" +
+      ".rc-title{text-align:right}" +
+      ".rc-title h1{font-size:17px;margin:0;letter-spacing:.01em}" +
+      ".rc-title-ar{font-size:13px;color:#333}" +
+      ".rc-no{margin-top:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;font-weight:700;" +
+        "border:1px solid #111;display:inline-block;padding:2px 8px}" +
+      ".rc-status{margin:9px 0;padding:6px 10px;font-weight:700;font-size:11px;border-radius:3px}" +
+      ".rc-status.ok{background:#e8f5ec;border:1px solid #1a7f37;color:#12592a}" +
+      ".rc-status.wait{background:#fdf6e3;border:1px solid #b58900;color:#7a5b00}" +
+      ".rc-corrected{border:1.5px solid #b00;color:#b00;padding:6px 10px;margin:8px 0;font-weight:700;font-size:11px}" +
+      ".rc-reprint{color:#555;font-size:10px;margin:4px 0}" +
+      ".rc-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}" +
+      ".rc-sec{break-inside:avoid;margin-top:9px}" +
+      ".rc-sec h2{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:#666;margin:0 0 3px;" +
+        "border-bottom:1px solid #ddd;padding-bottom:2px;font-weight:700}" +
+      ".rc-tbl{width:100%;border-collapse:collapse}" +
+      ".rc-tbl th{text-align:inherit;font-weight:400;color:#555;padding:2.5px 0;width:47%;vertical-align:top}" +
+      ".rc-tbl td{padding:2.5px 0;font-weight:600;vertical-align:top}" +
+      ".rc-tbl td.strong{font-size:13px;font-weight:700}" +
+      ".rc-words{grid-column:1/-1;background:#fafafa;border:1px solid #e3e3e3;padding:7px 10px}" +
+      ".rc-words small{display:block;font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.06em}" +
+      ".rc-word-en,.rc-word-ar{font-weight:600;margin-top:2px}" +
+      ".rc-signs{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:34px;" +
+        "text-align:center;font-size:10.5px;color:#333;break-inside:avoid}" +
+      ".rc-signs span{display:block;border-top:1px solid #333;margin-bottom:5px;height:34px}" +
+      ".rc-stamp span{border:1px dashed #999;border-radius:4px;height:52px}" +
+      ".rc-foot{margin-top:16px;border-top:1px solid #ddd;padding-top:6px;color:#777;font-size:9px;" +
+        "display:flex;justify-content:space-between;gap:12px}" +
+      ".rc-wm{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:0}" +
+      ".rc-wm span{transform:rotate(-24deg);font-size:52px;font-weight:800;color:rgba(181,137,0,.13);" +
+        "letter-spacing:.06em;white-space:nowrap;border:5px solid rgba(181,137,0,.13);padding:10px 26px;border-radius:8px}" +
+      ".rc-body{position:relative;z-index:1}" +
+      "</style>";
+
+    return css + '<div class="rc-doc" dir="' + dir + '">' + watermark +
+      '<div class="rc-body">' + head + corrected + reprint + statusChip +
+      '<div class="rc-grid">' + docSec + partySec + amountSec + curSec + wordsSec + paySec + peopleSec + noteSec + "</div>" +
+      signs +
+      '<div class="rc-foot"><span>' + esc4(RL("Printed", "طُبع")) + ": " + esc4(tzStamp(new Date().toISOString(), tz)) + "</span>" +
+      "<span>Larsa Engineering · " + esc4(sn.receipt_no || "") + "</span></div>" +
+      "</div></div>";
   }
 
+  /* Print the document itself rather than handing it to the engine's
+     generic print wrapper: the receipt carries its own page setup, and
+     printing waits for the logo so preview, print and saved PDF are the
+     same page. */
   function openPrintWindow(title, inner) {
-    try { printDoc(title, inner); return; } catch (e) { /* fall through */ }
     try {
       var w = window.open("", "_blank");
-      w.document.write("<html><head><title>" + esc4(title) + "</title></head><body>" + inner + "</body></html>");
-      w.document.close(); w.print();
-    } catch (e2) { toast4(TT("Pop-up blocked — allow pop-ups to print.", "منع النافذة المنبثقة — اسمح بالنوافذ للطباعة.")); }
+      if (!w) throw new Error("popup blocked");
+      w.document.write(
+        '<!doctype html><html><head><meta charset="utf-8"><title>' + esc4(title) + "</title>" +
+        '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+        "<style>body{margin:0;padding:12mm;background:#fff;" +
+        "font-family:'Segoe UI',Tahoma,'Noto Naskh Arabic',Arial,sans-serif}</style>" +
+        "</head><body>" + inner + "</body></html>");
+      w.document.close();
+      var go = function () { try { w.focus(); w.print(); } catch (e) {} };
+      var img = w.document.querySelector("img");
+      if (img && !img.complete) {
+        img.addEventListener("load", go);
+        img.addEventListener("error", go);
+        setTimeout(go, 2500); // never leave the user waiting on a slow asset
+      } else {
+        setTimeout(go, 120);
+      }
+      return;
+    } catch (e) { /* fall through to the engine's printer */ }
+    try { printDoc(title, inner); }
+    catch (e2) { toast4(TT("Pop-up blocked — allow pop-ups to print.", "منع النافذة المنبثقة — اسمح بالنوافذ للطباعة.")); }
   }
 
   function receiptRecordFor(txnId) {
@@ -1444,9 +2223,13 @@
       '<p class="muted small">' + TT("Print it now and hand it to the client as proof that Larsa received the amount. Internal review continues separately and never blocks this receipt.",
         "اطبعه الآن وسلّمه للعميل كإثبات باستلام لارسا للمبلغ. تستمر المراجعة الداخلية بشكل منفصل ولا تمنع هذا الوصل.") + "</p></div>" +
       '<div class="modal-foot">' +
+      '<label class="small" style="margin-inline-end:auto">' + TT("Language", "اللغة") +
+        ' <select id="acct_rcpt_lang" onchange="window.__acctReceiptLang=this.value">' +
+        '<option value="both">' + TT("Bilingual", "ثنائي اللغة") + "</option>" +
+        '<option value="en">English</option><option value="ar">العربية</option></select></label>' +
       '<button class="btn ghost" onclick="closeEditor()">' + TT("Close", "إغلاق") + "</button>" +
       '<button class="btn ghost" onclick="acctFundingStatementPrint(\'' + esc4(sn.project_id || (txn && txn.project_id) || "") + '\')">' + TT("Print Funding Statement", "طباعة كشف التمويل") + "</button>" +
-      '<button class="btn ghost" onclick="acctPrintReceipt(\'' + esc4(receipt.txn_id) + '\', false)">' + TT("Download PDF", "تنزيل PDF") + "</button>" +
+      '<button class="btn ghost" onclick="acctPrintReceipt(\'' + esc4(receipt.txn_id) + '\', false)">' + TT("Save as PDF", "حفظ PDF") + "</button>" +
       '<button class="btn" onclick="acctPrintReceipt(\'' + esc4(receipt.txn_id) + '\', false)">' + TT("Print Receipt", "طباعة الوصل") + "</button>" +
       "</div></div></div>";
     document.body.classList.add("modal-open");
@@ -1488,6 +2271,93 @@
     }).catch(function (e) { toast4(String(e.message || e)); });
   };
 
+  /* ---------------- the client statement ----------------
+     Built from the authoritative model, so it can no longer report
+     "Actual Spending: 0" while approved spending exists, and its
+     balance always matches the project summary and the project cards. */
+  function statementSection(title, rows) {
+    return '<h2 class="sec">' + esc4(title) + '</h2><table class="rc-tbl"><tbody>' +
+      rows.filter(Boolean).map(function (r) {
+        return "<tr><th scope=\"row\" style=\"text-align:inherit;font-weight:400;color:#555;width:58%\">" +
+          esc4(r[0]) + "</th><td style=\"text-align:end;font-weight:" + (r[2] ? "700" : "600") + "\">" +
+          esc4(r[1]) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+  window.acctClientStatement = function (pid) {
+    if (!myPerm("export_working")) {
+      toast4(TT("Your permissions do not include exporting statements.", "صلاحياتك لا تشمل تصدير الكشوفات.")); return;
+    }
+    var fin = finFor(pid);
+    var run = function (f) {
+      if (!f) { toast4(TT("Financial figures are still loading.", "الأرقام المالية قيد التحميل.")); return; }
+      var cf = f.client_funds || {}, ap = cf.approved || {}, wk = cf.working || {}, pn = cf.pending || {},
+          co = f.company || {}, rev = f.review || {};
+      var m = function (v) { return nfmt(v, "IQD"); };
+      var banner = (rev.status && rev.status !== "green")
+        ? '<div style="border:1.5px solid ' + (rev.status === "red" ? "#c62828" : "#b58900") + ";color:" +
+          (rev.status === "red" ? "#8e1c1c" : "#7a5c00") + ";background:" +
+          (rev.status === "red" ? "#fdecea" : "#fff8e1") + ';padding:6px 10px;margin:8px 0;font-weight:700">' +
+          (rev.status === "red" ? "✖ " : "⏳ ") + esc4(rev.label || "") +
+          " — Working figures include every saved entry / تشمل الأرقام العملية كل قيد محفوظ</div>"
+        : "";
+      var body =
+        '<h2 class="sec">' + esc4(f.project_name || "") + " (" + esc4(f.project_code || "") + ") — " +
+          esc4(f.client || "") + esc4(f.is_sample ? "  [SAMPLE]" : "") + "</h2>" + banner +
+        statementSection("A) Client construction funds / أموال تنفيذ العميل", [
+          ["Gross funding / إجمالي التمويل", m(ap.gross_funding_iqd), true],
+          ["Initial consultancy fee / أتعاب الاستشارة الأولية", m(ap.initial_fee_iqd)],
+          ["Net construction funds / صافي أموال التنفيذ", m(ap.net_construction_funding_iqd), true],
+        ]) +
+        statementSection("B) Project spending / صرف المشروع", [
+          ["Materials / المواد", m(ap.materials_iqd)],
+          ["Labor / العمالة", m(ap.labor_iqd)],
+          ["Other construction costs / تكاليف أخرى", m(ap.other_costs_iqd)],
+          ["Approved spending / المصروف المعتمد", m(ap.construction_cost_iqd), true],
+          ["Pending spending / المصروف المعلق", m(pn.construction_cost_iqd)],
+          ["Working spending / المصروف العملي", m(wk.construction_cost_iqd), true],
+        ]) +
+        statementSection("C) Remaining client balance / رصيد العميل المتبقي", [
+          ["Approved remaining / المتبقي المعتمد", m(ap.remaining_balance_iqd), true],
+          ["Working remaining / المتبقي العملي", m(wk.remaining_balance_iqd), true],
+          ["Refundable principal / أصل قابل للإرجاع", m(cf.refundable_principal_iqd)],
+          ["Refundable consultancy fee / أتعاب قابلة للإرجاع", m(cf.refundable_fee_iqd)],
+          ["Total refund due / إجمالي المسترجع المستحق", m(cf.total_refund_due_iqd), true],
+        ]) +
+        statementSection("D) Larsa consultancy earnings / أرباح استشارة لارسا", [
+          ["Consultancy fee earned / الأتعاب المكتسبة", m(co.consultancy_fee_revenue_iqd)],
+          ["Engineering revenue / الإيراد الهندسي", m(co.engineering_revenue_iqd)],
+        ]) +
+        '<p style="color:#666;font-size:10.5px;margin-top:12px">' +
+        "Client construction funding is held and managed for this project. It is not Larsa company revenue. / " +
+        "أموال تنفيذ العميل محتجزة ومُدارة لهذا المشروع وليست إيراداً لشركة لارسا.</p>" +
+        '<div style="color:#777;font-size:10px;margin-top:6px">Generated by ' +
+        esc4(actor().name || actor().email) + " — " + esc4(tzStamp(new Date().toISOString(), (ACCT.settings || {}).display_timezone)) + "</div>";
+      openPrintWindow("Client Construction Statement — " + (f.project_name || ""),
+        "<style>.rc-tbl{width:100%;border-collapse:collapse;font-size:12px}" +
+        ".rc-tbl td,.rc-tbl th{padding:3px 0;border-bottom:1px solid #f0f0f0}" +
+        "h2.sec{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#555;margin:14px 0 3px}</style>" +
+        body);
+    };
+    if (fin) run(fin);
+    else loadFinancials(function () { run(finFor(pid)); });
+  };
+
+  /* The engine's own Client Statement button now prints the same
+     authoritative document, so the two can never disagree. */
+  function wrapClientStatement() {
+    try {
+      if (typeof window.printClientStatement !== "function") return;
+      var orig = window.printClientStatement;
+      window.printClientStatement = function () {
+        var pid = null;
+        try { pid = typeof clientProj !== "undefined" ? clientProj : null; } catch (e) {}
+        if (!pid) { try { pid = window.__larsaReturnProjectId || null; } catch (e2) {} }
+        if (ACCT.on && pid) { window.acctClientStatement(pid); return; }
+        return orig.apply(this, arguments);
+      };
+    } catch (e) { /* engine not ready */ }
+  }
+
   /* ---------------- review workflow UI ---------------- */
   function reviewChip(r) {
     var m = Core.reviewMeta(r.reviewStatus || "unreviewed");
@@ -1520,7 +2390,7 @@
       var out = origRowActions.apply(this, arguments);
       try {
         if (!ACCT.on || !COLL_KIND[c] || !r || !r._acctManaged) return out;
-        var extra = " " + reviewChip(r);
+        var extra = sampleBadge(r.isSample) + " " + reviewChip(r);
         var rs = r.reviewStatus || "unreviewed";
         var scTx = ACCT.txns.filter(function (x) { return x.id === id; })[0];
         var scOk = !scTx || approverScope(scTx.project_id, scTx.kind).ok;
@@ -1618,6 +2488,10 @@
     wrapRowActions();
     wrapReports();
     wrapDerive();
+    wrapTotals();
+    wrapCompanyTotals();
+    wrapClientStatement();
+    wrapFundingSchema();
     bootstrap();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") setTimeout(install, 0);
