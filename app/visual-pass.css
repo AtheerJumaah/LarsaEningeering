@@ -1281,3 +1281,26 @@ aside.sidebar .nav-item:hover .nav-code .larsa-mark {
 }
 aside.sidebar .nav-item.active .nav-code svg,
 aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
+
+/* --- 21. Installed on a desktop: keep clear of the window controls -------
+
+   The manifest asked for window-controls-overlay, which hands the app the
+   whole title bar and puts the minimise / maximise / close buttons *on top of*
+   it — so the clocks and the icon buttons ended up underneath them. That
+   request is withdrawn in the manifest, but an app installed before this
+   change keeps its old copy until the browser refreshes it, so the bar also
+   defends itself here: the strip the controls occupy is measured and reserved.
+   The controls sit right on Windows and Linux and left on macOS, so both ends
+   are accounted for. Outside that display mode every value below falls back to
+   the normal padding and nothing moves. */
+@media (display-mode: window-controls-overlay) {
+  .topbar {
+    padding-top: max(10px, env(titlebar-area-y, 0px));
+    padding-left: max(22px, calc(env(titlebar-area-x, 0px) + 14px));
+    padding-right: max(18px, calc(100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px) + 14px));
+  }
+  /* Without a draggable region an overlay window cannot be moved at all. The
+     heading is the one part of the bar with no control in it. */
+  .topbar .page-heading { -webkit-app-region: drag; app-region: drag; }
+  .topbar button, .topbar .clocks, .topbar .top-home { -webkit-app-region: no-drag; app-region: no-drag; }
+}
