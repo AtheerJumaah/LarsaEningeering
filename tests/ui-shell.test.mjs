@@ -209,6 +209,49 @@ test("density changes rounding and spacing, not just padding", () => {
   assert.match(pass, /\[data-density="compact"\] \.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) > \.module-bubble \{/);
 });
 
+test("the brand mark is visible on its own tile", () => {
+  /* The blanket sidebar contrast rule sets every span's colour with
+     !important. The mark and the icons are painted with currentColor, so on a
+     white tile they were being drawn near-white on white — an empty square.
+     Both the tile and the glyph inside it must be named to undo that. */
+  assert.match(pass, /aside\.sidebar \.nav-item\.nav-home \.nav-code,[\s\S]*?background: #ffffff !important; color: #0b0b0c !important;/);
+  assert.match(pass, /aside\.sidebar \.nav-item\.nav-home \.nav-code \.larsa-mark,[\s\S]*?color: #0b0b0c !important;/);
+  assert.match(pass, /aside\.sidebar \.nav-item:hover \.nav-code svg \{ color: #0b0b0c !important; \}/);
+  // Hover keeps the sidebar's own language rather than the old white pill,
+  // which was leaving light text on a white background.
+  assert.match(pass, /aside\.sidebar \.nav-item:hover \{ background: rgba\(255, 255, 255, \.14\)/);
+  // The Home subtitle is readable rather than 62% opacity on near-black.
+  assert.match(pass, /aside\.sidebar \.nav-item\.nav-home small \{ color: #c6ccd6 !important; opacity: 1;/);
+  assert.match(page, /isHome \? "nav-home" : ""/);
+});
+
+test("the sidebar folds away and Home survives without it", () => {
+  // A fold control in the sidebar, a reopen control in the bar.
+  assert.match(page, /className="collapse-menu"/);
+  assert.match(page, /aria-label="Hide the sidebar"/);
+  assert.match(page, /onClick=\{\(\) => \{ setMenuOpen\(true\); setNavFolded\(false\); \}\}/);
+  assert.match(page, /navCollapsed \? "nav-collapsed" : ""/);
+  assert.match(page, /larsa-control-nav-collapsed/);
+  // Wide screens only: on a phone the sidebar is already a drawer.
+  assert.match(pass, /@media \(min-width: 1025px\) \{[\s\S]*?\.unified-app\.nav-collapsed \{ grid-template-columns: 0 minmax\(0, 1fr\); \}/);
+  /* Without this the workspace auto-places into the column being closed and
+     the whole app renders into a 0px strip. */
+  assert.match(pass, /\.unified-app > \.main-shell \{ grid-column: 2; \}/);
+  // Home is in the bar too, so folding the sidebar never strands anyone.
+  assert.match(page, /className="top-home"/);
+  assert.match(page, /choose\(OVERVIEW_ITEM, "home"\)/);
+  assert.match(page, /const OVERVIEW_ITEM: Item = GROUPS\[0\]\.items\[0\];/);
+});
+
+test("card text sits where it was asked to sit", () => {
+  // The six cards: lifted off the bottom edge and indented.
+  assert.match(pass, /> \.module-bubble > \.module-copy \{\s*\n\s*align-content: center;\s*\n\s*padding-inline-start: 6px;/);
+  assert.match(pass, /> \.module-bubble > \.module-open \{\s*\n\s*padding-inline-start: 6px;/);
+  // The accounting lists line up with the heading, not with the card edge.
+  assert.match(pass, /\.accounting-card \.accounting-links \{ padding-inline-start: 72px; \}/);
+  assert.match(pass, /@media \(max-width: 760px\) \{\s*\n\s*\.accounting-card \.accounting-links \{ padding-inline-start: 0; \}/);
+});
+
 test("responsive rules keep the six cards as cards on small screens", () => {
   assert.match(pass, /@media \(max-width: 700px\) \{/);
   // On a phone the grid becomes one column of full-width cards...
