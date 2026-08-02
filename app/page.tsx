@@ -48,6 +48,7 @@ import {
   Moon,
   Network,
   Package,
+  PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
   Pencil,
@@ -667,6 +668,10 @@ const PRESENCE_ITEM: Item = {
   code: "LP",
   native: "presence",
 };
+/* Home is reachable from the bar as well as the sidebar, so it needs a name
+   outside the GROUPS literal. Read from GROUPS rather than restated, so the
+   two can never describe different things. */
+const OVERVIEW_ITEM: Item = GROUPS[0].items[0];
 const SETTINGS_ITEM: Item = {
   id: "my-settings",
   label: "My Settings",
@@ -3676,6 +3681,11 @@ export default function Home() {
       .__LARSA_ENGINE_HTML || {};
   }, [hydrated]);
   const [menuOpen, setMenuOpen] = useState(false);
+  /* On a wide screen the sidebar is a permanent column. It can now be folded
+     away for the screens that want the width — schedules, ledgers, wide
+     tables — and the choice is remembered per device. On a phone this state is
+     not used at all: there the sidebar is already a drawer driven by menuOpen. */
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
   const [message, setMessage] = useState("");
@@ -3766,6 +3776,9 @@ export default function Home() {
         const trail = JSON.parse(localStorage.getItem("larsa-control-recent-trail") || "[]");
         if (Array.isArray(trail)) setRecentTrail(trail.filter((id) => typeof id === "string").slice(0, 6));
       } catch { /* a corrupt trail is simply ignored */ }
+      try {
+        setNavCollapsed(localStorage.getItem("larsa-control-nav-collapsed") === "1");
+      } catch { /* private mode: the sidebar simply starts open */ }
       setHydrated(true);
     }, 0);
     return () => clearTimeout(timer);
@@ -7077,8 +7090,15 @@ export default function Home() {
       items: group.items.filter((item) => canOpenInSession(sessionUser, item, sessionMethod)),
     }))
     .filter((group) => group.items.length);
+  /* Written straight through rather than in an effect: the sidebar is one
+     boolean, and a person who folds it away expects it folded on the next
+     visit, not on the render after next. */
+  const setNavFolded = (folded: boolean) => {
+    setNavCollapsed(folded);
+    try { localStorage.setItem("larsa-control-nav-collapsed", folded ? "1" : "0"); } catch { /* private mode */ }
+  };
   return (
-    <div className={dark ? "unified-app dark" : "unified-app"}>
+    <div className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}>
       <div
         className={menuOpen ? "scrim open" : "scrim"}
         onClick={() => setMenuOpen(false)}
@@ -7089,6 +7109,9 @@ export default function Home() {
           <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={176} height={68} priority />
           <button type="button" className="close-menu" onClick={() => setMenuOpen(false)} aria-label="Close navigation">
             <X size={18} />
+          </button>
+          <button type="button" className="collapse-menu" onClick={() => setNavFolded(true)} aria-label="Hide the sidebar" title="Hide the sidebar">
+            <PanelLeftClose size={18} />
           </button>
         </div>
         <div className="product-name">
@@ -7164,6 +7187,11 @@ export default function Home() {
                     className={[
                       "nav-item",
                       active.id === item.id ? "active" : "",
+                      // Home is the anchor of the sidebar whether you are
+                      // standing on it or heading back to it, so it carries its
+                      // own treatment in both states rather than only on the
+                      // way out of a portal.
+                      isHome ? "nav-home" : "",
                       leaving ? "nav-home-exit" : "",
                     ].filter(Boolean).join(" ")}
                     onClick={() => choose(item, isHome ? "home" : navChannel)}
@@ -7199,9 +7227,32 @@ export default function Home() {
       <main className="main-shell">
         <header className="topbar">
           <div className="top-left">
-            <button type="button" className="menu-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation" aria-expanded={menuOpen} aria-controls="larsa-main-nav">
+            {/* One button, two jobs: on a phone it opens the drawer, on a wide
+                screen it unfolds the column. Both are "show me the navigation". */}
+            <button
+              type="button"
+              className="menu-button"
+              onClick={() => { setMenuOpen(true); setNavFolded(false); }}
+              aria-label="Show navigation"
+              aria-expanded={menuOpen || !navCollapsed}
+              aria-controls="larsa-main-nav"
+            >
               <PanelLeftOpen size={20} />
             </button>
+            {/* Home must not depend on the sidebar being on screen. It sits in
+                the bar itself, next to the title, wherever you are. */}
+            {active.id !== "overview" && (
+              <button
+                type="button"
+                className="top-home"
+                onClick={() => choose(OVERVIEW_ITEM, "home")}
+                aria-label="Go to Home"
+                title="Home"
+              >
+                <span className="larsa-mark" aria-hidden="true" />
+                <b>Home</b>
+              </button>
+            )}
             <div className="page-heading">
               <h1>{active.label}</h1>
               <p>{active.description}</p>

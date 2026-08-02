@@ -1128,3 +1128,156 @@ aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offs
   background: var(--ink);
   color: var(--panel);
 }
+
+/* --- 19. The sidebar: Home, contrast, and folding it away -----------------
+
+   Three faults, one cause. The contrast pass forced every span inside a nav
+   row to a light grey with !important, to rescue black-on-black text after
+   the Home pill went translucent. But .nav-code — the little tile holding the
+   brand mark — is a span too, and the mark is drawn with currentColor through
+   a mask. So on the white tile the mark was being painted near-white on white
+   and vanished: that empty white square is the whole of it. The same override
+   also outlived the white hover pill it was written for, leaving light text on
+   a white background the moment the pointer touched any row.
+
+   Hover now stays in the sidebar's own language — a translucent wash, not a
+   white pill — so nothing has to fight anything, and Home is stated as the
+   anchor it is rather than one more equal-weight row. */
+
+aside.sidebar .nav-item:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+aside.sidebar .nav-item:hover b { color: #ffffff !important; }
+aside.sidebar .nav-item:hover small { color: #c6ccd6 !important; }
+
+/* The mark tile is white, so what sits on it must be dark. Stated at a weight
+   that clears the blanket span rule above — this is the fix for the blank
+   square. */
+aside.sidebar .nav-item .nav-code { border-radius: 12px; }
+aside.sidebar .nav-item.nav-home .nav-code,
+aside.sidebar .nav-item.active .nav-code,
+aside.sidebar .nav-item:hover .nav-code { background: #ffffff !important; color: #0b0b0c !important; }
+aside.sidebar .nav-item.nav-home .nav-code { width: 34px; height: 34px; border-radius: 14px; }
+aside.sidebar .nav-item.nav-home .larsa-mark { width: 21px; height: 21px; }
+
+/* Home, as the anchor. Bigger type, a real edge, and a subtitle that can
+   actually be read — the old one sat at 62% opacity on near-black. */
+aside.sidebar .nav-item.nav-home {
+  min-height: 58px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  padding: 11px 12px;
+  margin-bottom: 4px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  background: rgba(255, 255, 255, .085);
+}
+aside.sidebar .nav-item.nav-home b { color: #ffffff !important; font-size: 15px; font-weight: 850; letter-spacing: -.01em; }
+aside.sidebar .nav-item.nav-home small { color: #c6ccd6 !important; opacity: 1; font-size: 11.5px; }
+aside.sidebar .nav-item.nav-home:hover { background: rgba(255, 255, 255, .17); border-color: rgba(255, 255, 255, .4); }
+aside.sidebar .nav-item.nav-home.active { border-color: rgba(255, 255, 255, .34); }
+/* The group heading above it was the same grey as the body text it labels. */
+aside.sidebar .nav-group h2 { color: #9198a5; }
+
+/* Same rounding on the account tile, so the sidebar has one corner language. */
+aside.sidebar .sidebar-account .account-open > span { border-radius: 12px; }
+
+/* Folding the sidebar away. On a phone it is already a drawer; this is for the
+   wide screens, where a schedule or a ledger wants the whole width. */
+.collapse-menu {
+  display: none;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-content: center;
+  border: 1px solid #303030;
+  border-radius: 12px;
+  background: #151515;
+  color: #cfd3da;
+  cursor: pointer;
+}
+.collapse-menu:hover { border-color: #4a4a4a; color: #fff; }
+
+@media (min-width: 1025px) {
+  .collapse-menu { display: grid; }
+  /* The reopen control lives in the bar, and only appears when it has
+     something to do. */
+  .unified-app.nav-collapsed .menu-button { display: grid; }
+  .unified-app { transition: grid-template-columns .22s ease; }
+  .unified-app.nav-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+  aside.sidebar { transition: transform .22s ease; }
+  /* The workspace is pinned to the second column by name. Once the sidebar
+     leaves the flow below, auto-placement would otherwise slide the workspace
+     into the first column — the one being closed to nothing — and the whole
+     app would render into a 0px-wide strip. */
+  .unified-app > .main-shell { grid-column: 2; }
+  /* Taken out of the grid before it slides, so the column can close without
+     squashing the navigation on the way out. */
+  .unified-app.nav-collapsed aside.sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 290px;
+    transform: translateX(-100%);
+    pointer-events: none;
+  }
+}
+
+/* Home in the top bar, so it never depends on the sidebar being on screen. */
+.unified-app .top-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 40px;
+  padding: 8px 14px 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 850;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+.unified-app .top-home .larsa-mark { width: 17px; height: 17px; }
+.unified-app .top-home:hover { border-color: var(--ink); background: var(--soft); }
+.unified-app.dark .top-home { background: #1b1f27; border-color: #333a46; }
+.unified-app.dark .top-home:hover { border-color: #6b7484; background: #232833; }
+@media (max-width: 760px) {
+  .unified-app .top-home { padding: 8px; }
+  .unified-app .top-home b { display: none; }
+}
+
+/* --- 20. Where the words sit on a card -----------------------------------
+
+   On the six work-area cards the title, subtitle and OPEN were pinned to the
+   very bottom of a 232px card, leaving a wide empty band under the icon and
+   pushing the words into the bottom corner. They now ride nearer the middle,
+   with a small indent so the text column reads as its own column rather than
+   as something butted against the card edge. */
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-copy {
+  align-content: center;
+  padding-inline-start: 6px;
+}
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-open {
+  padding-inline-start: 6px;
+}
+
+/* On the accounting cards the heading sits beside its icon, but the list of
+   areas started back at the card's edge, underneath the icon — two different
+   left margins in one card. The list now lines up with the heading it belongs
+   to: 60px of icon plus the 12px gap. On a narrow card that indent would cost
+   more than it gives, so there it goes back to full width. */
+.accounting-card .accounting-links { padding-inline-start: 72px; }
+@media (max-width: 760px) {
+  .accounting-card .accounting-links { padding-inline-start: 0; }
+}
+
+/* The mark and the icons are drawn with currentColor, and the blanket span
+   rule above sets that colour with !important — so naming the tile was not
+   enough, the glyph inside it had to be named too. This is the line that
+   actually makes the brand mark visible on its white tile. */
+aside.sidebar .nav-item.nav-home .nav-code .larsa-mark,
+aside.sidebar .nav-item.active .nav-code .larsa-mark,
+aside.sidebar .nav-item:hover .nav-code .larsa-mark {
+  color: #0b0b0c !important;
+  background-color: #0b0b0c !important;
+}
+aside.sidebar .nav-item.active .nav-code svg,
+aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
