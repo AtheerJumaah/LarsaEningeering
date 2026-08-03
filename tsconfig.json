@@ -37,6 +37,8 @@
     "worker/**",
     "worker/**/*",
     "examples/**",
-    "examples/**/*"
+    "examples/**/*",
+    "supabase/functions/**",
+    "supabase/functions/**/*"
   ]
 }
