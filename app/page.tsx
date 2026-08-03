@@ -1,20 +1,31 @@
 "use client";
 
 import Image from "next/image";
+import { createPortal } from "react-dom";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { subscribeToPush, sendPush } from "../lib/supabase/push";
+import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice } from "../lib/supabase/push";
+import {
+  raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
+  fetchSetup, setCategoryPref, setNotifySettings, updateDevice, removeDevice,
+  importLegacy, watchNotifications, notifyConfigured,
+  EMPTY_COUNTS,
+} from "../lib/supabase/notify";
+import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
+  Archive,
   Award,
   BadgeDollarSign,
   Bell,
+  BellOff,
   BookOpen,
   BriefcaseBusiness,
   CalendarDays,
   CheckCircle2,
+  Circle,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -47,6 +58,7 @@ import {
   LockOpen,
   LogOut,
   MessagesSquare,
+  Monitor,
   Moon,
   Network,
   Package,
@@ -66,6 +78,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Smartphone,
   Sun,
   Target,
   Timer,
@@ -80,7 +93,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { ChangeEvent, FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* The three embedded engines keep their state in top-level `const` and `let`
    bindings, which never become window properties, so the only way in from the
@@ -2536,39 +2549,69 @@ function prefsFor(user: StaffUser | null): NotifyPrefs {
   });
   return merged;
 }
-// One place that raises a notification, honouring each recipient's preferences.
+/* Who is raising notifications right now. raiseNotification() is module-level
+   and called from a dozen places that already pass a display name but have no
+   reason to know about actors, so the shell keeps this pointed at the signed-in
+   user and the call sites stay as they were. */
+let notifyActor: { id: string; name: string } | null = null;
+function setNotifyActor(user: StaffUser | null) {
+  notifyActor = user ? { id: user.id, name: user.name } : null;
+}
+
+/* One place that raises a notification.
+ *
+ * The in-app record is unconditional. It is written to Supabase, where it
+ * belongs to its recipient and is readable from every device they sign in on;
+ * a copy is kept in localStorage so the bell still has something to show
+ * offline, and on a deployment with no backend at all. What preferences can
+ * change is only whether it ALSO reaches somebody outside the app — and that
+ * decision is made server-side, by the sender, against preferences that live
+ * with the account rather than on whichever laptop happened to raise it.
+ *
+ * There is no path through this function that skips the in-app record. */
 function raiseNotification(input: {
   event: string; title: string; body: string; itemId?: string;
-  fromName: string; recipients: StaffUser[];
+  fromName: string; recipients: StaffUser[]; dedupeKey?: string;
 }) {
   if (typeof window === "undefined") return;
+  const now = new Date().toISOString();
+  const stamp = Date.now();
+
+  // The local mirror, written first so the bell updates on this device without
+  // waiting for a round trip.
   const store = parseStore(NOTIFY_STORE_KEY) || { version: 1, items: [] };
   const items: AppNotification[] = Array.isArray(store.items) ? store.items : [];
-  const now = new Date().toISOString();
   input.recipients.forEach((person, index) => {
-    const prefs = prefsFor(person)[input.event] || {};
-    if (prefs.inApp !== false) {
-      items.unshift({
-        id: `n${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
-        event: input.event, title: input.title, body: input.body,
-        at: now, toId: person.id, fromName: input.fromName, read: false, itemId: input.itemId,
-      });
-    }
-    if (prefs.push && typeof Notification !== "undefined" && Notification.permission === "granted") {
-      try { new Notification(input.title, { body: input.body, icon: "/icons/icon-192.png" }); } catch { /* blocked */ }
-      // Foreground Notification above covers this tab; sendPush additionally
-      // reaches every other device/browser this person subscribed on, even
-      // fully closed — the "phone" half of push that new Notification() alone
-      // never could.
-      sendPush(person.id, input.title, input.body);
-    }
-    if (prefs.email && person.email) {
-      // Same fire-and-forget contract as sendPush -- a failed email should
-      // never block the in-app/push notification it rides with.
+    items.unshift({
+      id: `n${stamp}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      event: input.event, title: input.title, body: input.body,
+      at: now, toId: person.id, fromName: input.fromName, read: false, itemId: input.itemId,
+    });
+  });
+  try {
+    localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({ version: 1, items: items.slice(0, 400) }));
+  } catch { /* a full quota must not stop the authoritative write below */ }
+
+  if (!notifyConfigured()) return;
+  const actor = notifyActor || { id: input.recipients[0]?.id || "system", name: input.fromName };
+  void raiseNotifications(actor, input.recipients.map((person) => ({
+    userUid: person.id,
+    event: input.event,
+    title: input.title,
+    body: input.body,
+    itemId: input.itemId,
+    // A stable key per (event, recipient, occurrence) so a double-tapped
+    // Approve or a retried save lands once, not twice.
+    dedupeKey: input.dedupeKey ? `${input.dedupeKey}:${person.id}` : undefined,
+  })));
+
+  input.recipients.forEach((person) => {
+    if (person.email && prefsFor(person)[input.event]?.email) {
+      // Email stays a client-side fire-and-forget for now; a failed email must
+      // never block the notification it rides with.
       sendMail({ to: person.email, subject: input.title, html: `<p>${input.body}</p>` });
     }
   });
-  localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({ version: 1, items: items.slice(0, 400) }));
 }
 
 /* ==================================================================
@@ -3756,6 +3799,16 @@ export default function Home() {
   const [recentTrail, setRecentTrail] = useState<string[]>([]);
   const [accessUsers, setAccessUsers] = useState<StaffUser[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  /* The authoritative counts, read from Supabase. The local `notifications`
+     array above is now only a fallback for a deployment with no backend — when
+     one is configured, these are what the bell and the badge believe. */
+  const [notifyCounts, setNotifyCounts] = useState<NotifyCounts>(EMPTY_COUNTS);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [notifyTick, setNotifyTick] = useState(0);
+  /* A notification id arriving from outside the running app — a tapped push
+     banner, or a cold start on /?n=<id>. Held until the session is restored,
+     because arriving signed-out must open the sign-in screen, not the record. */
+  const [pendingNotification, setPendingNotification] = useState<string | null>(null);
   const [growthStore, setGrowthStore] = useState<GrowthStore>({
     version: 1,
     pointTargets: {},
@@ -5227,6 +5280,16 @@ export default function Home() {
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.
     try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
+    /* Release this browser's push subscription. On a shared machine the next
+       person to sign in must not keep receiving the last one's notifications —
+       and a banner on a machine nobody is signed into is a leak whether or not
+       anyone is looking at it. Fire-and-forget: sign-out never waits on it. */
+    const leaving = sessionUserRef.current;
+    if (leaving?.id) void unsubscribeFromPush(leaving.id);
+    setBellOpen(false);
+    setNotifyCounts(EMPTY_COUNTS);
+    setNotifyActor(null);
+    setAppBadge(0);
     sessionUserRef.current = null;
     sessionMethodRef.current = null;
     setSessionUser(null);
@@ -5495,6 +5558,53 @@ export default function Home() {
     }
     setMenuOpen(false);
   };
+
+  /* Opening a notification. The stored itemId is an app item id, never a URL,
+     so the worst a bad value can do is fail to match and leave you where you
+     were — it cannot navigate anywhere that is not already a screen in this
+     app, and it cannot reach a screen this person may not open, because
+     choose() runs the same access check as every other navigation. */
+  const openNotification = (row: { id: string; itemId?: string | null }) => {
+    setBellOpen(false);
+    const actor = sessionUserRef.current;
+    if (actor?.id && notifyConfigured()) {
+      void markNotifications({ id: actor.id, name: actor.name }, [row.id], "read")
+        .then(() => setNotifyTick((value) => value + 1));
+    }
+    if (!row.itemId) return;
+    const target = ITEMS.find((item) => item.id === row.itemId);
+    if (target) choose(target);
+  };
+
+  /* Tapping a push banner should land on the thing it is about, not just focus
+     whatever tab happened to be open. The worker sends the path it validated;
+     the id in it is looked up here and routed in-app, so no reload is needed. */
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data || {};
+      if (data.type !== "larsa:notification-click") return;
+      setNotifyTick((value) => value + 1);
+      if (data.notificationId) setPendingNotification(String(data.notificationId));
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
+
+  /* Cold start from a push: the worker opened /?n=<id> because no window was
+     running. The id is consumed and stripped from the address bar so a later
+     refresh does not re-open it. */
+  useEffect(() => {
+    if (!hydrated) return;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("n");
+    if (!id) return;
+    params.delete("n");
+    const rest = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
+    const timer = window.setTimeout(() => setPendingNotification(id), 0);
+    return () => clearTimeout(timer);
+  }, [hydrated]);
 
   /* Where Back goes. A stack of the areas actually visited this session, not
      the browser's history: this is a single page, so the browser's own Back
@@ -6978,6 +7088,78 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [hydrated, storageTick]);
 
+  /* Keep the module-level actor pointed at whoever is signed in, so a
+     notification raised from anywhere records who raised it. */
+  useEffect(() => { setNotifyActor(sessionUser); }, [sessionUser]);
+
+  /* The counts the bell shows. Re-read on sign-in, on every local change, and
+     whenever the Realtime ping says something moved on another device. */
+  const refreshCounts = useCallback(() => {
+    const actor = sessionUserRef.current;
+    if (!actor?.id || !notifyConfigured()) { setNotifyCounts(EMPTY_COUNTS); return; }
+    fetchCounts({ id: actor.id, name: actor.name }).then(setNotifyCounts).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id) return;
+    refreshCounts();
+  }, [hydrated, sessionUser?.id, notifyTick, storageTick, refreshCounts]);
+
+  /* Read it on the phone, watch the laptop's badge clear. The broadcast
+     carries no content — it only says "go and look again". */
+  useEffect(() => {
+    if (!sessionUser?.id) return;
+    return watchNotifications({ id: sessionUser.id }, () => setNotifyTick((value) => value + 1));
+  }, [sessionUser?.id]);
+
+  /* One import per device, ever. The notifications already sitting in this
+     browser's localStorage are somebody's history, so they are carried into the
+     authoritative store rather than abandoned — and the marker below means
+     opening the app twice does not try again. */
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id || !notifyConfigured()) return;
+    const marker = `larsa-notify-imported-${sessionUser.id}`;
+    try { if (localStorage.getItem(marker)) return; } catch { return; }
+    const legacy = readNotifications().filter((row) => row.toId === sessionUser.id);
+    const finish = () => { try { localStorage.setItem(marker, new Date().toISOString()); } catch { /* private mode */ } };
+    if (!legacy.length) { finish(); return; }
+    importLegacy({ id: sessionUser.id, name: sessionUser.name }, legacy)
+      .then(() => { finish(); setNotifyTick((value) => value + 1); })
+      .catch(() => { /* try again next load rather than losing the history */ });
+  }, [hydrated, sessionUser?.id, sessionUser?.name]);
+
+  /* Resolve a notification arrived at from outside. Waiting for sessionUser is
+     the point: a push tapped on a locked phone must land on the sign-in screen
+     and only then open the record, never show it to whoever picked the phone up. */
+  useEffect(() => {
+    if (!pendingNotification || !sessionUser?.id || !notifyConfigured()) return;
+    let cancelled = false;
+    fetchFeed({ id: sessionUser.id, name: sessionUser.name }, { scope: "all", limit: 100 })
+      .then((feed) => {
+        if (cancelled) return;
+        const row = feed.items.find((item) => item.id === pendingNotification);
+        setPendingNotification(null);
+        // The feed read is itself the authorisation check: notify_feed only
+        // ever returns this person's rows, so an id belonging to someone else
+        // simply is not found and nothing opens.
+        if (row) openNotification({ id: row.id, itemId: row.itemId });
+        else setBellOpen(true);
+      })
+      .catch(() => { if (!cancelled) setPendingNotification(null); });
+    return () => { cancelled = true; };
+    // openNotification closes over stable refs and setters only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNotification, sessionUser?.id, sessionUser?.name]);
+
+  /* The app-icon badge, so a closed PWA still shows there is something waiting. */
+  useEffect(() => {
+    if (!hydrated) return;
+    const count = notifyConfigured()
+      ? notifyCounts.unread
+      : notifications.filter((row) => row.toId === sessionUser?.id && !row.read).length;
+    setAppBadge(sessionUser ? count : 0);
+  }, [hydrated, notifyCounts.unread, notifications, sessionUser]);
+
   // Writes that only touch the signed-in person's own record.
   const saveOwnProfile = useCallback((patch: Partial<StaffUser>) => {
     const actor = sessionUserRef.current;
@@ -7076,26 +7258,12 @@ export default function Home() {
     return true;
   }, [notify]);
 
-  const saveNotifyPrefs = useCallback((prefs: NotifyPrefs) => saveOwnProfile({ notifyPrefs: prefs }), [saveOwnProfile]);
-
-  const markNotificationRead = useCallback((id: string) => {
-    const store = parseStore(NOTIFY_STORE_KEY) || { version: 1, items: [] };
-    const items: AppNotification[] = Array.isArray(store.items) ? store.items : [];
-    localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({
-      version: 1, items: items.map((row) => (row.id === id ? { ...row, read: true } : row)),
-    }));
-    setStorageTick((value) => value + 1);
-  }, []);
-
-  const clearReadNotifications = useCallback(() => {
-    const actor = sessionUserRef.current;
-    const store = parseStore(NOTIFY_STORE_KEY) || { version: 1, items: [] };
-    const items: AppNotification[] = Array.isArray(store.items) ? store.items : [];
-    localStorage.setItem(NOTIFY_STORE_KEY, JSON.stringify({
-      version: 1, items: items.filter((row) => !(row.read && row.toId === actor?.id)),
-    }));
-    setStorageTick((value) => value + 1);
-  }, []);
+  /* The three handlers that used to live here — saveNotifyPrefs,
+     markNotificationRead, clearReadNotifications — are gone. Preferences now
+     belong to the account rather than to the staff record, and read/archive
+     state belongs to the notification row itself, so both are handled by the
+     notify_* RPCs from the bell and the settings panel instead of being
+     threaded down through props. */
 
   const homeSummary = useMemo(
     () => buildHomeSummary(
@@ -7142,7 +7310,18 @@ export default function Home() {
       items: [ACCOUNTING_HUB_ITEM, ...GROUPS.find((group) => group.label === "Accounting")!.items],
     },
   };
-  const unreadCount = notifications.filter((row) => row.toId === sessionUser?.id && !row.read).length;
+  /* Supabase is authoritative when it is there; the local mirror is what the
+     bell falls back to on a deployment with no backend configured. Both the
+     badge and the panel read the SAME object, so a bell showing two unread
+     cannot also claim you are all caught up. */
+  const mine = notifications.filter((row) => row.toId === sessionUser?.id);
+  const effectiveCounts: NotifyCounts = notifyConfigured() ? notifyCounts : {
+    unread: mine.filter((row) => !row.read).length,
+    all: mine.length,
+    archived: 0,
+    byCategory: {},
+  };
+  const unreadCount = effectiveCounts.unread;
   const adminItem = ITEMS.find((item) => item.id === "admin")!;
   const adminNavItems: Item[] = [
     adminItem,
@@ -7376,10 +7555,32 @@ export default function Home() {
               </button>
             )}
             {sessionUser && (
-              <button type="button" className="theme notif-button" onClick={() => choose(SETTINGS_ITEM, "home")} aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications and settings"}>
-                <Bell size={18} />
-                {unreadCount > 0 && <span className="notif-count">{unreadCount > 9 ? "9+" : unreadCount}</span>}
-              </button>
+              <div className="bell-wrap">
+                <button
+                  type="button"
+                  className={bellOpen ? "theme notif-button open" : "theme notif-button"}
+                  onClick={() => setBellOpen((value) => !value)}
+                  aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}
+                  aria-expanded={bellOpen}
+                  aria-haspopup="dialog"
+                  title="Notifications"
+                >
+                  <Bell size={18} />
+                  {unreadCount > 0 && <span className="notif-count">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+                </button>
+                {bellOpen && (
+                  <NotificationBell
+                    user={sessionUser}
+                    counts={effectiveCounts}
+                    tick={notifyTick}
+                    onChanged={() => setNotifyTick((value) => value + 1)}
+                    onOpen={openNotification}
+                    onClose={() => setBellOpen(false)}
+                    onSettings={() => { setBellOpen(false); choose(SETTINGS_ITEM, "home"); }}
+                    localFallback={mine}
+                  />
+                )}
+              </div>
             )}
             {!installed && <button type="button" className="primary" onClick={install}>Install App</button>}
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
@@ -7472,13 +7673,11 @@ export default function Home() {
           <div className={active.native === "settings" ? "native active" : "native"}>
             <MySettings
               user={sessionUser}
-              notifications={notifications}
+              unread={unreadCount}
               dark={dark}
               setDark={setDark}
               saveProfile={saveOwnProfile}
-              savePrefs={saveNotifyPrefs}
-              markRead={markNotificationRead}
-              clearRead={clearReadNotifications}
+              openBell={() => setBellOpen(true)}
               sendCode={sendVerificationCode}
               checkCode={checkEmailCode}
             />
@@ -8166,6 +8365,273 @@ const NOTIFY_GROUP_MATCH: Partial<Record<NotifyGroup, string[]>> = {
   accountants: ["Accountant", "Admin HR"],
   engineers: ["Engineer", "Construction Engineer", "Viewer"],
 };
+
+/* How long ago, in the fewest words that stay true. "3m" beats a timestamp in
+   a list you are scanning; the full date is still in the title attribute for
+   anyone who needs it. */
+function notifyAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+const NOTIFY_PAGE = 12;
+
+/* The bell. The permanent, authoritative notification centre: everything that
+   was ever raised for this person is reachable here, from any device they sign
+   in on, whatever their alert preferences say. Preferences live in Settings and
+   govern only what happens OUTSIDE the app. */
+function NotificationBell({
+  user, counts, tick, onChanged, onOpen, onClose, onSettings, localFallback,
+}: {
+  user: StaffUser;
+  counts: NotifyCounts;
+  tick: number;
+  onChanged: () => void;
+  onOpen: (row: { id: string; itemId?: string | null }) => void;
+  onClose: () => void;
+  onSettings: () => void;
+  localFallback: AppNotification[];
+}) {
+  const [scope, setScope] = useState<"all" | "unread" | "archived">("all");
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [rows, setRows] = useState<NotifyRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [busy, setBusy] = useState(true);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ top: number; end: number } | null>(null);
+  const offline = !notifyConfigured();
+
+  /* The panel is rendered into <body>, not next to the bell.
+     The topbar carries backdrop-filter, and a filtered element becomes the
+     containing block for its fixed-position descendants — so a sheet asking to
+     sit at the bottom of the screen would instead sit at the bottom of the
+     topbar. Portalling out sidesteps that, and the anchor is then measured
+     from the button rather than assumed from the bar's height, which also
+     keeps it right under an installed window's title-bar inset. */
+  useEffect(() => {
+    const place = () => {
+      const button = document.querySelector(".notif-button");
+      if (!button) return;
+      const box = button.getBoundingClientRect();
+      setAnchor({ top: Math.round(box.bottom + 10), end: Math.round(window.innerWidth - box.right) });
+    };
+    const timer = window.setTimeout(place, 0);
+    window.addEventListener("resize", place);
+    return () => { clearTimeout(timer); window.removeEventListener("resize", place); };
+  }, []);
+
+  // Typing in the search box should not fire a query per keystroke.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setQuery(search); setPage(0); }, 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  /* With no backend configured there is nothing to fetch: this device's own
+     copy IS the feed, so it is derived during render rather than pushed into
+     state by an effect. */
+  const localRows = useMemo(() => {
+    if (!offline) return null;
+    const needle = query.trim().toLowerCase();
+    const mine = localFallback
+      .filter((row) => (scope === "unread" ? !row.read : scope === "archived" ? false : true))
+      .filter((row) => !needle || `${row.title} ${row.body}`.toLowerCase().includes(needle));
+    return {
+      total: mine.length,
+      items: mine.slice(0, (page + 1) * NOTIFY_PAGE).map((row): NotifyRow => ({
+        id: row.id, event: row.event, category: "system", title: row.title, body: row.body,
+        itemId: row.itemId || null, actorName: row.fromName, createdAt: row.at,
+        readAt: row.read ? row.at : null, archivedAt: null,
+      })),
+    };
+  }, [offline, localFallback, scope, query, page]);
+
+  useEffect(() => {
+    if (offline) return;
+    let cancelled = false;
+    // "Show older" asks for a longer page rather than a second one, so the list
+    // you are already reading stays put instead of being replaced under you.
+    const wanted = NOTIFY_PAGE * (page + 1);
+    fetchFeed({ id: user.id, name: user.name }, { scope, search: query, limit: wanted, offset: 0 })
+      .then((feed) => {
+        if (cancelled) return;
+        setRows(feed.items);
+        setTotal(feed.total);
+        setBusy(false);
+      })
+      .catch(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [user.id, user.name, scope, query, page, tick, offline]);
+
+  // Click-away and Escape, the two ways anyone expects a panel like this to close.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    // Typed against the DOM MouseEvent explicitly: React's synthetic MouseEvent
+    // is in scope here and would otherwise win the name.
+    const onDown = (event: globalThis.MouseEvent) => {
+      const node = panelRef.current;
+      if (!node) return;
+      const target = event.target as Node;
+      if (!node.contains(target) && !(target as HTMLElement)?.closest?.(".notif-button")) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [onClose]);
+
+  const act = async (ids: string[], action: "read" | "unread" | "archive" | "unarchive") => {
+    if (offline || !ids.length) return;
+    await markNotifications({ id: user.id, name: user.name }, ids, action);
+    onChanged();
+  };
+
+  const allRead = async () => {
+    if (offline) return;
+    await markAllRead({ id: user.id, name: user.name });
+    onChanged();
+  };
+
+  const feedRows = localRows ? localRows.items : rows;
+  const feedTotal = localRows ? localRows.total : total;
+  const shown = feedRows.length;
+
+  const panel = (
+    <div
+      className="bell-panel"
+      ref={panelRef}
+      role="dialog"
+      aria-label="Notifications"
+      style={anchor
+        ? ({ "--bell-top": `${anchor.top}px`, "--bell-end": `${anchor.end}px` } as CSSProperties)
+        : undefined}
+    >
+      <header className="bell-head">
+        <div>
+          <b>Notifications</b>
+          <small>{counts.unread ? `${counts.unread} unread` : "All caught up"}</small>
+        </div>
+        <div className="bell-head-actions">
+          {counts.unread > 0 && (
+            <button type="button" onClick={allRead} title="Mark everything as read">
+              <CheckCircle2 size={15} /> Mark all read
+            </button>
+          )}
+          <button type="button" onClick={onSettings} title="Notification settings" aria-label="Notification settings">
+            <Settings size={15} />
+          </button>
+          <button type="button" onClick={onClose} aria-label="Close notifications"><X size={15} /></button>
+        </div>
+      </header>
+
+      <div className="bell-filters" role="tablist" aria-label="Filter notifications">
+        {([["all", "All", counts.all], ["unread", "Unread", counts.unread], ["archived", "Archived", counts.archived]] as const)
+          .map(([id, label, count]) => (
+            <button
+              key={id} type="button" role="tab" aria-selected={scope === id}
+              className={scope === id ? "active" : ""}
+              onClick={() => { setScope(id); setPage(0); }}
+            >
+              {label}{count > 0 && <i>{count}</i>}
+            </button>
+          ))}
+      </div>
+
+      <label className="bell-search">
+        <Search size={14} aria-hidden="true" />
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search notifications"
+          aria-label="Search notifications"
+        />
+        {search && <button type="button" onClick={() => setSearch("")} aria-label="Clear search"><X size={13} /></button>}
+      </label>
+
+      <div className="bell-list">
+        {busy && !shown && !offline && <div className="bell-empty">Loading…</div>}
+        {(!busy || offline) && !shown && (
+          <div className="bell-empty">
+            {query ? `Nothing matches “${query}”.`
+              : scope === "unread" ? "Nothing unread. You are all caught up."
+              : scope === "archived" ? "Nothing archived yet."
+              : "No notifications yet. They appear here as work happens."}
+          </div>
+        )}
+        {feedRows.map((row) => (
+          <article key={row.id} className={row.readAt ? "bell-row" : "bell-row unread"}>
+            <button type="button" className="bell-open" onClick={() => onOpen({ id: row.id, itemId: row.itemId })}>
+              <i aria-hidden="true" className={`bell-dot cat-${row.category}`} />
+              <span>
+                <b>{row.title}</b>
+                {row.body && <small>{row.body}</small>}
+                <em title={new Date(row.createdAt).toLocaleString()}>
+                  {row.actorName} · {notifyAgo(row.createdAt)}
+                </em>
+              </span>
+            </button>
+            <div className="bell-row-actions">
+              {!offline && (
+                <button
+                  type="button"
+                  onClick={() => act([row.id], row.readAt ? "unread" : "read")}
+                  aria-label={row.readAt ? "Mark as unread" : "Mark as read"}
+                  title={row.readAt ? "Mark as unread" : "Mark as read"}
+                >
+                  {row.readAt ? <Circle size={14} /> : <CheckCircle2 size={14} />}
+                </button>
+              )}
+              {!offline && (
+                <button
+                  type="button"
+                  onClick={() => act([row.id], row.archivedAt ? "unarchive" : "archive")}
+                  aria-label={row.archivedAt ? "Restore from archive" : "Archive"}
+                  title={row.archivedAt ? "Restore" : "Archive"}
+                >
+                  {row.archivedAt ? <ArrowLeft size={14} /> : <Archive size={14} />}
+                </button>
+              )}
+            </div>
+          </article>
+        ))}
+        {shown < feedTotal && (
+          <button type="button" className="bell-more" onClick={() => setPage((value) => value + 1)}>
+            Show older ({feedTotal - shown} more)
+          </button>
+        )}
+      </div>
+
+      <footer className="bell-foot">
+        {offline
+          ? "Showing this device only — no account storage is configured, so notifications are not shared between devices."
+          : "Every notification stays here permanently, on every device you sign in on."}
+      </footer>
+    </div>
+  );
+
+  // Measure first: rendering at the wrong place and then jumping is worse
+  // than appearing a frame later in the right one.
+  if (!anchor || typeof document === "undefined") return null;
+  /* Into the shell root, not <body>. Far enough out to escape the topbar's
+     backdrop-filter, but still inside .unified-app — so `.unified-app.dark
+     .bell-panel` keeps matching and the panel is not a white rectangle in a
+     dark app. The shell root is a plain grid with no transform or filter of
+     its own, so fixed positioning still resolves against the viewport. */
+  const host = document.querySelector(".unified-app") || document.body;
+  return createPortal(panel, host);
+}
 
 function NotificationsCenter({
   users,
@@ -12103,18 +12569,293 @@ function RequestsCentre({
   );
 }
 
+/* Settings → Notifications.
+ *
+ * Everything on this screen governs alerts OUTSIDE the app. Nothing here can
+ * stop a notification being created, and nothing here can remove one from the
+ * bell — which is why the panel says so in as many words rather than leaving
+ * people to guess whether turning something off loses them the record. */
+function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: () => void }) {
+  const [setup, setSetup] = useState<NotifySetup | null>(null);
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
+  const [subscribed, setSubscribed] = useState(false);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+  const configured = notifyConfigured();
+  const supported = pushSupported();
+  const needsHomeScreen = pushNeedsHomeScreen();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPermission(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+    }, 0);
+    void thisDeviceSubscribed().then(setSubscribed);
+    return () => clearTimeout(timer);
+  }, [tick]);
+
+  useEffect(() => {
+    if (!user?.id || !configured) return;
+    let cancelled = false;
+    fetchSetup({ id: user.id, name: user.name }).then((data) => { if (!cancelled) setSetup(data); });
+    return () => { cancelled = true; };
+  }, [user?.id, user?.name, configured, tick]);
+
+  const enable = async () => {
+    if (!user?.id) { setMessage("Sign in again before turning alerts on."); return; }
+    setBusy(true);
+    const outcome = await subscribeToPush(user.id, user.name);
+    setBusy(false);
+    setMessage(outcome.message);
+    setTick((value) => value + 1);
+  };
+
+  const disable = async () => {
+    if (!user?.id) return;
+    setBusy(true);
+    await unsubscribeFromPush(user.id);
+    setBusy(false);
+    setMessage("Alerts are off on this device. Notifications still arrive in the bell.");
+    setTick((value) => value + 1);
+  };
+
+  const testAlert = async () => {
+    if (!user?.id) return;
+    setBusy(true);
+    // A real notification through the real path — raised, queued, and pushed by
+    // the sender — because a fake local banner would prove only that this tab
+    // can draw one, which is not the thing anybody is trying to find out.
+    await raiseNotifications({ id: user.id, name: user.name }, [{
+      userUid: user.id,
+      event: "account.test",
+      title: "Test notification",
+      body: "If this reached your device outside the app, alerts are working.",
+      dedupeKey: `test:${Date.now()}`,
+    }]);
+    setBusy(false);
+    setMessage("Sent. It is in your bell now; the device alert follows within a few seconds.");
+  };
+
+  const setPref = async (category: string, push: boolean, mail: boolean) => {
+    if (!user?.id || !setup) return;
+    setSetup({
+      ...setup,
+      categories: setup.categories.map((row) => (row.id === category ? { ...row, push, mail } : row)),
+    });
+    await setCategoryPref({ id: user.id, name: user.name }, category, push, mail);
+  };
+
+  const saveSettings = async (patch: Partial<NonNullable<NotifySetup>["settings"]>) => {
+    if (!user?.id || !setup) return;
+    const next = { ...setup.settings, ...patch };
+    setSetup({ ...setup, settings: next });
+    await setNotifySettings({ id: user.id, name: user.name }, next);
+  };
+
+  const deviceAction = async (id: string, patch: { enabled?: boolean } | "remove") => {
+    if (!user?.id) return;
+    if (patch === "remove") await removeDevice({ id: user.id, name: user.name }, id);
+    else await updateDevice({ id: user.id, name: user.name }, id, patch);
+    setTick((value) => value + 1);
+  };
+
+  const quietOn = setup?.settings.quietFrom !== null && setup?.settings.quietFrom !== undefined;
+
+  return (
+    <section className="settings-panel notify-settings">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">Notifications</span>
+          <h3>Alerts outside the app</h3>
+        </div>
+        <button type="button" className="secondary" onClick={openBell}>
+          <Bell size={15} /> Open notification centre
+        </button>
+      </div>
+
+      {/* The one sentence this whole screen depends on people believing. */}
+      <p className="notify-promise">
+        All Larsa Control notifications always remain available in the notification bell.
+        These settings control only alerts outside the app.
+      </p>
+
+      {message && <div className="settings-note">{message}</div>}
+
+      <div className="notify-device-state">
+        {!configured && (
+          <div className="notify-state warn">
+            <BellOff size={18} />
+            <span><b>Not configured for this deployment</b>
+              <small>Account storage is not set up, so alerts outside the app are unavailable. The bell still works on this device.</small></span>
+          </div>
+        )}
+        {configured && !supported && (
+          <div className="notify-state warn">
+            <BellOff size={18} />
+            <span><b>This browser cannot deliver alerts</b>
+              <small>Notifications still arrive in the bell. Try Chrome, Edge, Firefox, or Safari on a supported device.</small></span>
+          </div>
+        )}
+        {configured && supported && needsHomeScreen && (
+          <div className="notify-state warn">
+            <Smartphone size={18} />
+            <span><b>Add to Home Screen first</b>
+              <small>On iPhone and iPad, tap Share then “Add to Home Screen”, and open Larsa Control from the icon. Safari only delivers alerts to the installed app.</small></span>
+          </div>
+        )}
+        {configured && supported && !needsHomeScreen && permission === "denied" && (
+          <div className="notify-state warn">
+            <BellOff size={18} />
+            <span><b>Blocked in this browser</b>
+              <small>Allow notifications for this site in your browser&apos;s site settings, then come back and turn them on.</small></span>
+          </div>
+        )}
+        {configured && supported && !needsHomeScreen && permission !== "denied" && (
+          <div className={subscribed ? "notify-state on" : "notify-state"}>
+            <Bell size={18} />
+            <span>
+              <b>{subscribed ? "Alerts are on for this device" : "Alerts are off on this device"}</b>
+              <small>{describeThisDevice().label}</small>
+            </span>
+            <div className="notify-state-actions">
+              {subscribed
+                ? <button type="button" className="secondary" disabled={busy} onClick={disable}>Turn off here</button>
+                : <button type="button" className="primary" disabled={busy} onClick={enable}>Turn on here</button>}
+              {subscribed && <button type="button" className="secondary" disabled={busy} onClick={testAlert}>Send a test</button>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {configured && setup && (
+        <>
+          <div className="section-head sub">
+            <div><h4>What to be alerted about</h4>
+              <small>Turned off here, it still arrives in the bell — it just will not interrupt you.</small></div>
+          </div>
+          <div className="notify-cats">
+            {setup.categories.map((category) => (
+              <div key={category.id} className="notify-cat">
+                <span>
+                  <b>{category.label}</b>
+                  <small>{category.description}</small>
+                  {category.sensitive && (
+                    <em title="Amounts are never shown in a device alert">
+                      Alerts for this never show figures on a lock screen
+                    </em>
+                  )}
+                </span>
+                <label className="notify-switch">
+                  <input
+                    type="checkbox"
+                    checked={category.push}
+                    aria-label={`Device alerts for ${category.label}`}
+                    onChange={(event) => setPref(category.id, event.target.checked, category.mail)}
+                  />
+                  <i aria-hidden="true" />
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <div className="section-head sub">
+            <div><h4>Quiet hours</h4>
+              <small>Alerts are held during these hours. Notifications still arrive in the bell straight away.</small></div>
+          </div>
+          <div className="notify-quiet">
+            <label className="notify-switch inline">
+              <input
+                type="checkbox"
+                checked={Boolean(quietOn)}
+                aria-label="Use quiet hours"
+                onChange={(event) => saveSettings(event.target.checked
+                  ? { quietFrom: 22, quietTo: 7 }
+                  : { quietFrom: null, quietTo: null })}
+              />
+              <i aria-hidden="true" />
+              <span>Use quiet hours</span>
+            </label>
+            {quietOn && (
+              <div className="notify-quiet-range">
+                <label>From
+                  <select value={String(setup.settings.quietFrom ?? 22)}
+                    onChange={(event) => saveSettings({ quietFrom: Number(event.target.value) })}>
+                    {Array.from({ length: 24 }, (_, hour) => (
+                      <option key={hour} value={hour}>{String(hour).padStart(2, "0")}:00</option>
+                    ))}
+                  </select>
+                </label>
+                <label>Until
+                  <select value={String(setup.settings.quietTo ?? 7)}
+                    onChange={(event) => saveSettings({ quietTo: Number(event.target.value) })}>
+                    {Array.from({ length: 24 }, (_, hour) => (
+                      <option key={hour} value={hour}>{String(hour).padStart(2, "0")}:00</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+            <label className="notify-switch inline">
+              <input
+                type="checkbox"
+                checked={setup.settings.badge}
+                aria-label="Show a count on the app icon"
+                onChange={(event) => saveSettings({ badge: event.target.checked })}
+              />
+              <i aria-hidden="true" />
+              <span>Show the unread count on the app icon</span>
+            </label>
+          </div>
+
+          <div className="section-head sub">
+            <div><h4>Your devices</h4>
+              <small>Every browser and installed app you have turned alerts on for.</small></div>
+          </div>
+          <div className="notify-devices">
+            {setup.devices.map((device) => (
+              <div key={device.id} className="notify-device">
+                <span>
+                  {device.platform === "iPhone" || device.platform === "iPad" || device.platform === "Android"
+                    ? <Smartphone size={16} /> : <Monitor size={16} />}
+                  <b>{device.label}</b>
+                  <small>Last used {notifyAgo(device.lastSeen)}</small>
+                </span>
+                <div className="notify-device-actions">
+                  <label className="notify-switch">
+                    <input
+                      type="checkbox"
+                      checked={device.enabled}
+                      aria-label={`Alerts on ${device.label}`}
+                      onChange={(event) => deviceAction(device.id, { enabled: event.target.checked })}
+                    />
+                    <i aria-hidden="true" />
+                  </label>
+                  <button type="button" aria-label={`Remove ${device.label}`} title="Remove this device"
+                    onClick={() => deviceAction(device.id, "remove")}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!setup.devices.length && (
+              <div className="empty compact">No devices yet. Turn alerts on above to add this one.</div>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function MySettings({
-  user, notifications, dark, setDark, saveProfile, savePrefs, markRead, clearRead,
-  sendCode, checkCode,
+  user, unread, dark, setDark, saveProfile, openBell, sendCode, checkCode,
 }: {
   user: StaffUser | null;
-  notifications: AppNotification[];
+  unread: number;
   dark: boolean;
   setDark: (value: boolean) => void;
   saveProfile: (patch: Partial<StaffUser>) => boolean;
-  savePrefs: (prefs: NotifyPrefs) => boolean;
-  markRead: (id: string) => void;
-  clearRead: () => void;
+  openBell: () => void;
   sendCode: (email: string) => Promise<string>;
   checkCode: (email: string, code: string) => Promise<string>;
 }) {
@@ -12163,46 +12904,20 @@ function MySettings({
     setPending(null);
     setGuardCode("");
   };
-  const [tab, setTab] = useState<"profile" | "security" | "notifications" | "inbox">("profile");
+  const [tab, setTab] = useState<"profile" | "security" | "notifications">("profile");
   const [profile, setProfile] = useState({
     email: user?.email || "", phone: user?.phone || "",
     location: user?.location || "", department: user?.department || "",
   });
   const [secret, setSecret] = useState({ password: "", confirm: "", pin: "" });
   const [message, setMessage] = useState("");
-  const [pushState, setPushState] = useState<string>("default");
-  const prefs = prefsFor(user);
 
   useEffect(() => {
     setProfile({
       email: user?.email || "", phone: user?.phone || "",
       location: user?.location || "", department: user?.department || "",
     });
-    if (typeof Notification !== "undefined") setPushState(Notification.permission);
   }, [user]);
-
-  const mine = notifications.filter((row) => row.toId === user?.id);
-  const unread = mine.filter((row) => !row.read).length;
-
-  const askPush = async () => {
-    if (typeof Notification === "undefined") { setMessage("This browser does not support push notifications."); return; }
-    if (!user?.id) { setMessage("Sign in again before enabling push notifications."); return; }
-    // subscribeToPush both asks permission and registers this device with
-    // Supabase, so a notification can actually reach it later even fully
-    // closed — plain Notification.requestPermission() alone only covers
-    // this tab while it's open.
-    const outcome = await subscribeToPush(user.id);
-    if (typeof Notification !== "undefined") setPushState(Notification.permission);
-    setMessage(outcome);
-  };
-  const toggle = (eventId: string, channel: NotifyChannel, value: boolean) => {
-    savePrefs({ ...prefs, [eventId]: { ...prefs[eventId], [channel]: value } });
-  };
-  const setAll = (channel: NotifyChannel, value: boolean) => {
-    const next: NotifyPrefs = {};
-    NOTIFY_EVENTS.forEach((event) => { next[event.id] = { ...prefs[event.id], [channel]: value }; });
-    savePrefs(next);
-  };
 
   return (
     <div className="native-scroll settings-scroll">
@@ -12218,7 +12933,7 @@ function MySettings({
 
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">
         {([["profile", "Profile", IdCard], ["security", "Sign-in", KeyRound],
-           ["notifications", "Notifications", Bell], ["inbox", `Inbox${unread ? ` (${unread})` : ""}`, ClipboardList]] as const)
+           ["notifications", "Notifications", Bell]] as const)
           .map(([id, label, Icon]) => (
             <button type="button" key={id} role="tab" aria-selected={tab === id}
               className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
@@ -12308,76 +13023,8 @@ function MySettings({
         </section>
       )}
 
-      {tab === "notifications" && (
-        <section className="settings-panel">
-          <div className="section-head">
-            <div><span className="eyebrow">Notifications</span><h3>Choose what reaches you, and how</h3></div>
-            <button type="button" className="secondary" onClick={askPush}>
-              <Bell size={15} /> {pushState === "granted" ? "Push enabled" : "Enable push on this device"}
-            </button>
-          </div>
-          <div className="data-table-wrap">
-            <table className="data-table notify-table">
-              <thead>
-                <tr>
-                  <th>Event</th>
-                  {(["inApp", "email", "push"] as NotifyChannel[]).map((channel) => (
-                    <th key={channel}>
-                      {channel === "inApp" ? "In app" : channel === "email" ? "Email" : "Push"}
-                      <button type="button" className="col-all" onClick={() => setAll(channel, !NOTIFY_EVENTS.every((event) => prefs[event.id]?.[channel]))}>
-                        {NOTIFY_EVENTS.every((event) => prefs[event.id]?.[channel]) ? "None" : "All"}
-                      </button>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {NOTIFY_EVENTS.map((event) => (
-                  <tr key={event.id}>
-                    <td><b>{event.label}</b><small>{event.description}</small></td>
-                    {(["inApp", "email", "push"] as NotifyChannel[]).map((channel) => (
-                      <td key={channel} className="notify-cell">
-                        <input
-                          type="checkbox"
-                          aria-label={`${event.label}: ${channel}`}
-                          checked={Boolean(prefs[event.id]?.[channel])}
-                          onChange={(changed) => toggle(event.id, channel, changed.target.checked)}
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="builder-note">
-            In-app notices appear in your Inbox. Push uses this browser and needs permission once per device.
-            Email is recorded against your address and sent by the mail connector when one is configured.
-          </p>
-        </section>
-      )}
+      {tab === "notifications" && <NotifySettings user={user} openBell={openBell} />}
 
-      {tab === "inbox" && (
-        <section className="settings-panel">
-          <div className="section-head">
-            <div><span className="eyebrow">Inbox</span><h3>{mine.length} notification{mine.length === 1 ? "" : "s"}</h3></div>
-            {mine.some((row) => row.read) && <button type="button" className="secondary" onClick={clearRead}>Clear read</button>}
-          </div>
-          <div className="inbox-list">
-            {mine.map((row) => (
-              <button type="button" key={row.id} className={row.read ? "inbox-row" : "inbox-row unread"} onClick={() => markRead(row.id)}>
-                <i aria-hidden="true" />
-                <span>
-                  <b>{row.title}</b>
-                  <small>{row.body}</small>
-                  <em>{row.fromName} · {new Date(row.at).toLocaleString()}</em>
-                </span>
-              </button>
-            ))}
-            {!mine.length && <div className="empty compact">Nothing yet. Notifications appear here as work happens.</div>}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

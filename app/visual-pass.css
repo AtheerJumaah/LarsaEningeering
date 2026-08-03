@@ -1589,3 +1589,298 @@ i.is-due { background: #d97706; }
 .unified-app .pay-button { color: var(--ink); }
 .unified-app .pay-button:hover { border-color: var(--ink); background: var(--soft); }
 .unified-app.dark .pay-button:hover { border-color: #6b7484; background: #232833; }
+
+/* --- 25. The notification centre ------------------------------------------
+   The bell is now a panel, not a trip to Settings. It hangs off the bell
+   button, closes on Escape or a click outside, and on a narrow screen it
+   stops pretending to be a dropdown and takes the width it needs. */
+.bell-wrap { position: relative; display: inline-flex; }
+.unified-app .notif-button.open {
+  border-color: var(--ink);
+  background: var(--soft);
+}
+.unified-app.dark .notif-button.open { border-color: #6b7484; background: #232833; }
+
+/* Fixed, and rendered into <body> rather than beside the bell: the topbar
+   carries a backdrop-filter, and a filtered element becomes the containing
+   block for anything fixed inside it — so a bottom sheet would anchor to the
+   bottom of the bar instead of the screen. The anchor comes in as two custom
+   properties measured from the button itself. */
+.bell-panel {
+  position: fixed;
+  top: var(--bell-top, 84px);
+  inset-inline-end: var(--bell-end, 18px);
+  z-index: 60;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(70vh, 620px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface-raised, #fff);
+  box-shadow: 0 24px 60px rgba(15, 18, 25, .18), 0 2px 8px rgba(15, 18, 25, .08);
+  overflow: hidden;
+  animation: bell-in .14s ease-out;
+}
+.unified-app.dark .bell-panel {
+  background: #171b22;
+  border-color: #2b313c;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+@keyframes bell-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .bell-panel { animation: none; } }
+
+.bell-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 13px 15px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.bell-head b { display: block; font-size: 14.5px; font-weight: 850; }
+.bell-head small { display: block; font-size: 11.5px; font-weight: 650; color: var(--text-2, var(--muted)); }
+.bell-head-actions { display: flex; align-items: center; gap: 4px; }
+.bell-head-actions button {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 30px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: 9px;
+  background: none; color: var(--text-2, var(--muted));
+  font-size: 11.5px; font-weight: 750; cursor: pointer;
+}
+.bell-head-actions button:hover { background: var(--soft); color: var(--ink); }
+.unified-app.dark .bell-head-actions button:hover { background: #232833; color: #e9ecf1; }
+
+.bell-filters { display: flex; gap: 4px; padding: 10px 12px 0; }
+.bell-filters button {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 30px; padding: 0 11px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: none; color: var(--text-2, var(--muted));
+  font-size: 12px; font-weight: 750; cursor: pointer;
+}
+.bell-filters button:hover { border-color: var(--ink); color: var(--ink); }
+.bell-filters button.active {
+  background: var(--ink); border-color: var(--ink); color: var(--panel);
+}
+.unified-app.dark .bell-filters button.active { background: #e9ecf1; border-color: #e9ecf1; color: #12151b; }
+.bell-filters button i {
+  font-style: normal; font-size: 10.5px; font-weight: 850;
+  padding: 1px 5px; border-radius: 999px; background: var(--soft); color: var(--text-2, var(--muted));
+}
+.bell-filters button.active i { background: rgba(255,255,255,.22); color: inherit; }
+
+.bell-search {
+  display: flex; align-items: center; gap: 7px;
+  margin: 10px 12px 4px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--soft); color: var(--text-2, var(--muted));
+}
+.unified-app.dark .bell-search { background: #1d222b; border-color: #2b313c; }
+.bell-search input {
+  flex: 1; min-width: 0; min-height: 34px;
+  border: 0; background: none; color: var(--ink);
+  font-size: 13px; font-weight: 600; outline: none; padding: 0;
+}
+.bell-search button {
+  border: 0; background: none; cursor: pointer; padding: 2px;
+  color: var(--text-2, var(--muted)); display: inline-flex;
+}
+
+.bell-list { flex: 1; overflow-y: auto; padding: 6px 8px 10px; }
+.bell-empty {
+  padding: 30px 18px; text-align: center;
+  font-size: 12.5px; font-weight: 650; color: var(--text-2, var(--muted));
+}
+.bell-row {
+  display: flex; align-items: stretch; gap: 2px;
+  border-radius: 13px;
+}
+.bell-row:hover { background: var(--soft); }
+.unified-app.dark .bell-row:hover { background: #1d222b; }
+.bell-open {
+  flex: 1; min-width: 0;
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px; border: 0; border-radius: 13px;
+  background: none; color: inherit; text-align: start; cursor: pointer;
+}
+.bell-open > span { display: grid; gap: 2px; min-width: 0; }
+.bell-open b {
+  font-size: 13px; font-weight: 750; line-height: 1.35; color: var(--ink);
+  /* Two lines is enough to know what this is; the rest is behind the tap. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.bell-row.unread .bell-open b { font-weight: 850; }
+.bell-open small {
+  font-size: 12px; font-weight: 600; line-height: 1.4; color: var(--text-2, var(--muted));
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.bell-open em {
+  font-style: normal; font-size: 10.5px; font-weight: 700;
+  color: var(--text-disabled, var(--muted)); margin-top: 1px;
+}
+/* The unread marker doubles as the category colour, so a glance down the list
+   separates pay from attendance without a word of extra text. */
+.bell-dot {
+  width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
+  flex: none; background: transparent; border: 1.5px solid transparent;
+}
+.bell-row.unread .bell-dot { background: #f2603c; }
+.bell-row.unread .bell-dot.cat-pay,
+.bell-row.unread .bell-dot.cat-accounting { background: #1f9d76; }
+.bell-row.unread .bell-dot.cat-leave,
+.bell-row.unread .bell-dot.cat-schedule,
+.bell-row.unread .bell-dot.cat-attendance { background: #3d7ff2; }
+.bell-row.unread .bell-dot.cat-performance,
+.bell-row.unread .bell-dot.cat-development { background: #a561d8; }
+.bell-row-actions {
+  display: flex; align-items: center; gap: 1px; padding-inline-end: 6px;
+  opacity: 0; transition: opacity .12s ease;
+}
+.bell-row:hover .bell-row-actions,
+.bell-row:focus-within .bell-row-actions { opacity: 1; }
+/* On touch there is no hover, so the actions are simply always there. */
+@media (hover: none) { .bell-row-actions { opacity: 1; } }
+.bell-row-actions button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: 0; border-radius: 8px;
+  background: none; color: var(--text-2, var(--muted)); cursor: pointer;
+}
+.bell-row-actions button:hover { background: var(--line); color: var(--ink); }
+.bell-more {
+  width: 100%; min-height: 36px; margin-top: 4px;
+  border: 1px dashed var(--line); border-radius: 12px;
+  background: none; color: var(--text-2, var(--muted));
+  font-size: 12px; font-weight: 750; cursor: pointer;
+}
+.bell-more:hover { border-color: var(--ink); color: var(--ink); }
+.bell-foot {
+  padding: 9px 15px 11px; border-top: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 650; line-height: 1.45;
+  color: var(--text-disabled, var(--muted));
+}
+
+@media (max-width: 620px) {
+  /* Below this a floating panel anchored to a 38px button is a worse shape
+     than a sheet: it would be almost as wide as the screen anyway. */
+  .bell-panel {
+    top: auto;
+    bottom: 0;
+    inset-inline: 0;
+    width: 100%;
+    max-height: 78vh;
+    border-radius: 22px 22px 0 0;
+    border-bottom: 0;
+  }
+  @keyframes bell-in {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+  }
+}
+
+/* --- 26. Settings → Notifications ----------------------------------------
+   Everything here governs alerts outside the app, so the promise about the
+   bell is stated once, prominently, rather than left to be inferred. */
+.notify-promise {
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--soft);
+  font-size: 12.5px; font-weight: 700; line-height: 1.5; color: var(--ink);
+}
+.unified-app.dark .notify-promise { background: #1d222b; border-color: #2b313c; border-inline-start-color: #e9ecf1; }
+
+/* Icon and label on one line: the section head is a flex row, and a bare
+   <svg> + text inside a button wraps without this. */
+.notify-settings .section-head > button {
+  display: inline-flex; align-items: center; gap: 7px;
+  flex: none; white-space: nowrap; min-height: 36px;
+}
+.notify-device-state { display: grid; gap: 9px; margin-bottom: 6px; }
+.notify-state {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 13px 15px;
+  border: 1px solid var(--line); border-radius: 15px;
+  background: var(--surface-raised, #fff);
+}
+.unified-app.dark .notify-state { background: #171b22; border-color: #2b313c; }
+.notify-state > span { flex: 1 1 220px; display: grid; gap: 2px; min-width: 0; }
+.notify-state b { font-size: 13.5px; font-weight: 850; }
+.notify-state small { font-size: 11.5px; font-weight: 650; line-height: 1.45; color: var(--text-2, var(--muted)); }
+.notify-state.on { border-color: #1f9d76; }
+.notify-state.on > svg { color: #1f9d76; }
+.notify-state.warn { border-color: #d9822b; }
+.notify-state.warn > svg { color: #d9822b; }
+.notify-state-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.notify-state-actions button { min-height: 34px; }
+
+.section-head.sub { margin: 20px 0 9px; }
+.section-head.sub h4 { margin: 0; font-size: 14px; font-weight: 850; }
+.section-head.sub small { display: block; margin-top: 2px; font-size: 11.5px; font-weight: 650; color: var(--text-2, var(--muted)); }
+
+.notify-cats { display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 15px; overflow: hidden; background: var(--line); }
+.notify-cat {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 15px; background: var(--surface-raised, #fff);
+}
+.unified-app.dark .notify-cat { background: #171b22; }
+.notify-cat > span { display: grid; gap: 1px; min-width: 0; }
+.notify-cat b { font-size: 13px; font-weight: 800; }
+.notify-cat small { font-size: 11.5px; font-weight: 620; color: var(--text-2, var(--muted)); }
+.notify-cat em {
+  font-style: normal; margin-top: 3px;
+  font-size: 10.5px; font-weight: 750; color: #1f9d76;
+}
+
+/* One switch shape for categories, quiet hours and devices alike. */
+.notify-switch { position: relative; display: inline-flex; align-items: center; flex: none; cursor: pointer; }
+.notify-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.notify-switch i {
+  display: block; width: 40px; height: 23px; border-radius: 999px;
+  background: var(--line); transition: background .15s ease; position: relative;
+}
+.notify-switch i::after {
+  content: ""; position: absolute; top: 2.5px; inset-inline-start: 2.5px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.28); transition: transform .15s ease;
+}
+.notify-switch input:checked + i { background: #1f9d76; }
+.notify-switch input:checked + i::after { transform: translateX(17px); }
+[dir="rtl"] .notify-switch input:checked + i::after { transform: translateX(-17px); }
+.notify-switch input:focus-visible + i { outline: 2px solid var(--ink); outline-offset: 2px; }
+.notify-switch.inline { gap: 10px; }
+.notify-switch.inline span { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+
+.notify-quiet { display: grid; gap: 12px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 15px; }
+.notify-quiet-range { display: flex; gap: 12px; flex-wrap: wrap; }
+.notify-quiet-range label {
+  display: grid; gap: 4px;
+  font-size: 10.5px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-2, var(--muted));
+}
+.notify-quiet-range select { min-height: 36px; padding: 0 10px; font-size: 13px; }
+
+.notify-devices { display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 15px; overflow: hidden; background: var(--line); }
+.notify-device {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 15px; background: var(--surface-raised, #fff);
+}
+.unified-app.dark .notify-device { background: #171b22; }
+.notify-device > span { display: grid; grid-template-columns: 18px 1fr; gap: 2px 9px; align-items: center; min-width: 0; }
+.notify-device > span > svg { grid-row: span 2; color: var(--text-2, var(--muted)); }
+.notify-device b { font-size: 13px; font-weight: 800; }
+.notify-device small { font-size: 11px; font-weight: 650; color: var(--text-2, var(--muted)); }
+.notify-device-actions { display: flex; align-items: center; gap: 8px; }
+.notify-device-actions button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 9px;
+  background: none; color: var(--text-2, var(--muted)); cursor: pointer;
+}
+.notify-device-actions button:hover { border-color: #c0392b; color: #c0392b; }
+
+@media (max-width: 620px) {
+  .notify-cat, .notify-device { padding: 11px 13px; }
+  .notify-state { padding: 12px 13px; }
+}
