@@ -309,6 +309,19 @@ type ClockSession = {
   presenceHours: number;
   breakHours: number;
   open: boolean;
+  /* The LOCAL calendar day these hours belong to. A session that crosses
+     midnight becomes one segment per day, so 22:00–02:00 puts two hours on
+     each date instead of four on the first — and a punch at 00:30 Baghdad
+     time lands on the day the person actually worked, not the UTC date. */
+  date: string;
+  /* Flagged sessions are shown but never counted: a clock-in left open past
+     48 hours (stale) or an open session abandoned before a later clock-in
+     (unclosed). They need a correction, and pretending they are 72 hours of
+     work in every total until then is how payroll goes wrong. openHours
+     keeps the raw span visible so the flag can say how long it has been. */
+  stale?: boolean;
+  unclosed?: boolean;
+  openHours?: number;
 };
 type DevelopmentStatus = "Assigned" | "In Progress" | "Submitted" | "Approved" | "Returned";
 type DevelopmentHistory = {
@@ -1825,6 +1838,26 @@ function requestDays(request: { from?: string; to?: string; date?: string }) {
   return Math.max(1, Math.round((end - start) / 86400000) + 1);
 }
 
+/* What a request is worth, shown to the person and the approver. Attendance
+   corrections carry TIMES in from/to ("09:00"–"12:00" on one date), which
+   requestDays cannot read — it built an Invalid Date from "09:00" and every
+   correction displayed as a zero. A three-hour correction is three hours. */
+function requestQuantity(request: { from?: string; to?: string; date?: string; type?: string }) {
+  const looksLikeTime = (value?: string) => Boolean(value && /^\d{1,2}:\d{2}$/.test(value));
+  if (looksLikeTime(request.from) && looksLikeTime(request.to)) {
+    const [fh, fm] = String(request.from).split(":").map(Number);
+    const [th, tm] = String(request.to).split(":").map(Number);
+    const minutes = (th * 60 + tm) - (fh * 60 + fm);
+    if (minutes > 0) {
+      const hours = minutes / 60;
+      return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
+    }
+    return "—";
+  }
+  const days = requestDays(request);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
 type BuildSettings = {
   officeDaysPerPerson: number;
   minInOffice: number;
@@ -2026,7 +2059,7 @@ function buildHomeSummary(
   const devOpen = growth.development.filter((record) => teamIds.has(record.employeeId) && record.status !== "Approved").length;
   const devMine = growth.development.filter((record) => record.employeeId === viewer.id && record.status !== "Approved").length;
   const myHoursWeek = sessions
-    .filter((session) => session.uid === viewer.id && isoWeekLabel(new Date(session.clockIn)) === week)
+    .filter((session) => session.uid === viewer.id && isoWeekLabel(new Date(`${session.date}T12:00:00`)) === week)
     .reduce((sum, session) => sum + session.hours, 0);
 
   const access = viewer.access || "Engineer";
@@ -2465,26 +2498,60 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
       return total + Math.max(0, overlap);
     }, 0);
 
-    const record = (start: string, end: string, mode: string, isOpen: boolean) => {
+    /* A session shown to nobody by its raw id is a bug report waiting to
+       happen; a removed account still worked those hours as a person. */
+    const label = names.get(uid) || `Former staff (${uid})`;
+
+    /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
+       the original punches (they are the session's identity for trim and
+       reset); the segment's own hours carry only what fell on `date`. */
+    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed") => {
       const from = new Date(start).getTime();
-      const to = new Date(end).getTime();
-      const grossMs = Math.max(0, to - from);
-      const breakMs = Math.min(grossMs, breakMsWithin(from, to));
-      sessions.push({
-        uid,
-        employee: names.get(uid) || uid,
-        mode,
-        clockIn: start,
-        clockOut: end,
-        hours: Math.max(0, (grossMs - breakMs) / 3600000),
-        presenceHours: grossMs / 3600000,
-        breakHours: breakMs / 3600000,
-        open: isOpen,
-      });
+      const to = Math.max(new Date(end).getTime(), from);
+      const flagged = flag === "stale" || flag === "unclosed";
+      let cursor = from;
+      while (cursor < to || cursor === from) {
+        const day = new Date(cursor);
+        const nextMidnight = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1, 0, 0, 0, 0).getTime();
+        const segEnd = Math.min(to, nextMidnight);
+        const grossMs = Math.max(0, segEnd - cursor);
+        const breakMs = Math.min(grossMs, breakMsWithin(cursor, segEnd));
+        sessions.push({
+          uid,
+          employee: label,
+          mode,
+          clockIn: start,
+          clockOut: end,
+          date: dateInputValue(day),
+          /* A flagged session is listed but contributes nothing until it is
+             corrected — never silently into totals, exports, or payroll. */
+          hours: flagged ? 0 : Math.max(0, (grossMs - breakMs) / 3600000),
+          presenceHours: flagged ? 0 : grossMs / 3600000,
+          breakHours: flagged ? 0 : breakMs / 3600000,
+          open: isOpen && segEnd === to,
+          ...(flag ? { [flag]: true, openHours: (to - from) / 3600000 } : {}),
+        });
+        if (segEnd >= to) break;
+        cursor = segEnd;
+      }
     };
 
     rows.forEach((row) => {
         if (row.status === "In") {
+          if (open?.time && row.time) {
+            const gapHours = (new Date(row.time).getTime() - new Date(open.time).getTime()) / 3600000;
+            if (gapHours < 12) {
+              /* Same shift, pressed twice: the first press is the punch. The
+                 old behaviour silently replaced it, which threw away worked
+                 minutes with no trace. */
+              return;
+            }
+            /* A new day's clock-in after an open one from long ago: the old
+               session was abandoned, so it surfaces flagged for correction
+               rather than being silently discarded — or silently merged into
+               one enormous shift. */
+            record(open.time, row.time, open.type || "Unspecified", false, "unclosed");
+          }
           open = row;
           return;
         }
@@ -2497,7 +2564,12 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
        with type checking on then refuses the file. */
     const stillOpen = open as ClockLog | null;
     if (stillOpen?.time) {
-      record(stillOpen.time, new Date().toISOString(), stillOpen.type || "Unspecified", true);
+      const openHours = (Date.now() - new Date(stillOpen.time).getTime()) / 3600000;
+      /* Open under 48 h: a live shift, counted normally. Past 48 h: stale.
+         Still never auto-closed — the logs are untouched and the person or a
+         manager closes or resets it — but flagged and excluded until then. */
+      record(stillOpen.time, new Date().toISOString(), stillOpen.type || "Unspecified", true,
+        openHours >= 48 ? "stale" : undefined);
     }
   });
   return sessions;
@@ -5782,6 +5854,14 @@ export default function Home() {
     const latest = (store.logs as ClockLog[])
       .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+    /* A double-tap is one decision, not two. Without this, the second tap of
+       an accidental double-click reads the first tap's "In" and instantly
+       punches a zero-minute "Out" — a session that then pollutes every
+       average. Ten seconds is long past any UI double-fire and far below any
+       intentional shortest shift. */
+    if (latest?.time && Date.now() - new Date(latest.time).getTime() < 10000) {
+      return true;
+    }
     const status = latest && latest.status === "In" ? "Out" : "In";
     const now = new Date().toISOString();
     // Same record shape the Timeclock engine writes, so both stay in step.
@@ -6863,16 +6943,38 @@ export default function Home() {
     return rows;
   }, [refs]);
 
+  /* Secrets never travel in a backup file. The file is plain JSON that gets
+     mailed around and left in Downloads folders; a copy of every password
+     hash — or worse, a not-yet-upgraded plaintext PIN — inside it turns
+     "restore my data" into "here are the keys to every account". Restoring a
+     credential-free user record is safe: verifySecret simply asks the person
+     to reset, which is the correct outcome for a machine that lost state. */
+  const SECRET_KEYS = new Set(["password", "pin", "pass", "passHash", "passSalt", "passIterations", "supabaseUrl", "supabaseAnonKey", "supabaseServiceKey"]);
+  const stripSecrets = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stripSecrets);
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+        if (SECRET_KEYS.has(key)) return;
+        out[key] = stripSecrets(entry);
+      });
+      return out;
+    }
+    return value;
+  };
+
   const exportBackup = (scope: BackupScope) => {
     const stores: Record<string, unknown> = {};
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
       if (!key?.toLowerCase().startsWith("larsa")) continue;
       if (scope !== "all" && backupAreaForKey(key) !== scope) continue;
+      // Session payloads are identity material, not data — never exported.
+      if (key === "larsa-control-session-keep") continue;
       const raw = localStorage.getItem(key);
       if (raw === null) continue;
       try {
-        stores[key] = JSON.parse(raw);
+        stores[key] = stripSecrets(JSON.parse(raw));
       } catch {
         stores[key] = raw;
       }
@@ -6905,15 +7007,59 @@ export default function Home() {
     if (!file) return;
     try {
       const payload = JSON.parse(await file.text());
-      if (!payload?.stores || typeof payload.stores !== "object") throw new Error();
-      const validStores = Object.entries(payload.stores)
-        .filter(([key]) => key.toLowerCase().startsWith("larsa"));
-      if (!validStores.length) throw new Error();
+      /* Validate BEFORE touching anything: the file must declare itself a
+         Larsa backup of a version this build understands, and every store
+         must serialise cleanly. Half-restoring a corrupt file used to be
+         possible — the loop below wrote store three and then threw on store
+         four, leaving live data part-old, part-new. Now the whole payload is
+         prepared first and only then written, all-or-nothing. */
+      if (payload?.format !== "Larsa Control Backup") throw new Error("format");
+      if (typeof payload.version !== "number" || payload.version < 1 || payload.version > 3) throw new Error("version");
+      if (!payload?.stores || typeof payload.stores !== "object") throw new Error("stores");
+      /* Backups carry no credentials (see exportBackup), so restoring the
+         staff store must not wipe the credentials people are using right
+         now: each incoming user that lacks a secret inherits the one already
+         on this device for the same account. A truly fresh machine restores
+         credential-free users, who reset their password — by design. */
+      const withKeptCredentials = (key: string, value: unknown): unknown => {
+        if (key !== "larsaStaffV8" || !value || typeof value !== "object") return value;
+        const current = parseStore("larsaStaffV8");
+        const existing = new Map(((current?.users as StaffUser[]) || []).map((user) => [user.id, user]));
+        const incoming = value as { users?: StaffUser[] };
+        if (!Array.isArray(incoming.users)) return value;
+        return {
+          ...incoming,
+          users: incoming.users.map((user) => {
+            const known = existing.get(user.id);
+            if (!known) return user;
+            return {
+              ...user,
+              ...(user.password === undefined && known.password !== undefined ? { password: known.password } : {}),
+              ...(user.pin === undefined && known.pin !== undefined ? { pin: known.pin } : {}),
+            };
+          }),
+        };
+      };
+      const prepared = Object.entries(payload.stores)
+        .filter(([key]) => key.toLowerCase().startsWith("larsa"))
+        .map(([key, value]) => {
+          const kept = withKeptCredentials(key, value);
+          return [key, typeof kept === "string" ? kept : JSON.stringify(kept)] as const;
+        });
+      if (!prepared.length) throw new Error("empty");
       const scopeLabel = typeof payload.scopeLabel === "string" ? payload.scopeLabel : "selected";
       if (!confirm(`Restore ${scopeLabel.toLowerCase()} data from this backup? Matching records will be replaced.`)) return;
-      validStores.forEach(([key, value]) =>
-        localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)),
-      );
+      const previous = prepared.map(([key]) => [key, localStorage.getItem(key)] as const);
+      try {
+        prepared.forEach(([key, value]) => localStorage.setItem(key, value));
+      } catch (writeError) {
+        // Quota or storage failure mid-write: put back what was there.
+        previous.forEach(([key, value]) => {
+          if (value === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, value);
+        });
+        throw writeError;
+      }
       (Object.keys(refs) as Engine[]).forEach((engine) =>
         refs[engine].current?.contentWindow?.location.reload(),
       );
@@ -7990,7 +8136,7 @@ function EngineeringManagementPortal({
   const [to, setTo] = useState(today);
   const visibleIds = manages ? staffIdsVisibleTo(org, viewer, users) : new Set(viewer ? [viewer.id] : []);
   const visibleUsers = users.filter((user) => user.enabled !== false && visibleIds.has(user.id));
-  const filteredSessions = sessions.filter((session) => visibleIds.has(session.uid) && withinDates(session.clockIn.slice(0, 10), from, to));
+  const filteredSessions = sessions.filter((session) => visibleIds.has(session.uid) && withinDates(session.date, from, to));
   const filteredRows = rows.filter((row) => visibleIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
   const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
     const end = new Date();
@@ -9564,7 +9710,7 @@ function PerformanceHistory({
     && (department === "all" || user.department === department));
   const selectedIds = new Set(selectedUsers.map((user) => user.id));
   const filteredSessions = sessions.filter((session) =>
-    selectedIds.has(session.uid) && withinDates(session.clockIn.slice(0, 10), from, to));
+    selectedIds.has(session.uid) && withinDates(session.date, from, to));
   const filteredRows = rows.filter((row) =>
     selectedIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
   const startMs = new Date(`${from || today}T00:00:00`).getTime();
@@ -9615,7 +9761,7 @@ function PerformanceHistory({
       downloadRows(`larsa-timesheets-${from}-to-${to}.csv`, [
         ["Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Mode", "Status"],
         ...filteredSessions.map((session) => [
-        session.clockIn.slice(0, 10),
+        session.date,
         session.employee,
         users.find((user) => user.id === session.uid)?.department || "",
         session.hours.toFixed(2),
@@ -9690,11 +9836,29 @@ function PerformanceHistory({
       </section>
 
       {reportKind === "time" ? (
+        <>
         <section className="metric-grid">
           <article><span><Timer size={19} /></span><small>Total hours</small><b>{totalHours.toFixed(1)}</b><p>{filteredSessions.length} sessions</p></article>
           <article><span><FileClock size={19} /></span><small>Sessions</small><b>{filteredSessions.length}</b><p>{filteredSessions.filter((row) => row.open).length} open now</p></article>
           <article><span><UsersRound size={19} /></span><small>Employees</small><b>{selectedUsers.length}</b><p>{from} to {to}</p></article>
         </section>
+        {(() => {
+          const flagged = filteredSessions.filter((session) => session.stale || session.unclosed);
+          if (!flagged.length) return null;
+          /* Sessions in this state are listed but excluded from every total
+             above — a clock-in left open for days is a correction to make,
+             not seventy hours of work. */
+          return (
+            <div className="notice flagged-sessions" role="status">
+              <b>{flagged.length} session{flagged.length === 1 ? "" : "s"} need{flagged.length === 1 ? "s" : ""} correction</b>
+              {" — "}
+              {flagged.slice(0, 3).map((session) =>
+                `${session.employee}: open ${Math.round(session.openHours || 0)} h since ${session.date}`).join("; ")}
+              {flagged.length > 3 ? "…" : ""}. Stale sessions are excluded from all totals until they are trimmed or reset.
+            </div>
+          );
+        })()}
+        </>
       ) : (
         <section className="metric-grid">
           <article><span><TrendingUp size={19} /></span><small>Submitted points</small><b>{totalSubmitted.toLocaleString()}</b><p>{filteredRows.length} entries</p></article>
@@ -9732,7 +9896,7 @@ function PerformanceHistory({
             <table className="data-table compact-table">
               <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Presence</th><th>Break</th><th>Worked</th>{mayAdjust && <th>Adjust</th>}</tr></thead>
               <tbody>
-                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.clockIn.slice(0, 10)}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td>{mayAdjust && <td>
+                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.date}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td>{mayAdjust && <td>
                   {editing && editing.uid === session.uid && editing.clockIn === session.clockIn ? (
                     <div className="session-edit">
                       <input type="datetime-local" value={editValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setEditValue(event.target.value)} aria-label="New clock-out time" />
@@ -12370,6 +12534,7 @@ function LivePresence({
       since: openSession?.clockIn || latest?.time || "",
       // Presence, not worked time -- someone on their lunch break is still here.
       hours: openSession?.presenceHours || 0,
+      stale: Boolean(openSession?.stale),
       planned,
     };
   });
@@ -12400,7 +12565,7 @@ function LivePresence({
                 <b>{row.user.name}{row.user.id === viewer?.id ? " (you)" : ""}</b>
                 <small>{row.user.department || row.user.role || ""}</small>
               </span>
-              <span className="presence-meta"><em>{group.id === "off" ? "Not clocked in" : group.label.replace(/^In the |^On /, "")}</em></span>
+              <span className="presence-meta"><em>{row.stale ? "Open too long — needs correction" : group.id === "off" ? "Not clocked in" : group.label.replace(/^In the |^On /, "")}</em></span>
             </div>
           ))}
           {!rows.length && <div className="empty compact">Nobody right now.</div>}
@@ -12583,7 +12748,7 @@ function RequestsCentre({
                     <td>{(row.createdAt || row.date || "").slice(0, 10)}</td>
                     <td><b>{row.entry ? "Late points" : row.type}</b><small>{row.requestType || ""}</small></td>
                     <td>{row.entry ? row.entry.Date : `${row.from} → ${row.to}`}</td>
-                    <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestDays(row)}</td>
+                    <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestQuantity(row)}</td>
                     <td>{detailCell(row)}</td>
                     <td>{statusChip(row.status)}</td>
                     <td>{row.decidedBy || "—"}</td>
@@ -12611,7 +12776,7 @@ function RequestsCentre({
                     <td><b>{person?.name || row.uid}</b><small>{person?.department || ""}</small></td>
                     <td><b>{row.entry ? "Late points" : row.type}</b><small>{row.requestType || ""}</small></td>
                     <td>{row.entry ? row.entry.Date : `${row.from} → ${row.to}`}</td>
-                    <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestDays(row)}</td>
+                    <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestQuantity(row)}</td>
                     <td>{detailCell(row)}</td>
                     <td><div className="review-actions">
                       <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>Approve</button>
@@ -13712,12 +13877,12 @@ function QuickClock({
   const open = summary.openClock;
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
-  const todaySessions = mine.filter((session) => session.clockIn.slice(0, 10) === todayKey);
+  const todaySessions = mine.filter((session) => session.date === todayKey);
   const todayHours = todaySessions.reduce((sum, session) => sum + session.hours, 0);
   const todayPresence = todaySessions.reduce((sum, session) => sum + session.presenceHours, 0);
   const todayBreak = todaySessions.reduce((sum, session) => sum + session.breakHours, 0);
   const weekHours = mine
-    .filter((session) => isoWeekLabel(new Date(session.clockIn)) === isoWeekLabel())
+    .filter((session) => isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel())
     .reduce((sum, session) => sum + session.hours, 0);
   const elapsed = open && now
     ? Math.max(0, now.getTime() - new Date(open.clockIn).getTime())
@@ -13730,8 +13895,8 @@ function QuickClock({
   const breakdown = (() => {
     const today = dateInputValue(new Date());
     const inPeriod = mine.filter((session) => {
-      const date = session.clockIn.slice(0, 10);
-      if (period === "week") return isoWeekLabel(new Date(session.clockIn)) === isoWeekLabel();
+      const date = session.date;
+      if (period === "week") return isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel();
       if (period === "month") return date.slice(0, 7) === today.slice(0, 7);
       return withinDates(date, from, to);
     });
@@ -13741,7 +13906,7 @@ function QuickClock({
       ...bucket,
       total: inPeriod.reduce((sum, session) => sum + session.hours, 0),
       count: inPeriod.length,
-      days: new Set(inPeriod.map((session) => session.clockIn.slice(0, 10))).size,
+      days: new Set(inPeriod.map((session) => session.date)).size,
     };
   })();
 
@@ -13900,7 +14065,9 @@ function QuickClock({
                       {new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       {" – "}
                       {session.open ? "still open" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      {" · "}{session.hours.toFixed(2)} h worked
+                      {" · "}{session.stale || session.unclosed
+                        ? `open ${Math.round(session.openHours || 0)} h — needs correction, not counted`
+                        : `${session.hours.toFixed(2)} h worked`}
                     </small>
                   </div>
                   {active ? (
@@ -14117,7 +14284,7 @@ function QuickClock({
             <tbody>
               {recent.map((session, index) => (
                 <tr key={`${session.clockIn}-${index}`}>
-                  <td>{session.clockIn.slice(0, 10)}</td>
+                  <td>{session.date}</td>
                   <td><span className={`mode-chip tone-${modeTone(session.mode)}`}>{session.mode}</span></td>
                   <td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
                   <td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
