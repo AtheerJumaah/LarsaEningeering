@@ -1915,3 +1915,29 @@ i.is-due { background: #d97706; }
   color: var(--text-disabled, var(--muted)); cursor: pointer;
 }
 .bell-nudge-close:hover { background: var(--line); color: var(--ink); }
+
+/* --- 28. The notch at the sidebar's shoulder -----------------------------
+   The sidebar's top-right corner is rounded, and a rounded corner does not
+   paint — it reveals whatever is behind it. Behind it was the page's warm
+   beige, while the bar immediately to its right is near-white, so the curve
+   read as a stray wedge of a third colour instead of as the bar wrapping
+   around the panel's shoulder.
+
+   This lays the bar's own surface across the full width of the shell, at the
+   bar's height, underneath everything. The sidebar (z 50) and the bar (z 30)
+   both still paint over it; the only place it shows is exactly the notch the
+   rounded corner cuts. Same colour value as .topbar, over the same beige, so
+   the two composite identically rather than merely closely. */
+.unified-app { position: relative; }
+.unified-app::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  inset-inline: 0;
+  height: 74px;                 /* .topbar's min-height */
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  z-index: 0;
+  pointer-events: none;
+}
+/* Folded away, the main shell spans the full width and its own bar covers
+   this strip completely — so it costs nothing when there is no notch. */
