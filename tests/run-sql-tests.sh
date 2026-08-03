@@ -37,6 +37,22 @@ create table if not exists public.auth_codes (
 -- Supabase Realtime. Locally there is no Realtime, and the trigger already
 -- swallows its own failure, but a shim keeps the log free of noise that would
 -- hide a real error.
+-- Vault, as the dispatch migration reads it. Locally it is a plain table —
+-- the point is the SHAPE (secrets in, decrypted_secrets out), not the crypto.
+create schema if not exists vault;
+create table if not exists vault.secrets (
+  id uuid primary key default gen_random_uuid(), name text unique, secret text, description text);
+create or replace function vault.create_secret(new_secret text, new_name text, new_description text default '')
+returns uuid language plpgsql as $shim$
+declare sid uuid;
+begin
+  insert into vault.secrets (name, secret, description) values (new_name, new_secret, new_description)
+  on conflict (name) do update set secret = excluded.secret returning id into sid;
+  return sid;
+end $shim$;
+create or replace view vault.decrypted_secrets as
+  select id, name, secret as decrypted_secret, description from vault.secrets;
+create schema if not exists extensions;
 create schema if not exists realtime;
 create or replace function realtime.send(payload jsonb, event text, topic text, private boolean default true)
 returns void language plpgsql as $shim$ begin return; end $shim$;
@@ -55,7 +71,8 @@ done
 total=0
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
           "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
-          "$here/accounting-payroll-sql.test.sql" "$here/notifications-sql.test.sql"; do
+          "$here/accounting-payroll-sql.test.sql" "$here/notifications-sql.test.sql" \
+          "$here/qa-spec-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"
