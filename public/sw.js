@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v26";
+const CACHE_NAME = "larsa-control-v27";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -132,13 +132,15 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(String(payload.title || "Larsa Control"), {
       body: String(payload.body || ""),
-      /* The mark itself, not a square tile with the mark inside it: the
-         droplet shape, filled in the brand near-black with the rim and the
-         cursive L in white, and everything outside the droplet transparent.
-         A notification icon is one fixed image and cannot follow the system
-         theme, so contrast has to come from the artwork: the dark fill carries
-         the white mark on a light shade, and the white rim separates the
-         droplet from a dark one. */
+      /* An OPAQUE near-black canvas carrying the white mark.
+         Opaque on purpose, and it took a wrong turn to learn why. A canvas
+         that is transparent outside the droplet lets the phone's own icon
+         container show through, and that container is grey — it is system UI,
+         and there is no property in the Web Notifications API that can
+         recolour it, reshape it or remove it. Filling the canvas is the only
+         way to decide what sits behind the mark. Android then crops it to a
+         circle, so the result is a black disc with the logo rather than a
+         square, and the mark is sized to stay clear of that cut. */
       icon: "/icons/notify-192.png",
       /* Android masks the badge to its ALPHA and tints it, so the alpha has
          to be the logo's STROKES — the droplet rim and the cursive L — not
