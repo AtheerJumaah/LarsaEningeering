@@ -35,7 +35,7 @@ const manifest = JSON.parse(read("public/manifest.webmanifest"));
    number, and pinning one just means the test breaks on the next legitimate
    bump — which has now happened twice. So it asserts the floor: the version
    that introduced the badge icon and audible pushes, and never lower. */
-const SW_VERSION_FLOOR = 26;
+const SW_VERSION_FLOOR = 27;
 const swVersion = Number((read("public/sw.js").match(/larsa-control-v(\d+)/) || [])[1]);
 
 /* ---------------------------------------------------------------- 1 - 5 */
@@ -466,6 +466,20 @@ test("a notification wears the mark, not a box with the mark in it", () => {
      a badge whose alpha is one solid region has lost the mark. */
   const badgePng = readFileSync(new URL("../public/icons/badge-96.png", import.meta.url));
   assert.ok(badgePng.length > 300, "the badge icon must exist");
+  /* The large icon's canvas is opaque. A transparent one lets the phone's own
+     grey icon container show through, and that container is system UI — no
+     notification API can recolour or remove it, so the only way to choose what
+     sits behind the mark is to fill the canvas. */
+  assert.match(sw, /An OPAQUE near-black canvas carrying the white mark/);
+  const iconPng = readFileSync(new URL("../public/icons/notify-192.png", import.meta.url));
+  assert.ok(iconPng.length > 1000, "the notification icon must exist");
+  /* The PNG must not carry an alpha channel at all — colour type 6 (RGBA) or
+     4 (grey+alpha) would mean it can be translucent somewhere, and a single
+     translucent pixel lets the phone's grey container show through at that
+     spot. Colour type is byte 25 of a PNG, in the IHDR chunk. */
+  const colourType = iconPng[25];
+  assert.ok(colourType === 2 || colourType === 0 || colourType === 3,
+    `the notification icon must have no alpha channel (PNG colour type ${colourType})`);
 });
 
 test("the panel escapes the topbar without escaping the theme", () => {
