@@ -313,10 +313,67 @@ test("20. the design the app already had is untouched", () => {
 
 test("the bell degrades honestly when there is no backend", () => {
   assert.match(page, /Showing this device only — no account storage is configured/);
-  assert.match(notify, /if \(!supabaseConfigured\(\)\) return fallback;/);
-  // Every RPC wrapper swallows its own failure: a notification centre that
-  // throws on a flaky connection is worse than one showing what it last knew.
-  assert.match(notify, /\} catch \{\s*\n\s*\/\/ A notification centre that throws/);
+  assert.match(notify, /if \(!supabaseConfigured\(\)\) return \{ data: fallback, reached: false \};/);
+  /* Every RPC wrapper swallows its own failure — a notification centre that
+     throws on a flaky connection is worse than one showing what it last knew.
+     Checked as behaviour rather than as a comment: the previous version of
+     this test pinned the wording and broke the moment the wrapper was
+     rewritten, without anything actually regressing. */
+  const wrapper = code(notify).slice(code(notify).indexOf("async function callRaw"));
+  assert.match(wrapper, /\} catch \{[\s\S]{0,120}return \{ data: fallback, reached: false \};/);
+  assert.ok(!/throw /.test(wrapper.slice(0, 900)), "the RPC wrapper must never rethrow");
+});
+
+test("the bell says when this device will never be alerted", () => {
+  /* The bug that made the whole thing look broken: every record arrived, the
+     bell was correct, and nothing anywhere said this browser had never been
+     granted permission or subscribed. A working bell and a silent phone are
+     indistinguishable from inside the app unless you say so. */
+  assert.match(page, /const \[deviceState, setDeviceState\] = useState<"checking" \| "on" \| "off" \| "denied" \| "home-screen" \| "unsupported">/);
+  assert.match(page, /deviceState === "off" \? "Alerts are off on this device"/);
+  assert.match(page, /Notifications land here either way\./);
+  assert.match(page, /const outcome = await subscribeToPush\(user\.id, user\.name\)/);
+  // Every unhappy state gets its own instruction, not one generic apology.
+  assert.match(page, /Notifications are blocked here/);
+  assert.match(page, /Add Larsa Control to your Home Screen/);
+  assert.match(page, /This browser cannot show alerts/);
+  // And dismissing it sticks, per device.
+  assert.match(page, /const BELL_NUDGE_KEY = "larsa-bell-nudge-dismissed"/);
+  assert.match(pass, /\.bell-nudge \{/);
+});
+
+test("a subscription signed under an old key is pruned, not retried for ever", () => {
+  /* 401 and 403 mean the push service rejected our VAPID signature — the
+     subscription predates a key rotation and will fail on every future send.
+     Only pruning 404/410 left those rows in place, so a device list could
+     look healthy while nothing ever arrived on it. */
+  assert.match(sender, /status === 404 \|\| status === 410 \|\| status === 401 \|\| status === 403/);
+  assert.match(sender, /signed under an old key/);
+  assert.match(sender, /notify_prune_device/);
+});
+
+test("a stranded push is sent late rather than never", () => {
+  // raiseNotifications nudges the sender fire-and-forget; a tab closed a
+  // moment too early leaves the outbox row with nobody coming back for it.
+  assert.match(page, /void drainPush\(\); \}, 4000\)/);
+  assert.match(notify, /export function drainPush\(\): Promise<void>/);
+  assert.match(migration, /o\.status = 'sending' and o\.claimed_at < now\(\) - interval '5 minutes'/);
+});
+
+test("unreachable is not the same as empty", () => {
+  /* A spinner that never resolves is the most convincing way an app has of
+     looking broken, and a confidently empty bell during an outage is worse —
+     it says the notifications are gone. Both are the same bug: not being able
+     to tell "nothing to show" from "could not ask". */
+  assert.match(notify, /reject\(new Error\("notify: timed out"\)\), 6000\)/);
+  assert.match(notify, /reachable: boolean/);
+  assert.match(page, /const usingLocal = Boolean\(localRows\) \|\| \(!offline && !reachable\)/);
+  assert.match(page, /Offline — showing what this device already had/);
+  // The spinner is bounded by the attempt, not left running for ever.
+  assert.match(page, /\{busy && !shown && !usingLocal && <div className="bell-empty">Loading…<\/div>\}/);
+  // And write actions are hidden rather than offered against a server that
+  // cannot be reached, so nothing looks like it worked when it did not.
+  assert.match(page, /if \(usingLocal \|\| !ids\.length\) return;/);
 });
 
 test("the panel escapes the topbar without escaping the theme", () => {
