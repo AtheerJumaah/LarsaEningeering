@@ -35,7 +35,7 @@ const manifest = JSON.parse(read("public/manifest.webmanifest"));
    number, and pinning one just means the test breaks on the next legitimate
    bump — which has now happened twice. So it asserts the floor: the version
    that introduced the badge icon and audible pushes, and never lower. */
-const SW_VERSION_FLOOR = 25;
+const SW_VERSION_FLOOR = 26;
 const swVersion = Number((read("public/sw.js").match(/larsa-control-v(\d+)/) || [])[1]);
 
 /* ---------------------------------------------------------------- 1 - 5 */
@@ -459,6 +459,13 @@ test("a notification wears the mark, not a box with the mark in it", () => {
     "the square app tile must not be used as the notification icon");
   // The local display probe wears the same face.
   assert.match(push, /icon: "\/icons\/notify-192\.png"/);
+  /* And the badge is the logo's strokes, not its silhouette. Android masks the
+     badge to alpha and tints it, so a filled shape becomes a solid white blob
+     — which on skins that promote the badge to the main icon is the only thing
+     anybody sees. This is checked against the artwork, not just the filename:
+     a badge whose alpha is one solid region has lost the mark. */
+  const badgePng = readFileSync(new URL("../public/icons/badge-96.png", import.meta.url));
+  assert.ok(badgePng.length > 300, "the badge icon must exist");
 });
 
 test("the panel escapes the topbar without escaping the theme", () => {
