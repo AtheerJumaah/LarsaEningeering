@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v25";
+const CACHE_NAME = "larsa-control-v26";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -140,9 +140,12 @@ self.addEventListener("push", (event) => {
          the white mark on a light shade, and the white rim separates the
          droplet from a dark one. */
       icon: "/icons/notify-192.png",
-      // Android masks the badge to its alpha channel, so the badge is the
-      // droplet silhouette — at 24dp a solid shape stays legible where an
-      // outline would break up.
+      /* Android masks the badge to its ALPHA and tints it, so the alpha has
+         to be the logo's STROKES — the droplet rim and the cursive L — not
+         the filled shape. A silhouette masks down to a solid white blob, and
+         on skins that show the badge as the notification's main icon that
+         blob is all anybody sees. The strokes are drawn slightly heavier than
+         the source so they survive being rendered at about 24dp. */
       badge: "/icons/badge-96.png",
       // Tagging by notification id is what stops the same event, re-sent to a
       // device that was offline, from stacking three identical banners.
