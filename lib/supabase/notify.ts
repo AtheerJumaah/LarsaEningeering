@@ -26,7 +26,10 @@ export type NotifyRow = {
   meta?: Record<string, unknown>;
 };
 
-export type NotifyFeed = { items: NotifyRow[]; total: number; offset: number; limit: number };
+/* `reachable` is the difference between "you have no notifications" and "I
+   could not ask". They look identical on screen and only one of them is the
+   user's fault, so the bell needs to be able to tell them apart. */
+export type NotifyFeed = { items: NotifyRow[]; total: number; offset: number; limit: number; reachable: boolean };
 export type NotifyCounts = { unread: number; all: number; archived: number; byCategory: Record<string, number> };
 export type NotifyCategory = {
   id: string; label: string; description: string;
@@ -49,25 +52,40 @@ export type NotifySetup = {
 export type NotifyActor = { id: string; name?: string };
 
 export const EMPTY_COUNTS: NotifyCounts = { unread: 0, all: 0, archived: 0, byCategory: {} };
-export const EMPTY_FEED: NotifyFeed = { items: [], total: 0, offset: 0, limit: 20 };
+export const EMPTY_FEED: NotifyFeed = { items: [], total: 0, offset: 0, limit: 20, reachable: true };
 
 export function notifyConfigured(): boolean {
   return supabaseConfigured();
 }
 
-async function call<T>(fn: string, args: Record<string, unknown>, fallback: T): Promise<T> {
-  if (!supabaseConfigured()) return fallback;
+/* Every RPC is wrapped so a flaky connection degrades rather than throws — a
+   notification centre that explodes on a dropped packet is worse than one
+   showing what it last knew. `reached` reports whether the answer actually
+   came from the server, so a caller that needs to distinguish empty from
+   unreachable can. The ceiling matters: supabase-js will happily leave a
+   request hanging on a dead network, and a spinner that never resolves is the
+   single most convincing way an app has of looking broken. Six seconds is
+   long enough for a slow connection and short enough that nobody concludes
+   the bell is dead before it answers. */
+async function callRaw<T>(fn: string, args: Record<string, unknown>, fallback: T): Promise<{ data: T; reached: boolean }> {
+  if (!supabaseConfigured()) return { data: fallback, reached: false };
   const client = getSupabaseClient();
-  if (!client) return fallback;
+  if (!client) return { data: fallback, reached: false };
   try {
-    const { data, error } = await client.rpc(fn, args);
-    if (error) return fallback;
-    return (data ?? fallback) as T;
+    const answered = await Promise.race([
+      client.rpc(fn, args),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("notify: timed out")), 6000)),
+    ]);
+    const { data, error } = answered as { data: unknown; error: unknown };
+    if (error) return { data: fallback, reached: false };
+    return { data: (data ?? fallback) as T, reached: true };
   } catch {
-    // A notification centre that throws on a flaky connection is worse than
-    // one that shows what it last knew. Every failure here is a soft one.
-    return fallback;
+    return { data: fallback, reached: false };
   }
+}
+
+async function call<T>(fn: string, args: Record<string, unknown>, fallback: T): Promise<T> {
+  return (await callRaw(fn, args, fallback)).data;
 }
 
 /* ---------------------------------------------------------------- reading */
@@ -86,7 +104,7 @@ export async function fetchFeed(actor: NotifyActor, options: {
   scope?: "all" | "unread" | "archived";
   search?: string; category?: string; limit?: number; offset?: number;
 } = {}): Promise<NotifyFeed> {
-  const data = await call<{ items?: NotifyRow[]; total?: number; offset?: number; limit?: number }>(
+  const { data, reached } = await callRaw<{ items?: NotifyRow[]; total?: number; offset?: number; limit?: number }>(
     "notify_feed",
     {
       actor,
@@ -103,6 +121,7 @@ export async function fetchFeed(actor: NotifyActor, options: {
     total: Number(data?.total) || 0,
     offset: Number(data?.offset) || 0,
     limit: Number(data?.limit) || 20,
+    reachable: reached,
   };
 }
 
