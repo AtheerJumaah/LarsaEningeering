@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v22";
+const CACHE_NAME = "larsa-control-v23";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -18,6 +18,8 @@ const CORE_FILES = [
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
   "/icons/badge-72.png",
+  "/icons/badge-96.png",
+  "/icons/notify-192.png",
   "/icons/apple-touch-icon.png"
 ];
 
@@ -130,8 +132,15 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(String(payload.title || "Larsa Control"), {
       body: String(payload.body || ""),
-      icon: "/icons/icon-192.png",
-      badge: "/icons/badge-72.png",
+      /* The mark itself, not a square tile with the mark inside it. The
+         droplet is filled in the brand's near-black with a white rim, so it
+         reads on a light notification shade and on a dark one, and everything
+         outside the droplet is transparent — the notification takes the shape
+         of the logo rather than boxing it. */
+      icon: "/icons/notify-192.png",
+      // Android masks the badge to its alpha channel, so this one is the
+      // droplet silhouette alone: no fill, no rim, just the shape.
+      badge: "/icons/badge-96.png",
       // Tagging by notification id is what stops the same event, re-sent to a
       // device that was offline, from stacking three identical banners.
       tag: payload.tag ? String(payload.tag) : undefined,
