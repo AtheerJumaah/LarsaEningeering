@@ -1884,3 +1884,34 @@ i.is-due { background: #d97706; }
   .notify-cat, .notify-device { padding: 11px 13px; }
   .notify-state { padding: 12px 13px; }
 }
+
+/* --- 27. "Alerts are off on this device" ---------------------------------
+   A working bell and a silent phone look identical from inside the app, which
+   is how somebody concludes notifications are broken when every record has in
+   fact arrived. This says so where they are already looking, offers the one
+   button that fixes it, and takes a dismissal permanently. */
+.bell-nudge {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 8px 12px 2px; padding: 11px 12px;
+  border: 1px solid var(--line); border-radius: 13px;
+  background: var(--soft); position: relative;
+}
+.unified-app.dark .bell-nudge { background: #1d222b; border-color: #2b313c; }
+.bell-nudge.warn { border-color: #d9822b; }
+.bell-nudge > svg { flex: none; margin-top: 1px; color: var(--text-2, var(--muted)); }
+.bell-nudge.warn > svg { color: #d9822b; }
+.bell-nudge > span { flex: 1; display: grid; gap: 2px; min-width: 0; padding-inline-end: 14px; }
+.bell-nudge b { font-size: 12.5px; font-weight: 850; color: var(--ink); }
+.bell-nudge small { font-size: 11.5px; font-weight: 620; line-height: 1.45; color: var(--text-2, var(--muted)); }
+.bell-nudge > button.primary {
+  flex: none; align-self: center; min-height: 32px; padding: 0 13px;
+  border-radius: 10px; font-size: 12px; font-weight: 800;
+}
+.bell-nudge-close {
+  position: absolute; top: 6px; inset-inline-end: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 7px; background: none;
+  color: var(--text-disabled, var(--muted)); cursor: pointer;
+}
+.bell-nudge-close:hover { background: var(--line); color: var(--ink); }

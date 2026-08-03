@@ -8,7 +8,7 @@ import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupport
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
   fetchSetup, setCategoryPref, setNotifySettings, updateDevice, removeDevice,
-  importLegacy, watchNotifications, notifyConfigured,
+  importLegacy, watchNotifications, notifyConfigured, drainPush,
   EMPTY_COUNTS,
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
@@ -7105,6 +7105,17 @@ export default function Home() {
     refreshCounts();
   }, [hydrated, sessionUser?.id, notifyTick, storageTick, refreshCounts]);
 
+  /* A safety net for stranded pushes. raiseNotifications nudges the sender as
+     it writes, but that call is fire-and-forget — close the tab a moment too
+     early, or lose the network, and the outbox row sits there with nobody
+     coming back for it. Draining once on sign-in costs one request and means
+     a queued alert is at worst late rather than never sent. */
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id || !notifyConfigured()) return;
+    const timer = window.setTimeout(() => { void drainPush(); }, 4000);
+    return () => clearTimeout(timer);
+  }, [hydrated, sessionUser?.id]);
+
   /* Read it on the phone, watch the laptop's badge clear. The broadcast
      carries no content — it only says "go and look again". */
   useEffect(() => {
@@ -8384,6 +8395,10 @@ function notifyAgo(iso: string): string {
 }
 
 const NOTIFY_PAGE = 12;
+/* Dismissing the "alerts are off here" prompt is per device, and permanent:
+   somebody who has decided this laptop should stay quiet should not be asked
+   again every time they open the bell. Settings still has the switch. */
+const BELL_NUDGE_KEY = "larsa-bell-nudge-dismissed";
 
 /* The bell. The permanent, authoritative notification centre: everything that
    was ever raised for this person is reachable here, from any device they sign
@@ -8408,9 +8423,53 @@ function NotificationBell({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(true);
+  const [reachable, setReachable] = useState(true);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<{ top: number; end: number } | null>(null);
+  /* Whether THIS browser will ever receive an alert. A working bell and a
+     silent phone look identical from here, which is exactly why somebody
+     concludes "notifications don't work" — the records are arriving fine and
+     nothing ever told them the device was never subscribed. */
+  const [deviceState, setDeviceState] = useState<"checking" | "on" | "off" | "denied" | "home-screen" | "unsupported">("checking");
+  const [enabling, setEnabling] = useState(false);
+  /* Read once, lazily. The panel only ever mounts after a click, so there is
+     no server render to disagree with — and reading it here rather than in an
+     effect means the prompt never flashes up before being hidden again. */
+  const [nudgeHidden, setNudgeHidden] = useState(() => {
+    try { return localStorage.getItem(BELL_NUDGE_KEY) === "1"; } catch { return false; }
+  });
   const offline = !notifyConfigured();
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = async () => {
+      if (!pushSupported()) { if (!cancelled) setDeviceState("unsupported"); return; }
+      if (pushNeedsHomeScreen()) { if (!cancelled) setDeviceState("home-screen"); return; }
+      if (typeof Notification !== "undefined" && Notification.permission === "denied") {
+        if (!cancelled) setDeviceState("denied");
+        return;
+      }
+      const has = await thisDeviceSubscribed();
+      if (!cancelled) setDeviceState(has ? "on" : "off");
+    };
+    void read();
+    return () => { cancelled = true; };
+  }, [tick]);
+
+  const enableHere = async () => {
+    setEnabling(true);
+    const outcome = await subscribeToPush(user.id, user.name);
+    setEnabling(false);
+    setDeviceState(outcome.ok ? "on"
+      : outcome.state === "denied" ? "denied"
+      : outcome.state === "needs-home-screen" ? "home-screen"
+      : outcome.state === "unsupported" ? "unsupported" : "off");
+  };
+
+  const hideNudge = () => {
+    setNudgeHidden(true);
+    try { localStorage.setItem(BELL_NUDGE_KEY, "1"); } catch { /* private mode */ }
+  };
 
   /* The panel is rendered into <body>, not next to the bell.
      The topbar carries backdrop-filter, and a filtered element becomes the
@@ -8440,8 +8499,9 @@ function NotificationBell({
   /* With no backend configured there is nothing to fetch: this device's own
      copy IS the feed, so it is derived during render rather than pushed into
      state by an effect. */
-  const localRows = useMemo(() => {
-    if (!offline) return null;
+  /* This device's own copy, shaped like a feed. Used when there is no backend
+     at all, and again when there is one that cannot be reached. */
+  const mirrorRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const mine = localFallback
       .filter((row) => (scope === "unread" ? !row.read : scope === "archived" ? false : true))
@@ -8454,7 +8514,9 @@ function NotificationBell({
         readAt: row.read ? row.at : null, archivedAt: null,
       })),
     };
-  }, [offline, localFallback, scope, query, page]);
+  }, [localFallback, scope, query, page]);
+
+  const localRows = useMemo(() => (offline ? mirrorRows : null), [offline, mirrorRows]);
 
   useEffect(() => {
     if (offline) return;
@@ -8467,9 +8529,10 @@ function NotificationBell({
         if (cancelled) return;
         setRows(feed.items);
         setTotal(feed.total);
+        setReachable(feed.reachable);
         setBusy(false);
       })
-      .catch(() => { if (!cancelled) setBusy(false); });
+      .catch(() => { if (!cancelled) { setReachable(false); setBusy(false); } });
     return () => { cancelled = true; };
   }, [user.id, user.name, scope, query, page, tick, offline]);
 
@@ -8493,19 +8556,24 @@ function NotificationBell({
   }, [onClose]);
 
   const act = async (ids: string[], action: "read" | "unread" | "archive" | "unarchive") => {
-    if (offline || !ids.length) return;
+    if (usingLocal || !ids.length) return;
     await markNotifications({ id: user.id, name: user.name }, ids, action);
     onChanged();
   };
 
   const allRead = async () => {
-    if (offline) return;
+    if (usingLocal) return;
     await markAllRead({ id: user.id, name: user.name });
     onChanged();
   };
 
-  const feedRows = localRows ? localRows.items : rows;
-  const feedTotal = localRows ? localRows.total : total;
+  /* Unreachable is not the same as empty. If the server could not be asked,
+     fall back to this device's own copy and say so, rather than showing a
+     confidently empty bell — or worse, a spinner that never stops, which is
+     the most convincing way an app has of looking broken. */
+  const usingLocal = Boolean(localRows) || (!offline && !reachable);
+  const feedRows = localRows ? localRows.items : (!reachable ? mirrorRows.items : rows);
+  const feedTotal = localRows ? localRows.total : (!reachable ? mirrorRows.total : total);
   const shown = feedRows.length;
 
   const panel = (
@@ -8560,9 +8628,37 @@ function NotificationBell({
         {search && <button type="button" onClick={() => setSearch("")} aria-label="Clear search"><X size={13} /></button>}
       </label>
 
+      {!offline && !nudgeHidden && deviceState !== "checking" && deviceState !== "on" && (
+        <div className={deviceState === "off" ? "bell-nudge" : "bell-nudge warn"}>
+          <BellOff size={15} aria-hidden="true" />
+          <span>
+            <b>
+              {deviceState === "off" ? "Alerts are off on this device"
+                : deviceState === "denied" ? "Notifications are blocked here"
+                : deviceState === "home-screen" ? "Add Larsa Control to your Home Screen"
+                : "This browser cannot show alerts"}
+            </b>
+            <small>
+              {deviceState === "off" ? "Notifications land here either way. Turn them on to be told when the app is closed."
+                : deviceState === "denied" ? "Allow notifications for this site in your browser settings, then reopen this panel."
+                : deviceState === "home-screen" ? "Tap Share, then Add to Home Screen. iPhone and iPad only deliver alerts to the installed app."
+                : "Notifications still arrive here. Try Chrome, Edge, Firefox or Safari to also be alerted outside the app."}
+            </small>
+          </span>
+          {deviceState === "off" && (
+            <button type="button" className="primary" disabled={enabling} onClick={enableHere}>
+              {enabling ? "Turning on…" : "Turn on"}
+            </button>
+          )}
+          <button type="button" className="bell-nudge-close" onClick={hideNudge} aria-label="Dismiss">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
       <div className="bell-list">
-        {busy && !shown && !offline && <div className="bell-empty">Loading…</div>}
-        {(!busy || offline) && !shown && (
+        {busy && !shown && !usingLocal && <div className="bell-empty">Loading…</div>}
+        {(!busy || usingLocal) && !shown && (
           <div className="bell-empty">
             {query ? `Nothing matches “${query}”.`
               : scope === "unread" ? "Nothing unread. You are all caught up."
@@ -8583,7 +8679,7 @@ function NotificationBell({
               </span>
             </button>
             <div className="bell-row-actions">
-              {!offline && (
+              {!usingLocal && (
                 <button
                   type="button"
                   onClick={() => act([row.id], row.readAt ? "unread" : "read")}
@@ -8593,7 +8689,7 @@ function NotificationBell({
                   {row.readAt ? <Circle size={14} /> : <CheckCircle2 size={14} />}
                 </button>
               )}
-              {!offline && (
+              {!usingLocal && (
                 <button
                   type="button"
                   onClick={() => act([row.id], row.archivedAt ? "unarchive" : "archive")}
@@ -8616,7 +8712,9 @@ function NotificationBell({
       <footer className="bell-foot">
         {offline
           ? "Showing this device only — no account storage is configured, so notifications are not shared between devices."
-          : "Every notification stays here permanently, on every device you sign in on."}
+          : !reachable
+            ? "Offline — showing what this device already had. Your notifications are safe and will reappear when the connection returns."
+            : "Every notification stays here permanently, on every device you sign in on."}
       </footer>
     </div>
   );
