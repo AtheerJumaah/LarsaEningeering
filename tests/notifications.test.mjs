@@ -29,6 +29,13 @@ const pass = read("app/visual-pass.css");
 const sender = read("supabase/functions/send-push/index.ts");
 const migration = read("supabase/migrations/20260803_notify_011_center.sql");
 const manifest = JSON.parse(read("public/manifest.webmanifest"));
+/* The service worker cache name has to change on every release that changes
+   what it caches, or devices keep the old worker. A test cannot know the right
+   number, and pinning one just means the test breaks on the next legitimate
+   bump — which has now happened twice. So it asserts the floor: the version
+   that introduced the badge icon and audible pushes, and never lower. */
+const SW_VERSION_FLOOR = 22;
+const swVersion = Number((read("public/sw.js").match(/larsa-control-v(\d+)/) || [])[1]);
 
 /* ---------------------------------------------------------------- 1 - 5 */
 
@@ -305,7 +312,8 @@ test("20. the design the app already had is untouched", () => {
   // a second palette.
   assert.match(pass, /\.bell-panel \{[\s\S]{0,600}background: var\(--surface-raised, #fff\);/);
   // And the service worker was bumped, or every device keeps the old one.
-  assert.match(sw, /const CACHE_NAME = "larsa-control-v21";/);
+  assert.ok(swVersion >= SW_VERSION_FLOOR,
+    `the service worker cache must be at least v${SW_VERSION_FLOOR}, found v${swVersion}`);
   assert.ok(sw.includes('"/icons/badge-72.png"'), "the badge icon must be cached with the rest");
 });
 
@@ -374,6 +382,33 @@ test("unreachable is not the same as empty", () => {
   // And write actions are hidden rather than offered against a server that
   // cannot be reached, so nothing looks like it worked when it did not.
   assert.match(page, /if \(usingLocal \|\| !ids\.length\) return;/);
+});
+
+test("a push announces itself the way a message does", () => {
+  /* Permission granted is not the same as audible. The sound preference was
+     stored from day one and read by nothing, so a person could turn it off or
+     on and change precisely nothing. */
+  assert.match(sw, /silent: payload\.sound === false/);
+  assert.match(sw, /vibrate: payload\.sound === false \? undefined : \[180, 90, 180\]/);
+  assert.match(sender, /sound: item\.sound !== false/);
+  assert.match(sender, /sound: boolean;/);
+  // The worker must be re-fetched, or every device keeps the silent one.
+  assert.ok(swVersion >= SW_VERSION_FLOOR,
+    `audible pushes need at least cache v${SW_VERSION_FLOOR}, found v${swVersion}`);
+});
+
+test("a test alert that cannot be displayed says so", () => {
+  /* When the OS suppresses a browser's notifications, showNotification still
+     resolves, permission still reads "granted", and the banner is discarded.
+     Reporting "sent" there is technically true and completely useless — it is
+     how somebody concludes the software is broken when their own Do Not
+     Disturb is on. So the test posts one and checks it exists. */
+  assert.match(push, /export async function canDisplayNotifications\(\): Promise<boolean>/);
+  assert.match(push, /const found = await registration\.getNotifications\(\{ tag \}\)/);
+  assert.match(push, /found\.forEach\(\(notification\) => notification\.close\(\)\)/);
+  assert.match(page, /const visible = await canDisplayNotifications\(\)/);
+  assert.match(page, /this device discarded it without showing anything/);
+  assert.match(page, /That is your operating system, not Larsa Control/);
 });
 
 test("the panel escapes the topbar without escaping the theme", () => {
