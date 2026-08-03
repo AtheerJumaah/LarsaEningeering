@@ -36,6 +36,7 @@ type OutboxItem = {
   url: string;
   attempts: number;
   suppressed: string | null;
+  sound: boolean;
   devices: Device[];
 };
 
@@ -96,6 +97,10 @@ Deno.serve(async (req: Request) => {
       tag: item.notificationId ?? item.id,
       category: item.category,
       notificationId: item.notificationId,
+      // Carried through to the service worker, which decides sound and
+      // vibration from it. Default true: a notification nobody hears is most
+      // of the way to a notification nobody gets.
+      sound: item.sound !== false,
     });
 
     let anySent = false;
@@ -106,7 +111,11 @@ Deno.serve(async (req: Request) => {
         await webpush.sendNotification(
           { endpoint: device.endpoint, keys: { p256dh: device.p256dh, auth: device.auth } },
           payload,
-          { TTL: 60 * 60 * 24 },
+          // High urgency asks the push service not to batch or delay this
+          // behind a device's power-saving window — the difference between an
+          // alert that arrives now and one that arrives when the phone next
+          // wakes up.
+          { TTL: 60 * 60 * 24, urgency: "high" },
         );
         anySent = true;
         deliveries.push({ channel: "push", target: host, status: "sent", detail: "" });
