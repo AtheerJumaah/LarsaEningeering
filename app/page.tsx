@@ -8,7 +8,7 @@ import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupport
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
   fetchSetup, setCategoryPref, setNotifySettings, updateDevice, removeDevice,
-  importLegacy, watchNotifications, notifyConfigured, drainPush,
+  importLegacy, watchNotifications, notifyConfigured,
   EMPTY_COUNTS,
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
@@ -7105,16 +7105,10 @@ export default function Home() {
     refreshCounts();
   }, [hydrated, sessionUser?.id, notifyTick, storageTick, refreshCounts]);
 
-  /* A safety net for stranded pushes. raiseNotifications nudges the sender as
-     it writes, but that call is fire-and-forget — close the tab a moment too
-     early, or lose the network, and the outbox row sits there with nobody
-     coming back for it. Draining once on sign-in costs one request and means
-     a queued alert is at worst late rather than never sent. */
-  useEffect(() => {
-    if (!hydrated || !sessionUser?.id || !notifyConfigured()) return;
-    const timer = window.setTimeout(() => { void drainPush(); }, 4000);
-    return () => clearTimeout(timer);
-  }, [hydrated, sessionUser?.id]);
+  /* No drain on load either. The database dispatches the moment a
+     notification is raised, and a one-minute cron sweep catches anything that
+     slips through — so a push reaches a phone whose app has been closed for
+     an hour, which is the only reason push exists. */
 
   /* Read it on the phone, watch the laptop's badge clear. The broadcast
      carries no content — it only says "go and look again". */
