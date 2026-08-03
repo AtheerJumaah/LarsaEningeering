@@ -139,13 +139,20 @@ export async function raiseNotifications(actor: NotifyActor, rows: {
   const result = await call<{ created?: number; deduped?: number }>(
     "notify_raise", { actor, p_rows: rows }, { created: 0, deduped: 0 },
   );
-  // Nudge the sender so the push goes now rather than on the next drain. The
-  // notification is already durably in the outbox at this point, so if this
-  // fails the push is late, never lost.
-  void drainPush();
+  /* No client-side nudge to the sender. notify_raise dispatches server-side
+     over pg_net, with a one-minute cron sweep behind it, so delivery does not
+     depend on this browser at all.
+     It used to. That was wrong on its face — the entire point of a push is to
+     reach somebody whose app is CLOSED, so making the app responsible for
+     triggering its own delivery is a contradiction. It was also silently
+     broken: the call was blocked by CORS before it left the page, and the
+     failure was swallowed, so nothing was ever sent until something outside
+     the browser happened to run the sender. */
   return { created: Number(result?.created) || 0, deduped: Number(result?.deduped) || 0 };
 }
 
+/* Kept for the Settings "Send a test" path and as a manual kick, but nothing
+   in the normal flow needs it any more. */
 export function drainPush(): Promise<void> {
   if (!supabaseConfigured()) return Promise.resolve();
   const client = getSupabaseClient();

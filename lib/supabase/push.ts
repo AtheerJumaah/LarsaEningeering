@@ -220,8 +220,8 @@ export async function canDisplayNotifications(): Promise<boolean> {
       // Silent and instantly withdrawn: this is a probe, not a message. If the
       // platform DOES show it, it is gone again before anyone reads it.
       silent: true,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/badge-72.png",
+      icon: "/icons/notify-192.png",
+      badge: "/icons/badge-96.png",
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
     const found = await registration.getNotifications({ tag });
