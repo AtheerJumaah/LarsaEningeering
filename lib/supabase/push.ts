@@ -1,15 +1,20 @@
 "use client";
 
-/* Real background Web Push — covers both "web" (desktop browser tab closed)
- * and "phone" (installed PWA) notifications, unlike the foreground-only
- * `new Notification()` calls already used elsewhere in the app. Needs three
- * things to actually deliver, all documented in .env.local.example:
- *   1. NEXT_PUBLIC_VAPID_PUBLIC_KEY (safe to expose; identifies this app to
- *      the browser's push service).
- *   2. VAPID_PRIVATE_KEY + VAPID_PUBLIC_KEY set as secrets on the Supabase
- *      project's Edge Functions (used only server-side, by send-push).
- *   3. Supabase configured (NEXT_PUBLIC_SUPABASE_URL/ANON_KEY) — without it
- *      this whole module is a no-op, exactly like lib/supabase/sync.ts. */
+/* Real background Web Push — arrives even when every tab is closed, which is
+ * what makes an installed PWA behave like an app rather than a bookmark.
+ *
+ * Three things are needed for delivery to actually happen:
+ *   1. NEXT_PUBLIC_VAPID_PUBLIC_KEY — safe to expose; it identifies this app
+ *      to the browser's push service and nothing more.
+ *   2. VAPID_PRIVATE_KEY + VAPID_PUBLIC_KEY as secrets on the Supabase
+ *      project's Edge Functions, used only by send-push, never shipped.
+ *   3. Supabase configured at all — without it this module is a no-op and the
+ *      bell falls back to local-only, exactly like lib/supabase/sync.ts.
+ *
+ * The subscription is stored through notify_register_device, not by writing to
+ * push_subscriptions directly: that table has no client grants any more,
+ * because a policy of USING (true) meant every browser holding the anon key
+ * could read every push endpoint in the company. */
 import { getSupabaseClient, supabaseConfigured } from "./client";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -26,75 +31,179 @@ export function pushSupported(): boolean {
     && typeof Notification !== "undefined";
 }
 
-/* Requests permission (if needed), subscribes this browser to the push
- * service, and upserts the subscription under the signed-in staff member's
- * id so send-push knows who to reach. Returns a human-readable outcome. */
-export async function subscribeToPush(staffUid: string): Promise<string> {
-  if (!pushSupported()) return "This browser does not support push notifications.";
+/* iOS only grants push to a PWA that has actually been added to the Home
+ * Screen — in Safari's normal browsing tab the API exists and silently never
+ * delivers. Telling someone "allow notifications" on a screen where allowing
+ * them cannot work is worse than telling them nothing, so the settings screen
+ * asks this first and shows the Add to Home Screen instructions instead. */
+export function pushNeedsHomeScreen(): boolean {
+  if (typeof window === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const iOS = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === "MacIntel" && (navigator as unknown as { maxTouchPoints: number }).maxTouchPoints > 1);
+  if (!iOS) return false;
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches
+    || (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+  return !standalone;
+}
+
+/* A name a person will recognise in a device list six months from now. The
+ * user agent is the only signal available, so this stays coarse on purpose:
+ * "iPhone · Safari" is useful, a version string is not. */
+export function describeThisDevice(): { label: string; platform: string } {
+  if (typeof navigator === "undefined") return { label: "This device", platform: "unknown" };
+  const ua = navigator.userAgent || "";
+  const platform =
+    /iPad/.test(ua) ? "iPad"
+    : /iPhone|iPod/.test(ua) ? "iPhone"
+    : /Android/.test(ua) ? "Android"
+    : /Macintosh|Mac OS X/.test(ua) ? "Mac"
+    : /Windows/.test(ua) ? "Windows"
+    : /Linux/.test(ua) ? "Linux"
+    : "Device";
+  const browser =
+    /Edg\//.test(ua) ? "Edge"
+    : /OPR\//.test(ua) ? "Opera"
+    : /Chrome\//.test(ua) && !/Edg\//.test(ua) ? "Chrome"
+    : /Firefox\//.test(ua) ? "Firefox"
+    : /Safari\//.test(ua) ? "Safari"
+    : "Browser";
+  const installed = typeof window !== "undefined"
+    && (window.matchMedia?.("(display-mode: standalone)").matches
+      || (window.navigator as unknown as { standalone?: boolean }).standalone === true);
+  return { label: `${platform} · ${installed ? "Installed app" : browser}`, platform };
+}
+
+export type PushOutcome = {
+  ok: boolean;
+  message: string;
+  /* Distinguishes "the person said no" from "this browser cannot" from "this
+   * deployment has no keys" — three different problems with three different
+   * things to tell someone, which a single boolean would flatten. */
+  state: "granted" | "denied" | "unsupported" | "unconfigured" | "needs-home-screen" | "error";
+};
+
+/* Requests permission if needed, subscribes this browser to the push service,
+ * and registers the subscription against the signed-in staff id. */
+export async function subscribeToPush(staffUid: string, staffName?: string): Promise<PushOutcome> {
+  if (!pushSupported()) {
+    return { ok: false, state: "unsupported", message: "This browser does not support push notifications." };
+  }
+  if (pushNeedsHomeScreen()) {
+    return {
+      ok: false, state: "needs-home-screen",
+      message: "On iPhone and iPad, add Larsa Control to your Home Screen first — Safari only delivers notifications to the installed app.",
+    };
+  }
   const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   if (!supabaseConfigured() || !vapidKey) {
-    return "Push notifications aren't configured for this deployment yet.";
+    return { ok: false, state: "unconfigured", message: "Alerts outside the app aren't configured for this deployment yet." };
   }
+
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") return "Push notifications were not allowed.";
-
-  const registration = await navigator.serviceWorker.ready;
-  const desiredKey = urlBase64ToUint8Array(vapidKey);
-      let subscription = await registration.pushManager.getSubscription();
-      // A subscription can already exist under an OLD VAPID key (e.g. after a
-      // key rotation) -- getSubscription() happily returns it, but the push
-      // service silently rejects anything signed with the new private key.
-      // Drop it here so the block below creates a fresh one under this key.
-      if (subscription) {
-              const existingKey = subscription.options?.applicationServerKey
-                        ? new Uint8Array(subscription.options.applicationServerKey)
-                        : null;
-              const sameKey = !!existingKey && existingKey.length === desiredKey.length
-                        && existingKey.every((byte, idx) => byte === desiredKey[idx]);
-              if (!sameKey) {
-                        await subscription.unsubscribe();
-                        subscription = null;
-              }
-      }
-      if (!subscription) {
-              subscription = await registration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: desiredKey as BufferSource,
-              });
-      }
-  const json = subscription.toJSON();
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
-    return "Could not read this browser's push subscription.";
+  if (permission !== "granted") {
+    return {
+      ok: false, state: "denied",
+      message: permission === "denied"
+        ? "Notifications are blocked for this site. Allow them in your browser's site settings, then try again."
+        : "Push notifications were not allowed.",
+    };
   }
-  const client = getSupabaseClient();
-  if (!client) return "Push notifications aren't configured for this deployment yet.";
-  const { error } = await client.from("push_subscriptions").upsert(
-    { staff_uid: staffUid, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth },
-    { onConflict: "endpoint" },
-  );
-  if (error) return `Could not save this subscription: ${error.message}`;
-  return "Push notifications are enabled on this device.";
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const desiredKey = urlBase64ToUint8Array(vapidKey);
+    let subscription = await registration.pushManager.getSubscription();
+    // A subscription can already exist under an OLD VAPID key (e.g. after a
+    // key rotation) -- getSubscription() happily returns it, but the push
+    // service silently rejects anything signed with the new private key.
+    // Drop it here so the block below creates a fresh one under this key.
+    if (subscription) {
+      const existingKey = subscription.options?.applicationServerKey
+        ? new Uint8Array(subscription.options.applicationServerKey)
+        : null;
+      const sameKey = !!existingKey && existingKey.length === desiredKey.length
+        && existingKey.every((byte, idx) => byte === desiredKey[idx]);
+      if (!sameKey) {
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+    }
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: desiredKey as BufferSource,
+      });
+    }
+
+    const json = subscription.toJSON();
+    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+      return { ok: false, state: "error", message: "Could not read this browser's push subscription." };
+    }
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, state: "unconfigured", message: "Alerts outside the app aren't configured for this deployment yet." };
+    }
+    const device = describeThisDevice();
+    const { error } = await client.rpc("notify_register_device", {
+      actor: { id: staffUid, name: staffName || "" },
+      p_endpoint: json.endpoint,
+      p_p256dh: json.keys.p256dh,
+      p_auth: json.keys.auth,
+      p_label: device.label,
+      p_ua: navigator.userAgent || "",
+      p_platform: device.platform,
+    });
+    if (error) return { ok: false, state: "error", message: `Could not save this device: ${error.message}` };
+    return { ok: true, state: "granted", message: `Alerts are on for ${device.label}.` };
+  } catch (err) {
+    return { ok: false, state: "error", message: `Could not enable alerts: ${String(err).slice(0, 140)}` };
+  }
 }
 
-export async function unsubscribeFromPush(): Promise<void> {
+/* Used both by "turn alerts off on this device" and by signing out. Both halves
+ * matter: unsubscribing without deleting the row leaves the sender pushing at a
+ * dead endpoint forever, and deleting without unsubscribing leaves the browser
+ * holding a subscription nothing will ever use. */
+export async function unsubscribeFromPush(staffUid?: string): Promise<void> {
   if (!pushSupported()) return;
-  const registration = await navigator.serviceWorker.ready;
-  const subscription = await registration.pushManager.getSubscription();
-  if (!subscription) return;
-  const endpoint = subscription.endpoint;
-  await subscription.unsubscribe();
-  const client = getSupabaseClient();
-  if (client) await client.from("push_subscriptions").delete().eq("endpoint", endpoint);
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    const endpoint = subscription.endpoint;
+    await subscription.unsubscribe();
+    const client = getSupabaseClient();
+    if (client && staffUid) {
+      await client.rpc("notify_forget_device", { actor: { id: staffUid }, p_endpoint: endpoint });
+    }
+  } catch { /* the device is going away anyway; never block sign-out on this */ }
 }
 
-/* Fire-and-forget: asks the send-push Edge Function to deliver a real push
- * to every device the given staff member has subscribed on. Never throws —
- * a failed push should never block the in-app notification it rides with. */
-export function sendPush(staffUid: string, title: string, body: string, url?: string): void {
-  if (!supabaseConfigured()) return;
-  const client = getSupabaseClient();
-  if (!client) return;
-  client.functions.invoke("send-push", { body: { staffUid, title, body, url } }).catch(() => {
-    // Best-effort only; the in-app notification already covers this event.
-  });
+/* Whether THIS browser currently holds a live subscription, which is a
+ * different question from Notification.permission: permission can be granted
+ * while the subscription was dropped by the browser or removed from another
+ * device's session. */
+export async function thisDeviceSubscribed(): Promise<boolean> {
+  if (!pushSupported()) return false;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    return Boolean(await registration.pushManager.getSubscription());
+  } catch {
+    return false;
+  }
+}
+
+/* Sets the app-icon badge through the service worker so it stays right even
+ * with several tabs open, and after the last one is closed. */
+export function setAppBadge(count: number): void {
+  if (typeof navigator === "undefined") return;
+  try {
+    navigator.serviceWorker?.ready?.then((registration) => {
+      registration.active?.postMessage({ type: "larsa:badge", count });
+    }).catch(() => {});
+    const nav = navigator as unknown as { setAppBadge?: (n?: number) => void; clearAppBadge?: () => void };
+    if (count > 0) nav.setAppBadge?.(count);
+    else nav.clearAppBadge?.();
+  } catch { /* badging unsupported on this platform */ }
 }
