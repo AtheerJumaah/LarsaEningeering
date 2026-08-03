@@ -26,14 +26,28 @@ create or replace function auth.uid() returns uuid language sql as $$ select nul
 do $$ begin
   if not exists (select from pg_roles where rolname='anon') then create role anon nologin; end if;
   if not exists (select from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+  -- Supabase's service role, which the push sender runs as.
+  if not exists (select from pg_roles where rolname='service_role') then create role service_role nologin; end if;
 end $$;
 create table if not exists public.platform_admins (email text primary key, added_by text, added_at timestamptz default now());
 create table if not exists public.auth_codes (
   id uuid primary key default gen_random_uuid(), email text, purpose text check (purpose in ('verify','reset')),
   code text, attempts int default 0, consumed_at timestamptz, created_at timestamptz default now(), expires_at timestamptz);
+-- The notification trigger broadcasts a content-free "look again" ping through
+-- Supabase Realtime. Locally there is no Realtime, and the trigger already
+-- swallows its own failure, but a shim keeps the log free of noise that would
+-- hide a real error.
+create schema if not exists realtime;
+create or replace function realtime.send(payload jsonb, event text, topic text, private boolean default true)
+returns void language plpgsql as $shim$ begin return; end $shim$;
+-- push_subscriptions predates these migrations; the notify migration ALTERs it.
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(), staff_uid text not null,
+  endpoint text not null unique, p256dh text not null, auth text not null,
+  created_at timestamptz not null default now());
 EOF
 
-for f in "$repo"/supabase/migrations/2026*_acct_*.sql; do
+for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql 2>/dev/null | sort); do
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
 done
@@ -41,7 +55,7 @@ done
 total=0
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
           "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
-          "$here/accounting-payroll-sql.test.sql"; do
+          "$here/accounting-payroll-sql.test.sql" "$here/notifications-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"

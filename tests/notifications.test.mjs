@@ -1,0 +1,352 @@
+/* Larsa Control — the notification system contract.
+ *
+ * The behaviour lives in tests/notifications-sql.test.sql, which runs the real
+ * functions against a real Postgres. These pin the wiring that SQL cannot see:
+ * that the bell is a permanent surface rather than a trip to Settings, that no
+ * client code can reach the notification tables directly, that a push payload
+ * is treated as untrusted input by the service worker, that signing out
+ * releases the device, and that the design the app already had — six Home
+ * cards, rounded cards, themes, RTL — was left alone.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
+/* "This must not appear" is a claim about the code, not about the prose
+   explaining why it is absent — a comment naming VAPID_PRIVATE_KEY as the
+   secret to set is documentation, not a leak. So these checks run against the
+   source with its comments stripped. */
+const code = (source) => source
+  .replace(/\/\*[\s\S]*?\*\//g, " ")
+  .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
+  .replace(/^\s*--[^\n]*/gm, " ");
+const page = read("app/page.tsx");
+const notify = read("lib/supabase/notify.ts");
+const push = read("lib/supabase/push.ts");
+const sw = read("public/sw.js");
+const pass = read("app/visual-pass.css");
+const sender = read("supabase/functions/send-push/index.ts");
+const migration = read("supabase/migrations/20260803_notify_011_center.sql");
+const manifest = JSON.parse(read("public/manifest.webmanifest"));
+
+/* ---------------------------------------------------------------- 1 - 5 */
+
+test("1. the bell is a permanent surface, not a trip to Settings", () => {
+  // It used to navigate to the settings screen. Now it opens a panel in place.
+  assert.match(page, /function NotificationBell\(/);
+  assert.match(page, /setBellOpen\(\(value\) => !value\)/);
+  assert.match(page, /\{bellOpen && \(\s*<NotificationBell/);
+  assert.ok(!/notif-button"[^>]*onClick=\{\(\) => choose\(SETTINGS_ITEM/.test(page),
+    "the bell must open the notification centre, not navigate to Settings");
+  // And it says what it is to a screen reader, unread count included.
+  assert.match(page, /aria-label=\{unreadCount \? `Notifications, \$\{unreadCount\} unread`/);
+  assert.match(page, /aria-haspopup="dialog"/);
+  assert.match(page, /role="dialog"\s+aria-label="Notifications"/);
+});
+
+test("2. the notification record is written unconditionally", () => {
+  const fn = page.slice(page.indexOf("function raiseNotification("), page.indexOf("PROJECT GROUP ROOMS"));
+  assert.ok(fn.length > 200, "raiseNotification must still exist as the single writer");
+  // The old code gated the in-app record on a preference. Nothing may.
+  assert.ok(!/prefs\.inApp/.test(fn), "no preference may gate the in-app record");
+  assert.ok(!/if \([^)]*inApp[^)]*\)[\s\S]{0,80}items\.unshift/.test(fn),
+    "the local mirror must not be written conditionally");
+  assert.match(fn, /raiseNotifications\(actor, input\.recipients\.map/);
+  // And the database agrees: no column exists that could switch the bell off.
+  assert.ok(!/\b(in_app|inapp|bell_enabled)\s+(boolean|text|int)/.test(code(migration)),
+    "there must be no in-app column to switch the bell off");
+  assert.match(migration, /create table if not exists public\.notify_prefs[\s\S]*?push_enabled[\s\S]*?mail_enabled/);
+});
+
+test("3. the settings screen states the promise in the required words", () => {
+  assert.match(page, /All Larsa Control notifications always remain available in the notification bell\.\s*These settings control only alerts outside the app\./);
+  assert.match(page, /className="notify-promise"/);
+  assert.match(pass, /\.notify-promise \{/);
+  // The heading has to agree with the promise rather than contradict it.
+  assert.match(page, /<h3>Alerts outside the app<\/h3>/);
+});
+
+test("4. no client code touches a notification table directly", () => {
+  for (const [name, source] of [["notify.ts", code(notify)], ["push.ts", code(push)], ["page.tsx", code(page)]]) {
+    for (const table of ["notify_messages", "notify_prefs", "notify_settings",
+      "notify_outbox", "notify_deliveries", "push_subscriptions"]) {
+      assert.ok(!new RegExp(`from\\(["']${table}["']\\)`).test(source),
+        `${name} must not read or write ${table} directly — RPCs only`);
+    }
+  }
+  // The grants back that up: the tables have none.
+  assert.match(migration, /revoke all on public\.%I from anon, authenticated/);
+  assert.match(migration, /drop policy if exists "authenticated read\/write" on public\.push_subscriptions/);
+});
+
+test("5. the sender-side functions are not reachable from a browser", () => {
+  /* The revoke must name PUBLIC. A function is created with EXECUTE already
+     granted to PUBLIC, so "revoke from anon" removes nothing — anon still
+     reaches it through PUBLIC. The first version of this migration got that
+     wrong and left notify_outbox_claim, and therefore every queued push title
+     and body in the company, callable with nothing but the anon key. */
+  assert.match(migration, /revoke all on function public\.%s from public, anon, authenticated/,
+    "sender-only functions must be revoked from PUBLIC, not just anon");
+  assert.match(migration, /revoke all on function public\.%s from public'/,
+    "client functions must also be revoked from PUBLIC before being granted back");
+  assert.ok(!/revoke all on function public\.%s from anon, authenticated'/.test(migration),
+    "revoking from anon alone leaves the PUBLIC grant in place");
+  // And the sender-only list is granted to service_role and nothing else.
+  assert.match(migration, /grant execute on function public\.%s to service_role/);
+  const senderList = migration.slice(migration.lastIndexOf("foreach fn in array array["));
+  for (const fn of ["notify_outbox_claim", "notify_outbox_finish", "notify_prune_device", "notify_actor_uid"]) {
+    assert.ok(senderList.includes(fn), `${fn} must be in the sender-only revoke list`);
+  }
+  // Nothing in the client bundle even names them.
+  for (const fn of ["notify_outbox_claim", "notify_outbox_finish", "notify_prune_device"]) {
+    assert.ok(!notify.includes(fn) && !push.includes(fn) && !page.includes(fn),
+      `${fn} must not appear in client code`);
+  }
+});
+
+/* --------------------------------------------------------------- 6 - 10 */
+
+test("6. the push sender takes no title or body from its caller", () => {
+  // The old function accepted { staffUid, title, body } from the browser,
+  // which let any signed-in tab put arbitrary text on a colleague's lock
+  // screen. The payload now comes from the outbox row.
+  assert.ok(!/const \{ staffUid, title, body, url \} = await req\.json\(\)/.test(sender),
+    "the sender must not accept a caller-supplied title, body or recipient");
+  assert.match(sender, /notify_outbox_claim/);
+  assert.match(sender, /title: item\.title,\s*\n\s*body: item\.body,/);
+  assert.match(sender, /SUPABASE_SERVICE_ROLE_KEY/);
+  // And the client can only ask it to drain.
+  assert.match(notify, /functions\.invoke\("send-push", \{ body: \{ limit: 50 \} \}\)/);
+});
+
+test("7. secrets stay out of the client bundle", () => {
+  for (const source of [code(notify), code(push), code(page)]) {
+    assert.ok(!/VAPID_PRIVATE_KEY/.test(source), "the private VAPID key must never reach the client");
+    assert.ok(!/SERVICE_ROLE/.test(source), "the service role key must never reach the client");
+  }
+  // Only the public half, and only through an env var.
+  assert.match(push, /process\.env\.NEXT_PUBLIC_VAPID_PUBLIC_KEY/);
+  assert.ok(!/BM[A-Za-z0-9_-]{20,}/.test(push), "no VAPID key may be hard-coded");
+  assert.match(sender, /Deno\.env\.get\("VAPID_PRIVATE_KEY"\)/);
+});
+
+test("8. the service worker treats a push payload as untrusted", () => {
+  assert.match(sw, /function safeInternalPath\(candidate\)/);
+  assert.match(sw, /if \(resolved\.origin !== self\.location\.origin\) return "\/";/);
+  // Both the banner and the click go through it — a validated path is no use
+  // if the click handler reads the raw value instead.
+  const pushHandler = sw.slice(sw.indexOf('addEventListener("push"'), sw.indexOf('addEventListener("notificationclick"'));
+  assert.match(pushHandler, /const url = safeInternalPath\(payload\.url\)/);
+  const clickHandler = sw.slice(sw.indexOf('addEventListener("notificationclick"'));
+  assert.match(clickHandler, /const url = safeInternalPath\(data\.url\)/);
+  assert.ok(!/openWindow\(payload\.url\)|openWindow\(data\.url\)/.test(sw),
+    "a raw payload URL must never be opened");
+});
+
+test("9. clicking a notification arrives at the thing it is about", () => {
+  const clickHandler = sw.slice(sw.indexOf('addEventListener("notificationclick"'));
+  // The old handler focused a window and stopped, so a tap left you where you
+  // already were.
+  assert.match(clickHandler, /existing\.postMessage\(\{ type: "larsa:notification-click"/);
+  assert.match(clickHandler, /await self\.clients\.openWindow\(url\)/);
+  // The page listens, and a cold start on /?n=<id> is handled too.
+  assert.match(page, /data\.type !== "larsa:notification-click"/);
+  assert.match(page, /params\.get\("n"\)/);
+  assert.match(page, /window\.history\.replaceState/);
+  // The stored target is an app item id, never a URL, so it can only ever
+  // resolve to a screen this app already has.
+  assert.match(page, /const target = ITEMS\.find\(\(item\) => item\.id === row\.itemId\)/);
+  assert.match(migration, /item_id\s+text,\s*--.*never a URL/);
+});
+
+test("10. a notification arrived at from outside waits for the session", () => {
+  // A push tapped on a locked phone must land on the sign-in screen, not show
+  // the record to whoever picked the phone up.
+  assert.match(page, /if \(!pendingNotification \|\| !sessionUser\?\.id \|\| !notifyConfigured\(\)\) return;/);
+  // And the lookup itself is the authorisation check.
+  assert.match(page, /const row = feed\.items\.find\(\(item\) => item\.id === pendingNotification\)/);
+});
+
+/* -------------------------------------------------------------- 11 - 15 */
+
+test("11. the bell filters, searches, archives and pages", () => {
+  assert.match(page, /\[\["all", "All", counts\.all\], \["unread", "Unread", counts\.unread\], \["archived", "Archived", counts\.archived\]\]/);
+  assert.match(page, /placeholder="Search notifications"/);
+  assert.match(page, /act\(\[row\.id\], row\.archivedAt \? "unarchive" : "archive"\)/);
+  assert.match(page, /act\(\[row\.id\], row\.readAt \? "unread" : "read"\)/);
+  assert.match(page, /Show older \(\{feedTotal - shown\} more\)/);
+  assert.match(page, /const NOTIFY_PAGE = 12;/);
+  // Typing must not fire a query per keystroke.
+  assert.match(page, /setTimeout\(\(\) => \{ setQuery\(search\); setPage\(0\); \}, 250\)/);
+  // Escape and a click outside both close it.
+  assert.match(page, /if \(event\.key === "Escape"\) onClose\(\)/);
+});
+
+test("12. archiving hides a notification, it never deletes one", () => {
+  assert.ok(!/delete\(\)[\s\S]{0,60}notify_messages/.test(code(notify)),
+    "the client must have no way to delete a notification");
+  assert.ok(!/notify_delete|deleteNotification/.test(code(notify) + code(page)),
+    "there must be no delete-notification path at all");
+  assert.match(migration, /archived_at timestamptz/);
+  // Restoring is offered, which is what makes archive different from delete.
+  assert.match(migration, /when act = 'unarchive' then null/);
+});
+
+test("13. unread state syncs across devices without leaking content", () => {
+  assert.match(page, /return watchNotifications\(\{ id: sessionUser\.id \}, \(\) => setNotifyTick/);
+  assert.match(notify, /\.on\("broadcast", \{ event: "changed" \}, \(\) => onChange\(\)\)/);
+  // The broadcast is content-free and per person: guessing a colleague's topic
+  // reveals that something arrived, never what it said.
+  assert.match(migration, /'notify:' \|\| coalesce\(new\.user_uid, old\.user_uid\)/);
+  const ping = migration.slice(migration.indexOf("function public.notify_ping()"));
+  assert.ok(!/new\.title|new\.body/.test(ping.slice(0, 900)),
+    "the realtime ping must not carry the notification's content");
+  // Realtime being down must never roll back the notification itself.
+  assert.match(ping, /exception when others then[\s\S]{0,300}null;/);
+});
+
+test("14. signing out releases this browser", () => {
+  const out = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("const signOut = useCallback") + 1400);
+  assert.match(out, /if \(leaving\?\.id\) void unsubscribeFromPush\(leaving\.id\)/);
+  assert.match(out, /setBellOpen\(false\)/);
+  assert.match(out, /setNotifyCounts\(EMPTY_COUNTS\)/);
+  assert.match(out, /setAppBadge\(0\)/);
+  // Both halves: unsubscribe locally AND drop the row, or the sender keeps
+  // pushing at a browser that is no longer listening.
+  assert.match(push, /await subscription\.unsubscribe\(\)/);
+  assert.match(push, /notify_forget_device/);
+});
+
+test("15. the legacy notifications in localStorage are carried over, once", () => {
+  assert.match(page, /const marker = `larsa-notify-imported-\$\{sessionUser\.id\}`/);
+  assert.match(page, /importLegacy\(\{ id: sessionUser\.id, name: sessionUser\.name \}, legacy\)/);
+  // Idempotent in the database too, so a second device does not double it.
+  assert.match(migration, /'legacy:' \|\| coalesce\(row_in->>'id', md5\(row_in::text\)\)/);
+  assert.match(migration, /on conflict \(user_uid, dedupe_key\) where dedupe_key is not null do nothing/);
+  // A failed import retries next load rather than losing the history.
+  assert.match(page, /\.catch\(\(\) => \{ \/\* try again next load rather than losing the history \*\/ \}\)/);
+});
+
+/* -------------------------------------------------------------- 16 - 20 */
+
+test("16. every platform in the matrix is accounted for", () => {
+  // iOS only delivers push to a PWA on the Home Screen; saying "allow
+  // notifications" on a screen where allowing them cannot work is worse than
+  // saying nothing.
+  assert.match(push, /export function pushNeedsHomeScreen\(\)/);
+  assert.match(push, /\/iPad\|iPhone\|iPod\/\.test\(ua\)/);
+  assert.match(push, /navigator\.platform === "MacIntel"/);   // iPadOS reports as Mac
+  assert.match(page, /<b>Add to Home Screen first<\/b>/);
+  // Android, Mac, Windows and Linux all get a name in the device list.
+  for (const platform of ["iPad", "iPhone", "Android", "Mac", "Windows", "Linux"]) {
+    assert.ok(push.includes(`"${platform}"`), `${platform} must be named in describeThisDevice`);
+  }
+  for (const browser of ["Edge", "Opera", "Chrome", "Firefox", "Safari"]) {
+    assert.ok(push.includes(`"${browser}"`), `${browser} must be named in describeThisDevice`);
+  }
+  // The manifest still declares the installability the whole thing rests on.
+  assert.equal(manifest.display, "standalone");
+  assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512"));
+});
+
+test("17. permission has more than two states, and each says what to do", () => {
+  assert.match(push, /state: "granted" \| "denied" \| "unsupported" \| "unconfigured" \| "needs-home-screen" \| "error"/);
+  assert.match(page, /<b>Blocked in this browser<\/b>/);
+  assert.match(page, /<b>This browser cannot deliver alerts<\/b>/);
+  assert.match(page, /<b>Not configured for this deployment<\/b>/);
+  // Every one of those still reassures that the bell is unaffected.
+  const states = page.slice(page.indexOf('className="notify-device-state"'), page.indexOf("What to be alerted about"));
+  assert.ok((states.match(/bell/gi) || []).length >= 2,
+    "a blocked or unsupported state must still say the bell keeps working");
+});
+
+test("18. devices are listed, nameable, switchable and removable", () => {
+  assert.match(page, /className="notify-devices"/);
+  assert.match(page, /deviceAction\(device\.id, \{ enabled: event\.target\.checked \}\)/);
+  assert.match(page, /deviceAction\(device\.id, "remove"\)/);
+  assert.match(page, /Last used \{notifyAgo\(device\.lastSeen\)\}/);
+  assert.match(migration, /add column if not exists device_label text/);
+  assert.match(migration, /add column if not exists last_seen_at timestamptz/);
+  // A test alert goes down the real path, not a fake local banner: a fake one
+  // proves only that this tab can draw a notification.
+  assert.match(page, /const testAlert = async \(\) => \{/);
+  assert.match(page, /event: "account\.test"/);
+  assert.ok(!/new Notification\("Test/.test(page), "the test alert must not be a local fake");
+});
+
+test("19. the twelve categories are real, and the sensitive ones are marked", () => {
+  const ids = ["attendance", "schedule", "leave", "performance", "development", "projects",
+    "accounting", "pay", "approvals", "messages", "announcements", "system"];
+  for (const id of ids) {
+    assert.ok(migration.includes(`('${id}',`), `category ${id} must exist`);
+  }
+  assert.equal(ids.length, 12);
+  // Pay and accounting are marked sensitive, so their alerts carry no figures.
+  assert.match(migration, /\('accounting',[^\n]*true,/);
+  assert.match(migration, /\('pay',[^\n]*true,/);
+  assert.match(page, /Alerts for this never show figures on a lock screen/);
+  // Quiet hours hold the alert and never the record.
+  assert.match(page, /Alerts are held during these hours\. Notifications still arrive in the bell straight away\./);
+});
+
+test("20. the design the app already had is untouched", () => {
+  // Six work-area cards on Home, still six.
+  const cards = ["Time & Attendance", "Performance", "Engineering Management",
+    "HR & Skills", "Accounting", "Administration"];
+  for (const card of cards) assert.ok(page.includes(card), `the ${card} card must survive`);
+  // Rounded cards, the decorative mark, both themes and RTL all still there.
+  assert.match(read("app/globals.css"), /\.module-bubble \{[\s\S]{0,600}border-radius: 36px/);
+  assert.match(pass, /\.unified-app \.module-bubble \{ border-radius: var\(--radius-card\); \}/);
+  assert.match(page, /home-hero-mark/);
+  assert.match(pass, /\.unified-app\.dark \.bell-panel \{/);
+  assert.match(pass, /\[dir="rtl"\] \.notify-switch input:checked \+ i::after/);
+  // The notification panel uses the shell's own tokens rather than inventing
+  // a second palette.
+  assert.match(pass, /\.bell-panel \{[\s\S]{0,600}background: var\(--surface-raised, #fff\);/);
+  // And the service worker was bumped, or every device keeps the old one.
+  assert.match(sw, /const CACHE_NAME = "larsa-control-v21";/);
+  assert.ok(sw.includes('"/icons/badge-72.png"'), "the badge icon must be cached with the rest");
+});
+
+/* Extras that are cheap to check and expensive to get wrong. */
+
+test("the bell degrades honestly when there is no backend", () => {
+  assert.match(page, /Showing this device only — no account storage is configured/);
+  assert.match(notify, /if \(!supabaseConfigured\(\)\) return fallback;/);
+  // Every RPC wrapper swallows its own failure: a notification centre that
+  // throws on a flaky connection is worse than one showing what it last knew.
+  assert.match(notify, /\} catch \{\s*\n\s*\/\/ A notification centre that throws/);
+});
+
+test("the panel escapes the topbar without escaping the theme", () => {
+  /* Two bugs, one line. The topbar carries a backdrop-filter, which makes it
+     the containing block for anything position:fixed inside it — so the mobile
+     sheet anchored to the bottom of the bar instead of the screen. Portalling
+     to <body> fixed that and broke dark mode, because .unified-app.dark no
+     longer had the panel as a descendant. The shell root is the one host that
+     satisfies both. */
+  assert.match(page, /document\.querySelector\("\.unified-app"\) \|\| document\.body/);
+  assert.match(page, /createPortal\(panel, host\)/);
+  assert.ok(!/createPortal\(panel, document\.body\)/.test(page),
+    "portalling to body would drop the panel out of the dark theme");
+  assert.match(pass, /\.unified-app\.dark \.bell-panel \{/);
+  // The anchor is measured, not assumed from the bar's height.
+  assert.match(page, /button\.getBoundingClientRect\(\)/);
+  assert.match(pass, /top: var\(--bell-top, 84px\)/);
+});
+
+test("the badge and the panel cannot disagree", () => {
+  // A bell showing two unread while its own panel says "All caught up" is
+  // what happens when the badge has a fallback and the panel does not.
+  assert.match(page, /const effectiveCounts: NotifyCounts = notifyConfigured\(\) \? notifyCounts : \{/);
+  assert.match(page, /const unreadCount = effectiveCounts\.unread;/);
+  assert.match(page, /counts=\{effectiveCounts\}/);
+});
+
+test("the unread badge reaches the app icon, not just the bell", () => {
+  assert.match(page, /setAppBadge\(sessionUser \? count : 0\)/);
+  assert.match(push, /export function setAppBadge\(count: number\): void/);
+  assert.match(sw, /data\.type !== "larsa:badge"/);
+  assert.match(sw, /self\.navigator\.setAppBadge/);
+});
