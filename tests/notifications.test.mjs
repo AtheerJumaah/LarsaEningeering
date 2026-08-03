@@ -482,6 +482,24 @@ test("a notification wears the mark, not a box with the mark in it", () => {
     `the notification icon must have no alpha channel (PNG colour type ${colourType})`);
 });
 
+test("the sidebar's rounded shoulder reveals the bar, not the page", () => {
+  /* A rounded corner does not paint — it reveals whatever is behind it. Behind
+     the sidebar's top-right corner was the page surface, which on any of the
+     warm appearance choices (Sand, Clay, Stone…) is a different colour from
+     the near-white bar an inch to its right. The curve then read as a stray
+     wedge of a third colour instead of as the bar wrapping the panel.
+     The strip uses the SAME value as .topbar over the SAME page surface, so
+     the two composite identically rather than merely closely. */
+  assert.match(pass, /\.unified-app::before \{/);
+  assert.match(pass, /background: color-mix\(in srgb, var\(--bg\) 88%, transparent\)/);
+  assert.match(pass, /height: 74px;\s+\/\* \.topbar's min-height/);
+  // Below the sidebar (z 50) and the bar (z 30), so it only shows in the notch.
+  assert.match(pass, /\.unified-app::before \{[\s\S]{0,320}z-index: 0;/);
+  assert.match(pass, /\.unified-app \{ position: relative; \}/);
+  // And it must never intercept a click meant for what is under it.
+  assert.match(pass, /\.unified-app::before \{[\s\S]{0,360}pointer-events: none;/);
+});
+
 test("the panel escapes the topbar without escaping the theme", () => {
   /* Two bugs, one line. The topbar carries a backdrop-filter, which makes it
      the containing block for anything position:fixed inside it — so the mobile
