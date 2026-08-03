@@ -4,7 +4,7 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice } from "../lib/supabase/push";
+import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
   fetchSetup, setCategoryPref, setNotifySettings, updateDevice, removeDevice,
@@ -12730,8 +12730,15 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
       body: "If this reached your device outside the app, alerts are working.",
       dedupeKey: `test:${Date.now()}`,
     }]);
+    /* Permission granted is not the same as "this device will show it". When
+       the operating system suppresses the browser's notifications, every call
+       still succeeds and the banner is silently discarded — so telling someone
+       the test was sent would be technically true and completely useless. */
+    const visible = await canDisplayNotifications();
     setBusy(false);
-    setMessage("Sent. It is in your bell now; the device alert follows within a few seconds.");
+    setMessage(visible
+      ? "Sent. It is in your bell now, and the device alert should appear within a few seconds."
+      : "Sent to your bell — but this device discarded it without showing anything. That is your operating system, not Larsa Control: check Do Not Disturb, and that your browser is allowed to show notifications in your system notification settings.");
   };
 
   const setPref = async (category: string, push: boolean, mail: boolean) => {
