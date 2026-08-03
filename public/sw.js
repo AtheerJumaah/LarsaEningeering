@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v21";
+const CACHE_NAME = "larsa-control-v22";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -137,6 +137,13 @@ self.addEventListener("push", (event) => {
       tag: payload.tag ? String(payload.tag) : undefined,
       renotify: Boolean(payload.tag),
       timestamp: Date.now(),
+      /* Announce itself the way a message does. `silent: false` is not the
+         same as leaving it unset on every platform, and the vibration pattern
+         is what makes a phone in a pocket actually noticeable — two short
+         buzzes, the cadence of a text rather than the long drone of a call.
+         Both defer to the person's own setting, and to the OS above that. */
+      silent: payload.sound === false,
+      vibrate: payload.sound === false ? undefined : [180, 90, 180],
       data: { url, notificationId: payload.notificationId || null, category: payload.category || null },
     }),
   );
