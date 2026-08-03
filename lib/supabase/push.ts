@@ -194,6 +194,44 @@ export async function thisDeviceSubscribed(): Promise<boolean> {
   }
 }
 
+/* Whether this device can ACTUALLY display a notification, as opposed to
+ * merely having granted permission to try.
+ *
+ * These are different questions and only the first one matters. When Windows,
+ * macOS or Android suppresses a browser's notifications at the operating
+ * system level — Do Not Disturb, Focus Assist, or the browser switched off in
+ * the OS notification list — showNotification() still resolves successfully.
+ * Nothing throws. The permission still reads "granted". The notification is
+ * simply discarded, and the app has no idea.
+ *
+ * That is how somebody ends up pressing "Send a test", being told it was sent,
+ * seeing nothing, and reasonably concluding the software is broken. So the
+ * test posts a real notification and then asks whether it exists: if the
+ * platform swallowed it, getNotifications() comes back empty and we can say
+ * so instead of claiming success. */
+export async function canDisplayNotifications(): Promise<boolean> {
+  if (!pushSupported() || Notification.permission !== "granted") return false;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const tag = "larsa-display-check";
+    await registration.showNotification("Larsa Control", {
+      body: "Checking notifications on this device…",
+      tag,
+      // Silent and instantly withdrawn: this is a probe, not a message. If the
+      // platform DOES show it, it is gone again before anyone reads it.
+      silent: true,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/badge-72.png",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const found = await registration.getNotifications({ tag });
+    found.forEach((notification) => notification.close());
+    return found.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /* Sets the app-icon badge through the service worker so it stays right even
  * with several tabs open, and after the last one is closed. */
 export function setAppBadge(count: number): void {
