@@ -797,20 +797,24 @@ function selOpts(arr,sel){ return arr.map(o=>`<option value="${esc(o)}" ${o===se
 
 /* totals engine (everything to USD) */
 function totals(){
-  const rev = state.revenue.filter(r=>r.status==="Received").reduce((s,r)=>s+usd(r.amount,r.currency),0);
-  const fees = state.funding.filter(f=>["Approved","Received"].includes(f.status)&&!f.waived).reduce((s,f)=>s+usd(f.consultancyFee,f.currency),0);
+  /* Every reduce passes the rate recorded on the line (fxRate). Collections
+     that never carry one (operating, payroll) pass undefined and keep the
+     current-rate behaviour — but recorded history stops moving whenever the
+     day's rate setting is edited. */
+  const rev = state.revenue.filter(r=>r.status==="Received").reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
+  const fees = state.funding.filter(f=>["Approved","Received"].includes(f.status)&&!f.waived).reduce((s,f)=>s+usd(f.consultancyFee,f.currency,f.fxRate),0);
   const realRevenue = rev+fees;
   const actual=s=>["Approved","Paid","Received"].includes(s);
-  const projExp = state.expenses.filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.amount,e.currency),0)
-    + (state.materials||[]).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.amount,e.currency),0)
-    + (state.projectLabor||[]).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.total,e.currency),0);
-  const opEx = state.operating.filter(o=>actual(o.status)).reduce((s,o)=>s+usd(o.amount,o.currency),0)
-    + state.expenses.filter(e=>actual(e.status)&&e.paymentSource==="Larsa Operating").reduce((s,e)=>s+usd(e.amount,e.currency),0);
-  const payroll = state.payroll.filter(p=>!["Void","Rejected"].includes(p.status)).reduce((s,p)=>s+usd(p.totalCompanyCost||p.grossPay||p.gross||0,p.currency),0);
-  const commissions = state.commissions.filter(c=>!["Void","Rejected"].includes(c.status)).reduce((s,c)=>s+num(c.due),0);
+  const projExp = state.expenses.filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0)
+    + (state.materials||[]).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0)
+    + (state.projectLabor||[]).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.total,e.currency,e.fxRate),0);
+  const opEx = state.operating.filter(o=>actual(o.status)).reduce((s,o)=>s+usd(o.amount,o.currency,o.fxRate),0)
+    + state.expenses.filter(e=>actual(e.status)&&e.paymentSource==="Larsa Operating").reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0);
+  const payroll = state.payroll.filter(p=>!["Void","Rejected","Reversed"].includes(p.status)).reduce((s,p)=>s+usd(p.totalCompanyCost||p.grossPay||p.gross||0,p.currency),0);
+  const commissions = state.commissions.filter(c=>!["Void","Rejected","Reversed"].includes(c.status)).reduce((s,c)=>s+num(c.due),0);
   const commDue = state.commissions.reduce((s,c)=>s+Math.max(0,num(c.due)-num(c.paid)),0);
-  const fundingGross = state.funding.filter(f=>["Approved","Received"].includes(f.status)).reduce((s,f)=>s+usd(f.amount,f.currency),0);
-  const netConstruction = state.funding.filter(f=>["Approved","Received"].includes(f.status)).reduce((s,f)=>s+usd(f.netConstruction,f.currency),0);
+  const fundingGross = state.funding.filter(f=>["Approved","Received"].includes(f.status)).reduce((s,f)=>s+usd(f.amount,f.currency,f.fxRate),0);
+  const netConstruction = state.funding.filter(f=>["Approved","Received"].includes(f.status)).reduce((s,f)=>s+usd(f.netConstruction,f.currency,f.fxRate),0);
   const fundsHeld = netConstruction - projExp;       // client construction trust balance
   const constructionSpend = projExp;                 // paid FROM client funds (not Larsa P&L)
   const larsaCosts = opEx + payroll + commissions;   // Larsa's own running costs
@@ -1621,11 +1625,17 @@ function renderCommissions(){
    ============================================================ */
 let clientProj="";
 function clientTotals(pid){
-  const fund=state.funding.filter(f=>f.projectId===pid);
-  const gross=fund.reduce((s,f)=>s+usd(f.amount,f.currency),0);
-  const fee=fund.reduce((s,f)=>s+(f.waived?0:usd(f.consultancyFee,f.currency)),0);
-  const net=fund.reduce((s,f)=>s+usd(f.netConstruction,f.currency),0);
-  const spent=state.expenses.filter(e=>e.projectId===pid).reduce((s,e)=>s+usd(e.amount,e.currency),0);
+  /* Drafts and rejected funding are not client money, and construction
+     spending is materials and labor as well as expenses — a client page
+     that ignored both overstated the balance in both directions. */
+  const fund=state.funding.filter(f=>f.projectId===pid&&["Approved","Received"].includes(f.status));
+  const gross=fund.reduce((s,f)=>s+usd(f.amount,f.currency,f.fxRate),0);
+  const fee=fund.reduce((s,f)=>s+(f.waived?0:usd(f.consultancyFee,f.currency,f.fxRate)),0);
+  const net=fund.reduce((s,f)=>s+usd(f.netConstruction,f.currency,f.fxRate),0);
+  const actualRow=e=>["Approved","Paid","Received"].includes(e.status)&&e.paymentSource==="Client Funding";
+  const spent=state.expenses.filter(e=>e.projectId===pid&&actualRow(e)).reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0)
+    + (state.materials||[]).filter(e=>e.projectId===pid&&actualRow(e)).reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0)
+    + (state.projectLabor||[]).filter(e=>e.projectId===pid&&actualRow(e)).reduce((s,e)=>s+usd(e.total,e.currency,e.fxRate),0);
   return {gross,fee,net,spent,balance:net-spent,fund};
 }
 function renderClients(){
@@ -1709,16 +1719,16 @@ function reportData(){
   const fund=F(state.funding).filter(f=>["Approved","Received"].includes(f.status));
   const exp=F(state.expenses).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding");
   const op=F(state.operating).filter(o=>actual(o.status));
-  const pay=F(state.payroll.map(p=>({...p,date:p.payDate}))).filter(p=>!["Void","Rejected"].includes(p.status));
-  const comm=F(state.commissions).filter(c=>!["Void","Rejected"].includes(c.status));
-  const revUSD=rev.reduce((s,r)=>s+usd(r.amount,r.currency),0);
-  const feeUSD=fund.reduce((s,f)=>s+(f.waived?0:usd(f.consultancyFee,f.currency)),0);
-  const expUSD=exp.reduce((s,e)=>s+usd(e.amount,e.currency),0);
-  const opUSD=op.reduce((s,o)=>s+usd(o.amount,o.currency),0);
+  const pay=F(state.payroll.map(p=>({...p,date:p.payDate}))).filter(p=>!["Void","Rejected","Reversed"].includes(p.status));
+  const comm=F(state.commissions).filter(c=>!["Void","Rejected","Reversed"].includes(c.status));
+  const revUSD=rev.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
+  const feeUSD=fund.reduce((s,f)=>s+(f.waived?0:usd(f.consultancyFee,f.currency,f.fxRate)),0);
+  const expUSD=exp.reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0);
+  const opUSD=op.reduce((s,o)=>s+usd(o.amount,o.currency,o.fxRate),0);
   const payUSD=pay.reduce((s,p)=>s+usd(p.totalCompanyCost||p.grossPay||p.gross||0,p.currency),0);
   const commUSD=comm.reduce((s,c)=>s+num(c.due),0);
   const net=revUSD+feeUSD-opUSD-payUSD-commUSD;
-  const netConstruction=fund.reduce((s,f)=>s+usd(f.netConstruction,f.currency),0);
+  const netConstruction=fund.reduce((s,f)=>s+usd(f.netConstruction,f.currency,f.fxRate),0);
   return {a,b,rev,fund,exp,op,pay,comm,revUSD,feeUSD,expUSD,opUSD,payUSD,commUSD,netConstruction,net};
 }
 function setRptPreset(p){ rptPreset=p; render(); }
@@ -1862,10 +1872,10 @@ function exportCSV(){
   const d=reportData();
   const esc2=s=>`"${String(s==null?"":s).replace(/"/g,'""')}"`;
   const lines=[["Section","Date","A","B","Amount","Currency","USD"].join(",")];
-  d.rev.forEach(r=>lines.push(["Revenue",r.date,r.stream,r.description,num(r.amount),r.currency,round2(usd(r.amount,r.currency))].map(esc2).join(",")));
-  d.fund.forEach(f=>lines.push(["Funding",f.date,project(f.projectId)?.name||"","fee:"+num(f.consultancyFee),num(f.amount),f.currency,round2(usd(f.netConstruction,f.currency))].map(esc2).join(",")));
-  d.exp.forEach(e=>lines.push(["Expense",e.date,e.category,e.supplier||"",num(e.amount),e.currency,round2(usd(e.amount,e.currency))].map(esc2).join(",")));
-  d.op.forEach(o=>lines.push(["Operating",o.date,o.region,o.category,num(o.amount),o.currency,round2(usd(o.amount,o.currency))].map(esc2).join(",")));
+  d.rev.forEach(r=>lines.push(["Revenue",r.date,r.stream,r.description,num(r.amount),r.currency,round2(usd(r.amount,r.currency,r.fxRate))].map(esc2).join(",")));
+  d.fund.forEach(f=>lines.push(["Funding",f.date,project(f.projectId)?.name||"","fee:"+num(f.consultancyFee),num(f.amount),f.currency,round2(usd(f.netConstruction,f.currency,f.fxRate))].map(esc2).join(",")));
+  d.exp.forEach(e=>lines.push(["Expense",e.date,e.category,e.supplier||"",num(e.amount),e.currency,round2(usd(e.amount,e.currency,e.fxRate))].map(esc2).join(",")));
+  d.op.forEach(o=>lines.push(["Operating",o.date,o.region,o.category,num(o.amount),o.currency,round2(usd(o.amount,o.currency,o.fxRate))].map(esc2).join(",")));
   d.pay.forEach(p=>lines.push(["Payroll",p.payDate,p.employee,p.period,num(p.net),p.currency,round2(usd(p.net,p.currency))].map(esc2).join(",")));
   downloadBlob(lines.join("\n"), `Larsa_Report_${today()}.csv`, "text/csv");
 }
@@ -2494,16 +2504,16 @@ function v33Totals(range){
   const revenue=v33Arr("revenue",range).filter(r=>r.status==="Received");
   const funding=v33Arr("funding",range).filter(r=>["Approved","Received"].includes(r.status));
   const expenses=v33Arr("expenses",range), materials=v33Arr("materials",range), labor=v33Arr("projectLabor",range), operating=v33Arr("operating",range), payroll=v33Arr("payroll",range), commissions=v33Arr("commissions",range);
-  const engineering=revenue.reduce((s,r)=>s+usd(r.amount,r.currency),0), fees=funding.filter(f=>!f.waived).reduce((s,f)=>s+usd(f.consultancyFee,f.currency),0);
-  const grossFunding=funding.reduce((s,f)=>s+usd(f.amount,f.currency),0), netConstruction=funding.reduce((s,f)=>s+usd(f.netConstruction,f.currency),0);
-  const expActual=expenses.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0);
-  const matActual=materials.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0);
-  const labActual=labor.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.total,r.currency),0);
+  const engineering=revenue.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0), fees=funding.filter(f=>!f.waived).reduce((s,f)=>s+usd(f.consultancyFee,f.currency,f.fxRate),0);
+  const grossFunding=funding.reduce((s,f)=>s+usd(f.amount,f.currency,f.fxRate),0), netConstruction=funding.reduce((s,f)=>s+usd(f.netConstruction,f.currency,f.fxRate),0);
+  const expActual=expenses.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
+  const matActual=materials.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
+  const labActual=labor.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.total,r.currency,r.fxRate),0);
   const clientSpend=expActual+matActual+labActual;
-  const op=operating.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0);
-  const pay=payroll.filter(r=>!["Void","Rejected"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),0);
-  const commissionCost=commissions.filter(r=>!["Void","Rejected"].includes(r.status)).reduce((s,r)=>s+num(r.due),0);
-  const pending=[...expenses,...materials,...labor].filter(r=>xPending(r.status)).reduce((s,r)=>s+usd(r.amount??r.total,r.currency),0);
+  const op=operating.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
+  const pay=payroll.filter(r=>!["Void","Rejected","Reversed"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),0);
+  const commissionCost=commissions.filter(r=>!["Void","Rejected","Reversed"].includes(r.status)).reduce((s,r)=>s+num(r.due),0);
+  const pending=[...expenses,...materials,...labor].filter(r=>xPending(r.status)).reduce((s,r)=>s+usd(r.amount??r.total,r.currency,r.fxRate),0);
   const realRevenue=engineering+fees, companyCosts=op+pay+commissionCost, net=realRevenue-companyCosts;
   return {revenue,funding,expenses,materials,labor,operating,payroll,commissions,engineering,fees,realRevenue,grossFunding,netConstruction,clientSpend,op,pay,commissionCost,companyCosts,net,pending,fundsHeld:netConstruction-clientSpend};
 }
@@ -2655,9 +2665,9 @@ function x33CalcUSPayroll(id){
 function x33SubmitPayroll(id){const p=state.payroll.find(x=>x.id===id);if(!p)return;p.status="Pending Manager Approval";p.submittedBy=currentUser?.email||"";p.submittedAt=new Date().toISOString();x33Notify({recipientType:"Manager",recipientName:"Management",subject:v33Text("Payroll Needs Approval","راتب يحتاج اعتماد"),message:`${p.employee||"Employee"} · ${fmt(p.netPay,p.currency)} · ${p.payDate}`,relatedPayrollId:id,status:"Ready"});save();render()}
 function x33ApprovePayroll(id){if(!can("approve","payroll")){xDenied();return}const p=state.payroll.find(x=>x.id===id);if(!p)return;p.status="Approved";p.approvedBy=currentUser?.email||"";p.approvedAt=new Date().toISOString();const e=state.employees.find(x=>x.id===p.employeeId);x33Notify({recipientType:"Employee",recipientName:p.employee,recipientEmail:e?.email||"",subject:v33Text("Payroll Approved","تم اعتماد الراتب"),message:v33Text(`Your payroll for ${p.periodStart||p.payDate} was approved. Net pay: ${fmt(p.netPay,p.currency)}.`,`تم اعتماد راتبك للفترة ${p.periodStart||p.payDate}. الصافي: ${fmt(p.netPay,p.currency)}.`),relatedPayrollId:id,status:"Ready"});save();render()}
 function x33PaidPayroll(id){const p=state.payroll.find(x=>x.id===id);if(!p)return;p.status="Paid";p.paidBy=currentUser?.email||"";p.paidAt=new Date().toISOString();const e=state.employees.find(x=>x.id===p.employeeId);x33Notify({recipientType:"Employee",recipientName:p.employee,recipientEmail:e?.email||"",subject:v33Text("Payroll Paid","تم صرف الراتب"),message:v33Text(`Your payroll was marked paid. Net pay: ${fmt(p.netPay,p.currency)}.`,`تم تسجيل الراتب كمدفوع. الصافي: ${fmt(p.netPay,p.currency)}.`),relatedPayrollId:id,status:"Ready"});save();render()}
-function x33PayrollStatement(id,mode){const p=state.payroll.find(x=>x.id===id);if(!p)return;const e=state.employees.find(x=>x.id===p.employeeId)||{};let rows=state.payroll.filter(r=>r.employeeId===p.employeeId&&r.status!=="Void");if(mode==="month")rows=rows.filter(r=>String(r.payDate||r.periodStart).slice(0,7)===String(p.payDate||p.periodStart).slice(0,7));if(mode==="year")rows=rows.filter(r=>String(r.payDate||r.periodStart).slice(0,4)===String(p.payDate||p.periodStart).slice(0,4));const sum=k=>rows.reduce((s,r)=>s+num(r[k]),0),title=v33Text("Employee Payroll Statement","كشف راتب الموظف");const body=`${printHeader(title)}<div class="kgrid"><div class="kbox"><div class="l">${v33Text("Employee","الموظف")}</div><div class="v">${esc(e.name||p.employee||"—")}</div></div><div class="kbox"><div class="l">${v33Text("Mode","النوع")}</div><div class="v">${v33Text(mode,"تراكمي")}</div></div><div class="kbox"><div class="l">${v33Text("Region","المنطقة")}</div><div class="v">${esc(e.payrollRegion||p.region||"")}</div></div></div><table><thead><tr><th>${v33Text("Pay Date","تاريخ الدفع")}</th><th>${v33Text("Period","الفترة")}</th><th class="r">${v33Text("Gross","الإجمالي")}</th><th class="r">${v33Text("Deductions","الاستقطاعات")}</th><th class="r">${v33Text("Net","الصافي")}</th><th class="r">${v33Text("Company Cost","تكلفة الشركة")}</th><th>${v33Text("Status","الحالة")}</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.payDate||""}</td><td>${r.periodStart||""} — ${r.periodEnd||""}</td><td class="r">${fmt(r.grossPay,r.currency)}</td><td class="r">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="r">${fmt(r.netPay,r.currency)}</td><td class="r">${fmt(r.totalCompanyCost,r.currency)}</td><td>${esc(r.status||"")}</td></tr>`).join("")}</tbody></table><table><tbody><tr class="tot"><td>${v33Text("Gross Total","إجمالي المستحقات")}</td><td class="r">${fmt(sum("grossPay"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Total Deductions","إجمالي الاستقطاعات")}</td><td class="r">${fmt(sum("totalEmployeeDeductions"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Net Total","إجمالي الصافي")}</td><td class="r">${fmt(sum("netPay"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Total Company Cost","إجمالي تكلفة الشركة")}</td><td class="r">${fmt(sum("totalCompanyCost"),p.currency)}</td></tr></tbody></table>`;printDoc(title,body)}
+function x33PayrollStatement(id,mode){const p=state.payroll.find(x=>x.id===id);if(!p)return;const e=state.employees.find(x=>x.id===p.employeeId)||{};let rows=state.payroll.filter(r=>r.employeeId===p.employeeId&&r.status!=="Void");if(mode==="month")rows=rows.filter(r=>String(r.payDate||r.periodStart).slice(0,7)===String(p.payDate||p.periodStart).slice(0,7));if(mode==="year")rows=rows.filter(r=>String(r.payDate||r.periodStart).slice(0,4)===String(p.payDate||p.periodStart).slice(0,4));const sumRows=rows.filter(r=>r.status!=="Reversed"),sum=k=>sumRows.reduce((s,r)=>s+num(r[k]),0),title=v33Text("Employee Payroll Statement","كشف راتب الموظف");const body=`${printHeader(title)}<div class="kgrid"><div class="kbox"><div class="l">${v33Text("Employee","الموظف")}</div><div class="v">${esc(e.name||p.employee||"—")}</div></div><div class="kbox"><div class="l">${v33Text("Mode","النوع")}</div><div class="v">${v33Text(mode,"تراكمي")}</div></div><div class="kbox"><div class="l">${v33Text("Region","المنطقة")}</div><div class="v">${esc(e.payrollRegion||p.region||"")}</div></div></div><table><thead><tr><th>${v33Text("Pay Date","تاريخ الدفع")}</th><th>${v33Text("Period","الفترة")}</th><th class="r">${v33Text("Gross","الإجمالي")}</th><th class="r">${v33Text("Deductions","الاستقطاعات")}</th><th class="r">${v33Text("Net","الصافي")}</th><th class="r">${v33Text("Company Cost","تكلفة الشركة")}</th><th>${v33Text("Status","الحالة")}</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.payDate||""}</td><td>${r.periodStart||""} — ${r.periodEnd||""}</td><td class="r">${fmt(r.grossPay,r.currency)}</td><td class="r">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="r">${fmt(r.netPay,r.currency)}</td><td class="r">${fmt(r.totalCompanyCost,r.currency)}</td><td>${esc(r.status||"")}</td></tr>`).join("")}</tbody></table><table><tbody><tr class="tot"><td>${v33Text("Gross Total","إجمالي المستحقات")}</td><td class="r">${fmt(sum("grossPay"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Total Deductions","إجمالي الاستقطاعات")}</td><td class="r">${fmt(sum("totalEmployeeDeductions"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Net Total","إجمالي الصافي")}</td><td class="r">${fmt(sum("netPay"),p.currency)}</td></tr><tr class="tot"><td>${v33Text("Total Company Cost","إجمالي تكلفة الشركة")}</td><td class="r">${fmt(sum("totalCompanyCost"),p.currency)}</td></tr></tbody></table>`;printDoc(title,body)}
 function x33AskStatement(id){const m=prompt(v33Text("Type statement mode: month, year, cumulative","اكتب نوع الكشف: month أو year أو cumulative"),"month");if(m!==null)x33PayrollStatement(id,(m||"cumulative").toLowerCase())}
-function renderPayrollV33(){const a=state.payroll.filter(r=>(!payEmp||r.employeeId===payEmp)&&(payRegion==="all"||r.region===payRegion)&&r.status!=="Void"&&xVisible(r)).sort((x,y)=>String(y.payDate).localeCompare(x.payDate)),cost=a.reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),0);setHTML("view",`<div class="page-head"><h1>${t("nav_payroll")}</h1><div>${can("export","payroll")?`<button class="btn ghost" onclick="xPayrollCSV()">CSV</button><button class="btn ghost" onclick="v33AdvancedExcel('payroll')">${v33Text("Excel","إكسل")}</button>`:""} ${can("create","payroll")?`<button class="btn" onclick="addNew('payroll')">+ ${t("ed_add")}</button>`:""}</div></div><div class="notice">${v33Text("US payroll deductions can be calculated with configurable tax settings. Review before filing or paying.","يمكن حساب استقطاعات رواتب أمريكا من إعدادات ضريبية قابلة للتعديل. يجب المراجعة قبل الإيداع أو الدفع.")}</div><div class="kpi-row">${kpi(v33Text("Total Company Payroll Cost","إجمالي تكلفة الرواتب على الشركة"),money(cost),"","sal")}${kpi(v33Text("Pending Manager Approval","بانتظار اعتماد المدير"),a.filter(r=>r.status==="Pending Manager Approval").length,"","bad")}${kpi(v33Text("Paid Records","قيود مدفوعة"),a.filter(r=>r.status==="Paid").length,"","good")}</div>${card(t("p_center"),`<div class="filter-bar"><select onchange="payEmp=this.value;render()"><option value="">${v33Text("All Employees","كل الموظفين")}</option>${state.employees.map(e=>`<option value="${e.id}" ${e.id===payEmp?"selected":""}>${esc(e.name)}</option>`).join("")}</select><select onchange="payRegion=this.value;render()">${["all","Iraq","USA","International"].map(r=>`<option value="${r}" ${r===payRegion?"selected":""}>${r==="all"?v33Text("All Regions","كل المناطق"):r}</option>`).join("")}</select></div><div class="table-wrap"><table><thead><tr><th>${t("p_paydate")}</th><th>${t("p_employee")}</th><th>${t("region")}</th><th>${v33Text("Period","الفترة")}</th><th class="right">${v33Text("Gross","الإجمالي")}</th><th class="right">${v33Text("Deductions","الاستقطاعات")}</th><th class="right">${v33Text("Net","الصافي")}</th><th class="right">${v33Text("Company Cost","تكلفة الشركة")}</th><th>${t("status")}</th><th></th></tr></thead><tbody>${a.length?a.map(r=>`<tr><td>${r.payDate}</td><td>${esc(r.employee||"—")}${r.taxWarning?`<div class="neg small">${esc(r.taxWarning)}</div>`:""}</td><td>${r.region}</td><td>${r.periodStart||"—"} — ${r.periodEnd||"—"}</td><td class="right">${fmt(r.grossPay,r.currency)}</td><td class="right neg">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="right sal">${fmt(r.netPay,r.currency)}</td><td class="right">${fmt(r.totalCompanyCost,r.currency)}</td><td><span class="pill ${r.status==="Paid"?"ok":""}">${esc(r.status||"")}</span></td><td class="right nowrap">${r.region==="USA"?`<button class="mini" onclick="x33CalcUSPayroll('${r.id}')">${v33Text("Calc Tax","حساب الضريبة")}</button>`:""} <button class="mini" onclick="x33AskStatement('${r.id}')">${v33Text("Statement","كشف")}</button> <button class="mini" onclick="printPaystub('${r.id}')">${t("p_paystub")}</button> <button class="mini" onclick="x33SubmitPayroll('${r.id}')">${v33Text("Submit","إرسال")}</button> ${can("approve","payroll")?`<button class="mini approve" onclick="x33ApprovePayroll('${r.id}')">${v33Text("Approve","اعتماد")}</button>`:""} <button class="mini" onclick="x33PaidPayroll('${r.id}')">${v33Text("Paid","مدفوع")}</button> ${can("edit","payroll")?`<button class="mini" onclick="openEditor('payroll','${r.id}')">✎</button>`:""}</td></tr>`).join(""):emptyRow(10)}</tbody></table></div>`)}`)}
+function renderPayrollV33(){const a=state.payroll.filter(r=>(!payEmp||r.employeeId===payEmp)&&(payRegion==="all"||r.region===payRegion)&&r.status!=="Void"&&xVisible(r)).sort((x,y)=>String(y.payDate).localeCompare(x.payDate)),cost=a.reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),0);setHTML("view",`<div class="page-head"><h1>${t("nav_payroll")}</h1><div>${can("export","payroll")?`<button class="btn ghost" onclick="xPayrollCSV()">CSV</button><button class="btn ghost" onclick="v33AdvancedExcel('payroll')">${v33Text("Excel","إكسل")}</button>`:""} ${can("create","payroll")?`<button class="btn" onclick="addNew('payroll')">+ ${t("ed_add")}</button>`:""}</div></div><div class="notice">${v33Text("US payroll deductions can be calculated with configurable tax settings. Review before filing or paying.","يمكن حساب استقطاعات رواتب أمريكا من إعدادات ضريبية قابلة للتعديل. يجب المراجعة قبل الإيداع أو الدفع.")}</div><div class="kpi-row">${kpi(v33Text("Total Company Payroll Cost","إجمالي تكلفة الرواتب على الشركة"),money(cost),"","sal")}${kpi(v33Text("Pending Manager Approval","بانتظار اعتماد المدير"),a.filter(r=>r.status==="Pending Manager Approval").length,"","bad")}${kpi(v33Text("Paid Records","قيود مدفوعة"),a.filter(r=>r.status==="Paid").length,"","good")}</div>${card(t("p_center"),`<div class="filter-bar"><select onchange="payEmp=this.value;render()"><option value="">${v33Text("All Employees","كل الموظفين")}</option>${state.employees.map(e=>`<option value="${e.id}" ${e.id===payEmp?"selected":""}>${esc(e.name)}</option>`).join("")}</select><select onchange="payRegion=this.value;render()">${["all","Iraq","USA","International"].map(r=>`<option value="${r}" ${r===payRegion?"selected":""}>${r==="all"?v33Text("All Regions","كل المناطق"):r}</option>`).join("")}</select></div><div class="table-wrap"><table><thead><tr><th>${t("p_paydate")}</th><th>${t("p_employee")}</th><th>${t("region")}</th><th>${v33Text("Period","الفترة")}</th><th class="right">${v33Text("Gross","الإجمالي")}</th><th class="right">${v33Text("Deductions","الاستقطاعات")}</th><th class="right">${v33Text("Net","الصافي")}</th><th class="right">${v33Text("Company Cost","تكلفة الشركة")}</th><th>${t("status")}</th><th></th></tr></thead><tbody>${a.length?a.map(r=>`<tr><td>${r.payDate}</td><td>${esc(r.employee||"—")}${r.taxWarning?`<div class="neg small">${esc(r.taxWarning)}</div>`:""}</td><td>${r.region}</td><td>${r.periodStart||"—"} — ${r.periodEnd||"—"}</td><td class="right">${fmt(r.grossPay,r.currency)}</td><td class="right neg">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="right sal">${fmt(r.netPay,r.currency)}</td><td class="right">${fmt(r.totalCompanyCost,r.currency)}</td><td><span class="pill ${r.status==="Paid"?"ok":""}">${esc(r.status||"")}</span></td><td class="right nowrap">${r.region==="USA"?`<button class="mini" onclick="x33CalcUSPayroll('${r.id}')">${v33Text("Calc Tax","حساب الضريبة")}</button>`:""} <button class="mini" onclick="x33AskStatement('${r.id}')">${v33Text("Statement","كشف")}</button> <button class="mini" onclick="printPaystub('${r.id}')">${t("p_paystub")}</button> ${["Paid","Reversed"].includes(r.status)?`${r.status==="Paid"&&can("approve","payroll")?`<button class="mini" onclick="x33ReversePayroll('${r.id}')">${v33Text("Reverse","عكس")}</button>`:""}`:`<button class="mini" onclick="x33SubmitPayroll('${r.id}')">${v33Text("Submit","إرسال")}</button> ${can("approve","payroll")?`<button class="mini approve" onclick="x33ApprovePayroll('${r.id}')">${v33Text("Approve","اعتماد")}</button>`:""} ${can("approve","payroll")&&r.status==="Approved"?`<button class="mini" onclick="x33PaidPayroll('${r.id}')">${v33Text("Paid","مدفوع")}</button>`:""} ${can("edit","payroll")?`<button class="mini" onclick="openEditor('payroll','${r.id}')">✎</button>`:""}`}</td></tr>`).join(""):emptyRow(10)}</tbody></table></div>`)}`)}
 
 /* ---------- Materials keyword filter, PDF and Excel ---------- */
 let v33MatFilter={q:"",preset:"all",from:"",to:"",projectId:""};
@@ -2687,7 +2697,20 @@ function renderProjectsV33(){const a=state.projects.filter(xVisible);setHTML("vi
 async function exportBackup(){const clone=JSON.parse(JSON.stringify(state));clone.appSchemaVersion=V33_VERSION;clone.backupCreatedAt=new Date().toISOString();clone.backupAppName="Larsa Engineering";clone.backupCompatibilityNotes="Use Merge mode to preserve current data; Replace mode overwrites after confirmation.";for(const coll of Object.keys(clone)){if(!Array.isArray(clone[coll]))continue;for(const r of clone[coll]){if(r&&r.receipt&&r.receipt.ref){const got=await idbGet(r.receipt.ref);if(got)r.receipt.data=got.data}}}downloadBlob(JSON.stringify(clone,null,2),`Larsa_Backup_${today()}.json`,"application/json")}
 function v33MergeArray(cur,imp){const m=new Map((cur||[]).map(x=>[x.id,x]));(imp||[]).forEach(x=>{if(!x.id)x.id=uid("imp");m.set(x.id,Object.assign({},m.get(x.id)||{},x))});return [...m.values()]}
 function v33PreviewBackup(data){const rows=Object.keys(data).filter(k=>Array.isArray(data[k])).map(k=>[k,data[k].length]);setHTML("modalRoot",`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${v33Text("Backup Preview","معاينة النسخة")}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><table><tbody>${rows.map(r=>`<tr><td>${r[0]}</td><td class="right">${r[1]}</td></tr>`).join("")}</tbody></table></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${v33Text("Close","إغلاق")}</button></div></div></div>`);document.body.classList.add("modal-open")}
-function importBackup(ev){const f=ev.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=async()=>{try{let data=JSON.parse(String(rd.result).replace(/^\ufeff/,""));if(data&&data.data&&typeof data.data==="object"&&!Array.isArray(data.data)){data=data.data}v33PreviewBackup(data);const mode=prompt(v33Text("Type MERGE to combine, REPLACE to overwrite, or PREVIEW to only preview.","اكتب MERGE للدمج، REPLACE للاستبدال، أو PREVIEW للمعاينة فقط."),"MERGE");if(!mode||mode.toUpperCase()==="PREVIEW")return;for(const coll of Object.keys(data)){if(!Array.isArray(data[coll]))continue;for(const r of data[coll]){if(r&&r.receipt&&r.receipt.data){const ref=r.receipt.ref||uid("rcp");await idbPut(ref,{name:r.receipt.name,data:r.receipt.data});r.receipt={name:r.receipt.name,ref}}}}if(mode.toUpperCase()==="REPLACE"){if(!confirm(v33Text("Replace all current data? This cannot be undone without another backup.","استبدال كل البيانات الحالية؟ لا يمكن التراجع بدون نسخة أخرى.")))return;state=data}else{Object.keys(data).forEach(k=>{if(Array.isArray(data[k]))state[k]=v33MergeArray(state[k]||[],data[k])});if(data.settings)state.settings=Object.assign(state.settings||{},data.settings);if(data.taxSettings)state.taxSettings=Object.assign(state.taxSettings||{},data.taxSettings)}normalize();save();alert(v33Text("Backup imported successfully.","تم استيراد النسخة بنجاح."));render()}catch(e){alert(v33Text("Invalid backup file.","ملف النسخة غير صالح."));console.error(e)}};rd.readAsText(f)}
+function importBackup(ev){const f=ev.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=async()=>{try{let data=JSON.parse(String(rd.result).replace(/^\ufeff/,""));if(data&&data.data&&typeof data.data==="object"&&!Array.isArray(data.data)){data=data.data}v33PreviewBackup(data);const mode=prompt(v33Text("Type MERGE to combine, REPLACE to overwrite, or PREVIEW to only preview.","اكتب MERGE للدمج، REPLACE للاستبدال، أو PREVIEW للمعاينة فقط."),"MERGE");if(!mode||mode.toUpperCase()==="PREVIEW")return;
+  /* Transactional import: every step that can fail — receipt rehydration,
+     merge, normalize — happens on copies BEFORE the live state is touched.
+     The old order mutated `state` collection by collection, so a corrupt
+     receipt half-way left the books part-old, part-new with the original
+     already gone. Now the commit is a single assignment at the end. */
+  if(mode.toUpperCase()==="REPLACE"&&!confirm(v33Text("Replace all current data? This cannot be undone without another backup.","استبدال كل البيانات الحالية؟ لا يمكن التراجع بدون نسخة أخرى.")))return;
+  for(const coll of Object.keys(data)){if(!Array.isArray(data[coll]))continue;for(const r of data[coll]){if(r&&r.receipt&&r.receipt.data){const ref=r.receipt.ref||uid("rcp");await idbPut(ref,{name:r.receipt.name,data:r.receipt.data});r.receipt={name:r.receipt.name,ref}}}}
+  let staged;
+  if(mode.toUpperCase()==="REPLACE"){staged=data}
+  else{staged=JSON.parse(JSON.stringify(state));Object.keys(data).forEach(k=>{if(Array.isArray(data[k]))staged[k]=v33MergeArray(staged[k]||[],data[k])});if(data.settings)staged.settings=Object.assign(staged.settings||{},data.settings);if(data.taxSettings)staged.taxSettings=Object.assign(staged.taxSettings||{},data.taxSettings)}
+  const before=state;state=staged;
+  try{normalize();if(!save())throw new Error("save failed")}catch(err){state=before;try{normalize()}catch(e2){}throw err}
+  alert(v33Text("Backup imported successfully.","تم استيراد النسخة بنجاح."));render()}catch(e){alert(v33Text("Invalid backup file.","ملف النسخة غير صالح."));console.error(e)}};rd.readAsText(f)}
 function resetData(){if(confirm(v33Text("Reset system data? This clears the current local data.","إعادة تعيين بيانات النظام؟ سيتم مسح البيانات المحلية الحالية."))){state=seedDemo();normalize();save();render()}}
 function v33SystemCheck(){const issues=[];const codes={};state.projects.forEach(p=>{if(!p.date&&!p.startDate){} if(!p.code)issues.push(["Project",p.name,"Missing project code"]);codes[p.code]=(codes[p.code]||0)+1;if(xTotals(p.id).balance<0)issues.push(["Project",p.name,"Negative client balance"])});Object.keys(codes).forEach(c=>{if(c&&codes[c]>1)issues.push(["Project",c,"Duplicate project code"])});["funding","expenses","materials","projectLabor","payroll"].forEach(coll=>(state[coll]||[]).forEach(r=>{if(!v33RecordDate(r,coll))issues.push([coll,r.id,"Missing date"]);if(r.projectId&&!project(r.projectId))issues.push([coll,r.id,"Missing linked project"])}));state.payroll.forEach(p=>{if(num(p.netPay)<0)issues.push(["Payroll",p.employee,"Net pay below zero"]);if(p.region==="USA"&&p.taxWarning)issues.push(["Payroll",p.employee,p.taxWarning])});const html=`<div class="table-wrap"><table><thead><tr><th>${v33Text("Module","القسم")}</th><th>${v33Text("Record","السجل")}</th><th>${v33Text("Issue","المشكلة")}</th></tr></thead><tbody>${issues.length?issues.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join(""):emptyRow(3)}</tbody></table></div>`;setHTML("modalRoot",`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${v33Text("System Check","فحص النظام")}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body">${html}</div><div class="modal-foot"><button class="btn" onclick="closeEditor()">${v33Text("Close","إغلاق")}</button></div></div></div>`);document.body.classList.add("modal-open")}
 function v33SaveTaxJSON(){try{state.taxSettings=JSON.parse(val("tax_json"));save();render()}catch(e){alert(v33Text("Invalid tax settings JSON.","إعدادات الضريبة غير صالحة."))}}
@@ -3574,7 +3597,7 @@ document.addEventListener("DOMContentLoaded",boot);
     const pid=(p)=>(project(p.projectId)?.region||p.region||'')===region;
     return {rev:(state.revenue||[]).filter(pid),fund:(state.funding||[]).filter(pid),op:(state.operating||[]).filter(r=>(r.region||'')===region),exp:(state.expenses||[]).filter(pid),mat:(state.materials||[]).filter(pid),lab:(state.projectLabor||[]).filter(pid),pay:(state.payroll||[]).filter(r=>(r.region||r.payrollRegion||'')===region)};
   }
-  function regionTotals37(region){const d=regionRecords37(region);const rev=d.rev.reduce((s,r)=>s+usd(r.amount,r.currency),0);const fee=d.fund.reduce((s,r)=>s+usd(r.consultancyFee,r.currency),0);const op=d.op.reduce((s,r)=>s+usd(r.amount,r.currency),0);const exp=d.exp.reduce((s,r)=>s+usd(r.amount,r.currency),0)+d.mat.reduce((s,r)=>s+usd(r.amount,r.currency),0)+d.lab.reduce((s,r)=>s+usd(r.total,r.currency),0);const pay=d.pay.reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.net||r.netPay,r.currency),0);return {d,rev,fee,op,exp,pay,net:rev+fee-op-pay};}
+  function regionTotals37(region){const d=regionRecords37(region);const rev=d.rev.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);const fee=d.fund.reduce((s,r)=>s+usd(r.consultancyFee,r.currency,r.fxRate),0);const op=d.op.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);const exp=d.exp.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0)+d.mat.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0)+d.lab.reduce((s,r)=>s+usd(r.total,r.currency,r.fxRate),0);const pay=d.pay.reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.net||r.netPay,r.currency),0);return {d,rev,fee,op,exp,pay,net:rev+fee-op-pay};}
   function moneyReport37(v){const c=state.settings.reportCurrency||'USD'; if(c==='IQD')return fmt(toIQD(v,'USD'),'IQD'); if(c==='both')return `${fmt(v,'USD')} / ${fmt(toIQD(v,'USD'),'IQD')}`; return fmt(v,'USD');}
   window.renderRegionAccounting37=function(region){
     const z=regionTotals37(region), title=region==='USA'?L37('USA Accounting','حسابات أمريكا'):L37('Iraq Accounting','حسابات العراق');
@@ -4477,7 +4500,7 @@ document.addEventListener("DOMContentLoaded",boot);
   try{if(typeof SCHEMA!=="undefined"&&SCHEMA.users)SCHEMA.users=SCHEMA.users.filter(f=>f.k!=="pass"&&f.k!=="password")}catch(e){}
   function safeStateCopy(){
     const clone=JSON.parse(JSON.stringify(state));
-    const clean=x=>{if(!x||typeof x!=="object")return;delete x.pass;delete x.password;Object.values(x).forEach(v=>{if(Array.isArray(v))v.forEach(clean);else clean(v)})};
+    const clean=x=>{if(!x||typeof x!=="object")return;delete x.pass;delete x.password;delete x.passHash;delete x.passSalt;delete x.passIterations;delete x.supabaseUrl;delete x.supabaseAnonKey;delete x.supabaseServiceKey;Object.values(x).forEach(v=>{if(Array.isArray(v))v.forEach(clean);else clean(v)})};
     clean(clone);return clone;
   }
   const priorPush=window.v35PushStateToSupabase;
@@ -4510,7 +4533,7 @@ document.addEventListener("DOMContentLoaded",boot);
   const enc = new TextEncoder();
   const dateStr = ()=>{ try{ return today(); }catch(e){ return new Date().toISOString().slice(0,10); } };
   const pName = id => { try{ return (project(id)&&project(id).name)||""; }catch(e){ return ""; } };
-  const toUSD = (v,cur)=>{ try{ return r2(usd(v,cur)); }catch(e){ return r2(v); } };
+  const toUSD = (v,cur,fx)=>{ try{ return r2(usd(v,cur,fx)); }catch(e){ return r2(v); } };
   const dvx = v => { try{ return typeof dv==="function" ? dv(v) : (v==null?"":String(v)); }catch(e){ return v==null?"":String(v); } };
 
   /* ---- style registry (xf index per style key) ---- */
@@ -4710,32 +4733,32 @@ document.addEventListener("DOMContentLoaded",boot);
     /* 3) Global ledgers (original + USD) */
     sheets.push({ name:TX("Funding","التمويل"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Project","المشروع")),H(TX("Payer","الدافع")),H(TX("Source","المصدر")),H(TX("Gross","الإجمالي")),H("Currency"),H(TX("Fee","الأتعاب")),H(TX("Net Construction","صافي التنفيذ")),H(TX("Reference","المرجع")),H(TX("Status","الحالة")),H(TX("Gross (USD)","الإجمالي بالدولار"))],
-      ...(state.funding||[]).map(r=>[r.date||"",pName(r.projectId),r.payerName||"",dvx(r.fundingSource),M(r.amount),r.currency||"",M(r.waived?0:r.consultancyFee),M(r.netConstruction),r.referenceNumber||"",dvx(r.status),M(toUSD(r.amount,r.currency))])
+      ...(state.funding||[]).map(r=>[r.date||"",pName(r.projectId),r.payerName||"",dvx(r.fundingSource),M(r.amount),r.currency||"",M(r.waived?0:r.consultancyFee),M(r.netConstruction),r.referenceNumber||"",dvx(r.status),M(toUSD(r.amount,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Revenue","الإيرادات"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Project","المشروع")),H(TX("Stream","المصدر")),H(TX("Description","البيان")),H(TX("Salesman","المندوب")),H(TX("Amount","المبلغ")),H("Currency"),H(TX("Status","الحالة")),H(TX("Amount (USD)","المبلغ بالدولار"))],
-      ...(state.revenue||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.stream),r.description||"",r.salesman||"",M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency))])
+      ...(state.revenue||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.stream),r.description||"",r.salesman||"",M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Operating","التشغيل"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Region","المنطقة")),H(TX("Category","الفئة")),H(TX("Description","البيان")),H(TX("Amount","المبلغ")),H("Currency"),H(TX("Status","الحالة")),H(TX("Amount (USD)","المبلغ بالدولار"))],
-      ...(state.operating||[]).map(r=>[r.date||"",dvx(r.region),dvx(r.category),r.description||"",M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency))])
+      ...(state.operating||[]).map(r=>[r.date||"",dvx(r.region),dvx(r.category),r.description||"",M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Project Expenses","مصاريف المشاريع"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Project","المشروع")),H(TX("Type","النوع")),H(TX("Category","الفئة")),H(TX("Description","البيان")),H(TX("Supplier","المورد")),H(TX("Payment Source","مصدر الدفع")),H(TX("Amount","المبلغ")),H("Currency"),H(TX("Status","الحالة")),H(TX("Amount (USD)","المبلغ بالدولار"))],
-      ...(state.expenses||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.expenseType),dvx(r.category),r.description||"",r.supplier||"",dvx(r.paymentSource),M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency))])
+      ...(state.expenses||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.expenseType),dvx(r.category),r.description||"",r.supplier||"",dvx(r.paymentSource),M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Materials","المواد"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Project","المشروع")),H(TX("Category","الفئة")),H(TX("Item","المادة")),H(TX("Supplier","المورد")),H(TX("Qty","الكمية")),H(TX("Unit","الوحدة")),H(TX("Unit Price","سعر الوحدة")),H(TX("Amount","المبلغ")),H("Currency"),H(TX("Status","الحالة")),H(TX("Amount (USD)","المبلغ بالدولار"))],
-      ...(state.materials||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.materialCategory),r.itemName||r.description||"",r.supplierName||"",INT(r.quantity),r.unit||"",M(r.unitPrice),M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency))])
+      ...(state.materials||[]).map(r=>[r.date||"",pName(r.projectId),dvx(r.materialCategory),r.itemName||r.description||"",r.supplierName||"",INT(r.quantity),r.unit||"",M(r.unitPrice),M(r.amount),r.currency||"",dvx(r.status),M(toUSD(r.amount,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Labor","العمالة"), rows:[
       [H(TX("Date","التاريخ")),H(TX("Project","المشروع")),H(TX("Worker / Crew","العامل / الفرقة")),H(TX("Trade","المهنة")),H(TX("Qty","الكمية")),H(TX("Unit","الوحدة")),H(TX("Rate","السعر")),H(TX("Total","المجموع")),H("Currency"),H(TX("Status","الحالة")),H(TX("Total (USD)","المجموع بالدولار"))],
-      ...(state.projectLabor||[]).map(r=>[r.date||"",pName(r.projectId),((state.workforce||[]).find(w=>w.id===r.workforceId)||{}).name||"",dvx(r.trade),INT(r.quantity),r.unit||"",M(r.rate),M(r.total),r.currency||"",dvx(r.status),M(toUSD(r.total,r.currency))])
+      ...(state.projectLabor||[]).map(r=>[r.date||"",pName(r.projectId),((state.workforce||[]).find(w=>w.id===r.workforceId)||{}).name||"",dvx(r.trade),INT(r.quantity),r.unit||"",M(r.rate),M(r.total),r.currency||"",dvx(r.status),M(toUSD(r.total,r.currency,r.fxRate))])
     ]});
 
     sheets.push({ name:TX("Payroll","الرواتب"), rows:[
@@ -4926,7 +4949,7 @@ function v35Series(scope, from, to) {
   if (scope === "all" || scope === "Iraq") {
     (state.funding || []).forEach((f) => {
       const k = (!f.waived && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
-      if (k) rev[k] += usd(f.consultancyFee, f.currency);
+      if (k) rev[k] += usd(f.consultancyFee, f.currency, f.fxRate);
     });
   }
   const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
@@ -5028,7 +5051,7 @@ function v35ProjectLikeSeries(matchesProject, from, to) {
      past month stops being re-valued every time the rate moves. */
   (state.funding || []).forEach((f) => {
     const k = (matchesProject(f.projectId) && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
-    if (k) rev[k] += usd(f.amount, f.currency, f.fxRate) + (f.waived ? 0 : usd(f.consultancyFee, f.currency, f.fxRate));
+    if (k) rev[k] += f.waived ? 0 : usd(f.consultancyFee, f.currency, f.fxRate);
   });
   (state.revenue || []).forEach((r) => {
     const k = (matchesProject(r.projectId) && r.status === "Received") ? bucket(r.date) : null;
@@ -5275,5 +5298,100 @@ function v35cEnsureCharts() {
 <script src="accounting-core.js"></script>
 <script src="accounting-cloud.js"></script>
 
+
+<script>
+/* ============================================================
+   v3.14 — QA hardening layer
+   1. Paid payroll is immutable: marking Paid needs the payroll approve
+      permission and an Approved record; a Paid record cannot be edited,
+      only reversed. The reversal is a stamped status change that keeps
+      every figure of the original untouched.
+   2. Cancelling an editor releases the linked-project lock, so the next
+      entry is free to choose its own project.
+   3. An edited form asks before it is discarded — backdrop click, ✕, or
+      Close all confirm once real typing has happened.
+   ============================================================ */
+(function(){
+  "use strict";
+
+  // --- 1. paid payroll -------------------------------------------------
+  const oldPaid = window.x33PaidPayroll;
+  window.x33PaidPayroll = function(id){
+    const p = (state.payroll||[]).find(x=>x.id===id);
+    if(!p) return;
+    if(!can("approve","payroll")){ xDenied(); return; }
+    if(p.status!=="Approved"){
+      alert(T("Only an approved payroll record can be marked paid.","فقط سجل رواتب معتمد يمكن تسجيله كمدفوع."));
+      return;
+    }
+    return oldPaid.apply(this, arguments);
+  };
+
+  window.x33ReversePayroll = function(id, reason){
+    const p = (state.payroll||[]).find(x=>x.id===id);
+    if(!p) return;
+    if(!can("approve","payroll")){ xDenied(); return; }
+    if(p.status!=="Paid"){ alert(T("Only a paid record can be reversed.","فقط سجل مدفوع يمكن عكسه.")); return; }
+    const why = reason!=null ? String(reason) : (prompt(T("Reason for reversing this payment (required):","سبب عكس هذه الدفعة (مطلوب):"))||"");
+    if(!why.trim()){ alert(T("A reversal needs a reason.","العكس يحتاج إلى سبب.")); return; }
+    /* The original figures are preserved exactly — only the status and the
+       reversal stamps change, and every total already excludes "Reversed". */
+    p.status = "Reversed";
+    p.reversedBy = currentUser?.email || "";
+    p.reversedAt = new Date().toISOString();
+    p.reversalReason = why.trim();
+    log("Payroll payment reversed", (p.employee||"") + " — " + why.trim(), "payroll", id);
+    save(); render();
+  };
+
+  const oldOpenEditor = window.openEditor;
+  window.openEditor = function(coll, id, seed){
+    if(coll === "payroll" && id){
+      const p = (state.payroll||[]).find(x=>x.id===id);
+      if(p && ["Paid","Reversed"].includes(p.status)){
+        alert(T("This payroll record is " + p.status.toLowerCase() + " and cannot be edited. Use Reverse to undo a payment; the original stays on record.","هذا السجل مدفوع ولا يمكن تعديله. استخدم (عكس) لإلغاء الدفع مع بقاء الأصل محفوظًا."));
+        return;
+      }
+    }
+    const out = oldOpenEditor.apply(this, arguments);
+    window.__edDirty = false;
+    return out;
+  };
+
+  const oldSaveEditor14 = window.saveEditor;
+  window.saveEditor = async function(){
+    if(typeof coll0 !== "undefined" && coll0 === "payroll" && typeof id0 !== "undefined" && id0){
+      const p = (state.payroll||[]).find(x=>x.id===id0);
+      if(p && ["Paid","Reversed"].includes(p.status)){
+        alert(T("Paid payroll records are immutable.","سجلات الرواتب المدفوعة غير قابلة للتعديل."));
+        return;
+      }
+    }
+    window.__edDirty = false;
+    return oldSaveEditor14.apply(this, arguments);
+  };
+
+  // --- 2 + 3. editor lifecycle ----------------------------------------
+  document.addEventListener("input", function(ev){
+    const root = document.getElementById("modalRoot");
+    if(root && root.contains(ev.target)) window.__edDirty = true;
+  }, true);
+
+  const oldCloseEditor = window.closeEditor;
+  window.closeEditor = function(){
+    if(window.__edDirty){
+      const stay = !confirm(T("Discard unsaved changes?","تجاهل التغييرات غير المحفوظة؟"));
+      if(stay) return;
+    }
+    window.__edDirty = false;
+    /* Cancelling a linked add must release the project lock; without this
+       the NEXT editor for any collection opened anywhere was force-locked
+       to the stale project and quietly posted against the wrong job. */
+    window.__larsaReturnProjectId = "";
+    window.__larsaReturnProjectTab = "";
+    return oldCloseEditor.apply(this, arguments);
+  };
+})();
+</script>
 </body>
 </html>

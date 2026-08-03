@@ -879,10 +879,22 @@
         rate: Number((document.getElementById("acct_fee_rate") || {}).value || 0) / 100,
         fixed: Number((document.getElementById("acct_fee_fixed") || {}).value || 0),
         treatment: (document.getElementById("acct_fee_treatment") || {}).value || undefined,
-        waiver_reason: (document.getElementById("acct_fee_waiver") || {}).value || "",
+        waiver_reason: String((document.getElementById("acct_fee_waiver") || {}).value || "").trim(),
       };
+      /* The label has said "required when waiving" all along — this is the
+         code that finally means it. A waived fee with no reason is how an
+         8,000,000 IQD charge quietly disappears without an audit trail. */
+      if (method === "waived" && !txn.fee_override.waiver_reason) {
+        txn.__invalid = TT("Add the waiver reason — a waived consultancy fee must say why.",
+          "أضف سبب الإعفاء — إعفاء أتعاب الاستشارة يجب أن يوضح السبب.");
+      }
     } else if (coll === "funding" && g("waived") === true) {
-      txn.fee_override = { method: "waived", waived: true, waiver_reason: g("notes") || "waived from funding form" };
+      var waiverNote = String(g("notes") || "").trim();
+      txn.fee_override = { method: "waived", waived: true, waiver_reason: waiverNote };
+      if (!waiverNote) {
+        txn.__invalid = TT("Add the waiver reason in Notes — a waived consultancy fee must say why.",
+          "أضف سبب الإعفاء في الملاحظات — إعفاء أتعاب الاستشارة يجب أن يوضح السبب.");
+      }
     }
     return txn;
   }
@@ -1048,9 +1060,16 @@
       if (!ACCT.on || !coll || !PAY_COLLS[coll]) return out;
       // The local save has already happened and the record has an id; the
       // backend write follows, and its ids are stored back on the row.
+      var savedId = null;
+      try { savedId = typeof id0 !== "undefined" ? id0 : null; } catch (e) {}
       setTimeout(function () {
         try {
-          var row = (state[coll] || [])[0];
+          /* A NEW record is unshifted to index 0, but an EDIT mutates in
+             place — index 0 was then a different row entirely, and the wrong
+             person's figures were pushed to the payroll backend. */
+          var row = savedId
+            ? (state[coll] || []).find(function (r) { return r && r.id === savedId; })
+            : (state[coll] || [])[0];
           if (row) PAY_COLLS[coll](row, function () { try { save(); } catch (e) {} });
         } catch (e) {}
       }, 30);
@@ -1140,6 +1159,8 @@
       var editingId = null;
       try { editingId = (typeof id0 !== "undefined" && id0) ? id0 : null; } catch (e) {}
       var txn = readModalTxn(coll);
+      if (txn.__invalid) { toast4(txn.__invalid); return; }
+      delete txn.__invalid;
       if (!txn.project_id) { toast4(TT("Choose a project first.", "اختر المشروع أولاً.")); return; }
       if (!txn.amount || txn.amount <= 0) { toast4(TT("Enter a positive amount.", "أدخل مبلغاً موجباً.")); return; }
       if (!entryScopeOk(txn.project_id)) {
