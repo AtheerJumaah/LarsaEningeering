@@ -47,12 +47,40 @@ function endpointHost(endpoint: string): string {
   try { return new URL(endpoint).host; } catch { return "unknown"; }
 }
 
+/* The browser calls this function through supabase.functions.invoke, which
+ * sends an Authorization header and a JSON content type — and that makes it a
+ * cross-origin request the browser insists on preflighting with OPTIONS.
+ *
+ * Without these headers the preflight was answered with 405 and no
+ * Access-Control-Allow-Origin, so EVERY drain triggered from the app was
+ * blocked before it left the browser. The outbox then only moved when
+ * something outside the browser happened to call this function, which meant
+ * push arrived late, in bursts, or not at all — while the bell looked perfect,
+ * because the bell never needed this function.
+ *
+ * A wildcard origin is safe here: the endpoint still requires a valid JWT, it
+ * accepts nothing but an optional batch size, and it returns nothing but
+ * counts. There is no caller-supplied content to abuse. */
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
+  });
+
 Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: CORS });
   if (!configured) {
     // Not an error: a deployment without VAPID keys is a deployment where the
     // bell still works perfectly and only the external layer is absent.
-    return Response.json({ ok: true, skipped: "VAPID keys are not configured", sent: 0 });
+    return json({ ok: true, skipped: "VAPID keys are not configured", sent: 0 });
   }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
@@ -63,7 +91,7 @@ Deno.serve(async (req: Request) => {
   } catch { /* an empty body is the normal case — "drain whatever is queued" */ }
 
   const { data: claim, error: claimError } = await supabase.rpc("notify_outbox_claim", { p_limit: batch });
-  if (claimError) return Response.json({ ok: false, error: claimError.message }, { status: 500 });
+  if (claimError) return json({ ok: false, error: claimError.message }, 500);
 
   const items: OutboxItem[] = claim?.items ?? [];
   let sent = 0, failed = 0, skipped = 0;
@@ -153,5 +181,5 @@ Deno.serve(async (req: Request) => {
     });
   }));
 
-  return Response.json({ ok: true, claimed: items.length, sent, failed, skipped });
+  return json({ ok: true, claimed: items.length, sent, failed, skipped });
 });
