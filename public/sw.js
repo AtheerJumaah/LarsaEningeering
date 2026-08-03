@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v20";
+const CACHE_NAME = "larsa-control-v21";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -17,6 +17,7 @@ const CORE_FILES = [
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
+  "/icons/badge-72.png",
   "/icons/apple-touch-icon.png"
 ];
 
@@ -100,30 +101,76 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+// A push payload arrives from the network, so it is treated as untrusted input
+// even though only our own Edge Function is supposed to be able to send one.
+// Whatever it claims the destination is, the only thing acted on is a path on
+// THIS origin: an absolute URL elsewhere, a protocol-relative "//evil.example",
+// or a javascript: URI all collapse to "/". A notification is a thing people
+// tap without reading, which is exactly why it must not be able to steer them
+// somewhere we did not write.
+function safeInternalPath(candidate) {
+  if (typeof candidate !== "string" || !candidate) return "/";
+  try {
+    const resolved = new URL(candidate, self.location.origin);
+    if (resolved.origin !== self.location.origin) return "/";
+    return resolved.pathname + resolved.search;
+  } catch {
+    return "/";
+  }
+}
+
 // Real background push: arrives even when no tab is open, which is the whole
-// point of "phone" notifications on an installed PWA. The payload is the same
-// { title, body, url } shape the send-push Edge Function sends.
+// point of "phone" notifications on an installed PWA. The payload is the
+// { title, body, url, tag, notificationId } shape send-push composes from the
+// outbox — already stripped of any figure for sensitive categories.
 self.addEventListener("push", (event) => {
   let payload = { title: "Larsa Control", body: "" };
   try { if (event.data) payload = { ...payload, ...event.data.json() }; } catch { /* plain-text payload, keep defaults */ }
+  const url = safeInternalPath(payload.url);
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
+    self.registration.showNotification(String(payload.title || "Larsa Control"), {
+      body: String(payload.body || ""),
       icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
-      data: { url: payload.url || "/" },
+      badge: "/icons/badge-72.png",
+      // Tagging by notification id is what stops the same event, re-sent to a
+      // device that was offline, from stacking three identical banners.
+      tag: payload.tag ? String(payload.tag) : undefined,
+      renotify: Boolean(payload.tag),
+      timestamp: Date.now(),
+      data: { url, notificationId: payload.notificationId || null, category: payload.category || null },
     }),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || "/";
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      const existing = clients.find((client) => client.url.includes(self.location.origin));
-      if (existing) return existing.focus();
-      return self.clients.openWindow(url);
-    }),
-  );
+  const data = event.notification.data || {};
+  const url = safeInternalPath(data.url);
+  event.waitUntil((async () => {
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const existing = clients.find((client) => client.url.startsWith(self.location.origin));
+    if (existing) {
+      // The old version focused the window and stopped there, so tapping a
+      // notification left you wherever you already were. Telling the page
+      // where to go — and letting it route in-app rather than reloading —
+      // is the difference between a notification and a doorbell.
+      await existing.focus();
+      existing.postMessage({ type: "larsa:notification-click", url, notificationId: data.notificationId || null });
+      return;
+    }
+    await self.clients.openWindow(url);
+  })());
+});
+
+// The app asks the worker to keep the app-icon badge honest across tabs and
+// after the page is closed. setAppBadge is not implemented everywhere, so
+// every call is guarded rather than assumed.
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type !== "larsa:badge") return;
+  const count = Number(data.count) || 0;
+  try {
+    if (count > 0 && self.navigator.setAppBadge) self.navigator.setAppBadge(count);
+    else if (self.navigator.clearAppBadge) self.navigator.clearAppBadge();
+  } catch { /* badging unsupported on this platform */ }
 });
