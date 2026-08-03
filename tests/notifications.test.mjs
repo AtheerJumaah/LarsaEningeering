@@ -28,13 +28,14 @@ const sw = read("public/sw.js");
 const pass = read("app/visual-pass.css");
 const sender = read("supabase/functions/send-push/index.ts");
 const migration = read("supabase/migrations/20260803_notify_011_center.sql");
+const dispatch = read("supabase/migrations/20260803_notify_014_dispatch.sql");
 const manifest = JSON.parse(read("public/manifest.webmanifest"));
 /* The service worker cache name has to change on every release that changes
    what it caches, or devices keep the old worker. A test cannot know the right
    number, and pinning one just means the test breaks on the next legitimate
    bump — which has now happened twice. So it asserts the floor: the version
    that introduced the badge icon and audible pushes, and never lower. */
-const SW_VERSION_FLOOR = 22;
+const SW_VERSION_FLOOR = 25;
 const swVersion = Number((read("public/sw.js").match(/larsa-control-v(\d+)/) || [])[1]);
 
 /* ---------------------------------------------------------------- 1 - 5 */
@@ -314,7 +315,8 @@ test("20. the design the app already had is untouched", () => {
   // And the service worker was bumped, or every device keeps the old one.
   assert.ok(swVersion >= SW_VERSION_FLOOR,
     `the service worker cache must be at least v${SW_VERSION_FLOOR}, found v${swVersion}`);
-  assert.ok(sw.includes('"/icons/badge-72.png"'), "the badge icon must be cached with the rest");
+  assert.ok(sw.includes('"/icons/notify-192.png"') && sw.includes('"/icons/badge-96.png"'),
+    "the notification icons must be cached with the rest");
 });
 
 /* Extras that are cheap to check and expensive to get wrong. */
@@ -361,10 +363,11 @@ test("a subscription signed under an old key is pruned, not retried for ever", (
 });
 
 test("a stranded push is sent late rather than never", () => {
-  // raiseNotifications nudges the sender fire-and-forget; a tab closed a
-  // moment too early leaves the outbox row with nobody coming back for it.
-  assert.match(page, /void drainPush\(\); \}, 4000\)/);
-  assert.match(notify, /export function drainPush\(\): Promise<void>/);
+  /* Three layers, none of them a browser: the database dispatches as it
+     raises, a cron sweep re-asks every minute for anything still queued, and
+     the claim itself reclaims a row abandoned mid-send by a sender that died. */
+  assert.match(dispatch, /if made > 0 then perform public\.notify_dispatch\(\); end if;/);
+  assert.match(dispatch, /where status = 'queued'\s*\n\s*or \(status = 'sending' and claimed_at < now\(\) - interval '5 minutes'\)/);
   assert.match(migration, /o\.status = 'sending' and o\.claimed_at < now\(\) - interval '5 minutes'/);
 });
 
@@ -409,6 +412,53 @@ test("a test alert that cannot be displayed says so", () => {
   assert.match(page, /const visible = await canDisplayNotifications\(\)/);
   assert.match(page, /this device discarded it without showing anything/);
   assert.match(page, /That is your operating system, not Larsa Control/);
+});
+
+test("delivery does not depend on a browser being open", () => {
+  /* The bug that made push look like it only worked on the device you sent
+     from. The client was the only thing that ever asked the sender to run —
+     and that call was blocked by CORS before it left the page, silently,
+     because the failure was swallowed. So nothing was ever sent, and the only
+     notification anyone saw was the local probe on the sending device.
+     Underneath that was a design error: the whole point of a push is to reach
+     an app that is CLOSED, so a closed app cannot be what triggers it. */
+  assert.match(dispatch, /create extension if not exists pg_net/);
+  assert.match(dispatch, /create extension if not exists pg_cron/);
+  assert.match(dispatch, /if made > 0 then perform public\.notify_dispatch\(\); end if;/);
+  assert.match(dispatch, /cron\.schedule\(\s*'notify-drain-outbox',\s*'\* \* \* \* \*'/);
+  // The dispatcher is the server's, never a browser's.
+  assert.match(dispatch, /revoke all on function public\.notify_dispatch\(\) from public, anon, authenticated/);
+  // And the client no longer nudges the sender at all.
+  assert.ok(!/void drainPush\(\)/.test(code(notify)) && !/void drainPush\(\)/.test(code(page)),
+    "the client must not be responsible for triggering delivery");
+  // A dispatch that fails must never roll back the notification it was for.
+  assert.match(dispatch, /exception when others then[\s\S]{0,220}null;/);
+});
+
+test("the sender answers a browser preflight", () => {
+  /* supabase.functions.invoke sends Authorization and a JSON content type,
+     which makes the browser preflight with OPTIONS. Answering that with 405
+     and no Access-Control-Allow-Origin is what blocked every drain. */
+  assert.match(sender, /if \(req\.method === "OPTIONS"\) return new Response\(null, \{ status: 204, headers: CORS \}\)/);
+  assert.match(sender, /"Access-Control-Allow-Origin": "\*"/);
+  assert.match(sender, /"Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"/);
+  // Every response carries them, not just the preflight.
+  assert.ok(!/Response\.json\(/.test(sender),
+    "every response must go through the CORS-carrying json() helper");
+  assert.match(sender, /headers: \{ \.\.\.CORS, "Content-Type": "application\/json" \}/);
+});
+
+test("a notification wears the mark, not a box with the mark in it", () => {
+  /* The droplet shape, filled near-black with the rim and the L in white and
+     everything outside it transparent. A notification icon is one fixed image
+     that cannot follow the system theme, so the contrast has to be in the
+     artwork. The old icon was a square tile with the mark boxed inside it. */
+  assert.match(sw, /icon: "\/icons\/notify-192\.png"/);
+  assert.match(sw, /badge: "\/icons\/badge-96\.png"/);
+  assert.ok(!/icon: "\/icons\/icon-192\.png"/.test(sw),
+    "the square app tile must not be used as the notification icon");
+  // The local display probe wears the same face.
+  assert.match(push, /icon: "\/icons\/notify-192\.png"/);
 });
 
 test("the panel escapes the topbar without escaping the theme", () => {
