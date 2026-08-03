@@ -113,12 +113,20 @@ Deno.serve(async (req: Request) => {
       } catch (err) {
         const status = (err as { statusCode?: number })?.statusCode;
         lastError = `${host}: ${status ?? ""} ${String(err).slice(0, 160)}`;
-        if (status === 404 || status === 410) {
-          // The browser dropped this subscription — a reinstalled app, a wiped
-          // profile, a replaced phone. Pruning it is what stops every future
-          // send from carrying a permanent failure for hardware nobody owns.
+        // 404/410: the browser dropped this subscription — a reinstalled app,
+        // a wiped profile, a replaced phone.
+        // 401/403: the subscription is signed under a VAPID key we no longer
+        // hold, which happens after a key rotation. It will fail on every
+        // future send for ever, so it is just as dead as a 410 — and leaving
+        // it in place is why somebody's device list can look healthy while
+        // nothing ever arrives. The person re-subscribes by turning alerts on
+        // again, which mints a subscription under the current key.
+        if (status === 404 || status === 410 || status === 401 || status === 403) {
           await supabase.rpc("notify_prune_device", { p_endpoint: device.endpoint });
-          deliveries.push({ channel: "push", target: host, status: "expired", detail: "subscription gone" });
+          deliveries.push({
+            channel: "push", target: host, status: "expired",
+            detail: status === 401 || status === 403 ? "signed under an old key" : "subscription gone",
+          });
         } else {
           deliveries.push({ channel: "push", target: host, status: "failed", detail: String(status ?? err).slice(0, 160) });
         }
