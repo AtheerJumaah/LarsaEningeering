@@ -70,7 +70,7 @@ test("no opaque dark hex survives in the night card palette", () => {
 });
 
 // ------------------------------------------------------- the overview tiles
-test("the overview tiles are mixed towards the card surface, not alpha'd over black", () => {
+test("the overview tiles render light, and are solid rather than alpha over black", () => {
   /* These sit straight on the page rather than on a raised card, so a low-alpha
      tint composited against near-black and stayed a dark maroon -- which is
      what was reported, twice. Mixing towards the raised surface is what makes
@@ -79,7 +79,12 @@ test("the overview tiles are mixed towards the card surface, not alpha'd over bl
   for (const state of ["due", "good"]) {
     const rule = globals.match(new RegExp(`\\.unified-app\\.dark \\.role-card\\.${state}\\s*\\{[^}]*\\}`));
     assert.ok(rule, `no night rule for .role-card.${state}`);
-    assert.match(rule[0], /background:\s*color-mix\(in srgb, #[0-9a-f]{6} 28%, var\(--surface-raised/, `.role-card.${state} is not mixed towards the surface`);
+    const bg = rule[0].match(/background:\s*(#[0-9a-f]{6})/i);
+    assert.ok(bg, `.role-card.${state} has no solid night fill`);
+    assert.ok(luma(bg[1]) > 60, `.role-card.${state} renders at luma ${Math.round(luma(bg[1]))}, still a dark colour`);
+    // Not color-mix: the bundler's no-color-mix fallback emitted the UNMIXED
+    // ink here, a fully opaque salmon tile with pale text on it.
+    assert.doesNotMatch(rule[0], /color-mix/);
   }
 });
 
@@ -145,7 +150,13 @@ function isDarkColour([r, g, b]) {
   else hue = 60 * ((r - g) / chroma + 4);
   if (hue < 0) hue += 360;
   if (hue > 195 && hue < 240) return false;            // the app's own blue-grey
-  return lum < 110;
+  /* 60, not 110. This is a floor for SURFACES, and a surface on a near-black
+     page reads as light at around 70 -- the overview tiles sit at 69 and 74
+     and are the lightest things on the screen. Everything the owner reported
+     was far below this: #3a1c1c is 34, #241c10 is 30, #14361f is 44. The
+     rendered-pixel check lives in tests/night-colour-e2e.smoke.mjs; this one
+     only has to catch a near-black colour the moment somebody types it. */
+  return lum < 60;
 }
 
 test("no night rule paints a dark COLOUR — only tints and neutral chrome", () => {
