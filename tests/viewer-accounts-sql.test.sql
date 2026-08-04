@@ -25,6 +25,10 @@ declare
   viewer_all_uid uuid := gen_random_uuid();      -- project_access_mode = all
   viewer_none_uid uuid := gen_random_uuid();     -- project_access_mode = none
   stranger_uid uuid := gen_random_uuid();        -- a real auth.users row, never a viewer
+  -- The viewer_accounts row ids, needed because section grants key off the
+  -- account rather than the auth user.
+  viewer_a_id uuid;
+  viewer_all_id uuid;
   n int;
   r jsonb;
   keys text;
@@ -119,17 +123,40 @@ begin
   perform pg_temp.chk('a viewer expiring tomorrow is still allowed today', public.viewer_can_read_project(viewer_future_uid, 'zz-qa-viewer-prj-a') = true);
   perform pg_temp.chk('an unknown uid is refused for every project (fail closed)', public.viewer_can_read_project(gen_random_uuid(), 'zz-qa-viewer-prj-a') = false);
 
+  select id into viewer_a_id   from public.viewer_accounts where username = 'zz-qa-viewer-a';
+  select id into viewer_all_id from public.viewer_accounts where username = 'zz-qa-viewer-all';
+
   -- ----------------------------------------------------------
   -- Section 3: RLS, exercised as the roles that actually hit these
   -- tables — a Viewer's own session, and an ordinary employee session.
   -- ----------------------------------------------------------
+  -- Assignment alone now shows a client nothing: every section starts OFF and
+  -- every record starts Internal Only. Proving that BEFORE granting anything
+  -- is the point — it is the state a newly created Viewer is actually in.
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
+
+  select count(*) into n from public.acct_projects;
+  perform pg_temp.chk('an assigned project with no sections switched on is invisible', n = 0);
+  select count(*) into n from public.acct_progress_updates;
+  perform pg_temp.chk('and so are its progress updates', n = 0);
+
+  -- Now switch on exactly what this client may see, as an admin would.
+  reset role;
+  insert into public.viewer_project_sections (viewer_id, project_id, section, enabled)
+  values (viewer_a_id, 'zz-qa-viewer-prj-a', 'overview', true),
+         (viewer_a_id, 'zz-qa-viewer-prj-a', 'updates',  true);
+  -- One of the two notes is published to the client; the other stays internal.
+  update public.acct_progress_updates set client_visible = true
+   where project_id = 'zz-qa-viewer-prj-a' and note = 'QA progress note A';
+
   set local role authenticated;
   perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
 
   select count(*) into n from public.acct_projects; perform pg_temp.chk('a scoped Viewer sees exactly one project through RLS, not both', n = 1);
   select count(*) into n from public.acct_projects where id = 'zz-qa-viewer-prj-a'; perform pg_temp.chk('...and it is the assigned one', n = 1);
-  select count(*) into n from public.acct_transactions; perform pg_temp.chk('acct_transactions is scoped the same way', n = 1);
-  select count(*) into n from public.acct_progress_updates; perform pg_temp.chk('acct_progress_updates is scoped the same way', n = 1);
+  select count(*) into n from public.acct_transactions; perform pg_temp.chk('a Viewer reads zero transactions — the ledger is closed to clients outright', n = 0);
+  select count(*) into n from public.acct_progress_updates; perform pg_temp.chk('only the client-visible update is returned, not the internal one', n = 1);
   select count(*) into n from public.app_state; perform pg_temp.chk('a Viewer session reads zero app_state rows — the whole staff blob is closed', n = 0);
   select count(*) into n from public.acct_permissions; perform pg_temp.chk('a Viewer session reads zero acct_permissions rows', n = 0);
   select count(*) into n from public.acct_audit; perform pg_temp.chk('a Viewer session reads zero acct_audit rows', n = 0);
@@ -143,7 +170,14 @@ begin
   end;
 
   perform set_config('request.jwt.claim.sub', viewer_all_uid::text, true);
-  select count(*) into n from public.acct_projects; perform pg_temp.chk('a mode=all Viewer sees both projects', n = 2);
+  select count(*) into n from public.acct_projects;
+  perform pg_temp.chk('mode=all still shows nothing until sections are granted', n = 0);
+  reset role;
+  insert into public.viewer_project_sections (viewer_id, project_id, section, enabled)
+  select viewer_all_id, p.id, 'overview', true from public.acct_projects p;
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', viewer_all_uid::text, true);
+  select count(*) into n from public.acct_projects; perform pg_temp.chk('a mode=all Viewer with overview on sees both projects', n = 2);
 
   perform set_config('request.jwt.claim.sub', viewer_none_uid::text, true);
   select count(*) into n from public.acct_projects; perform pg_temp.chk('a mode=none Viewer sees zero projects', n = 0);
@@ -162,6 +196,18 @@ begin
   -- table-level RLS alone cannot police (it wraps acct_project_summary,
   -- which trusts any caller for any project id).
   -- ----------------------------------------------------------
+  -- The financial summary is a section like any other, so it is off until
+  -- granted. That is checked first, then granted, then checked again.
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
+  perform pg_temp.chk('the financial summary is refused until its section is switched on',
+    public.viewer_project_summary('zz-qa-viewer-prj-a') is null);
+
+  reset role;
+  insert into public.viewer_project_sections (viewer_id, project_id, section, enabled)
+  values (viewer_a_id, 'zz-qa-viewer-prj-a', 'financials', true)
+  on conflict (viewer_id, project_id, section) do update set enabled = true;
+
   set local role authenticated;
   perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
   r := public.viewer_project_summary('zz-qa-viewer-prj-a');
