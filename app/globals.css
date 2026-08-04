@@ -1755,8 +1755,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   --mode-other:  #7a8190;  --mode-other-soft:  #eef0f4;
 }
 .unified-app.dark {
-  --mode-office-soft: #14301f; --mode-online-soft: #17233c;
-  --mode-site-soft: #262a31;   --mode-other-soft: #23272f;
+  /* Tints of the night inks, not darkened versions of the day colours -- see
+     the night colour section at the end of this file for why. --mode-site
+     stays a light solid: it is used as a button fill with dark text on it. */
+  --mode-office-soft: rgba(110, 231, 183, .15);
+  --mode-online-soft: rgba(147, 197, 253, .15);
+  --mode-site-soft:   rgba(203, 213, 225, .14);
+  --mode-other-soft:  rgba(168, 176, 189, .12);
   --mode-site: #d8dbe1;
 }
 
@@ -3862,13 +3867,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
      amber #fcd34d   blue   #93c5fd   slate #cbd5e1
    -------------------------------------------------------------------------- */
 
-/* --- work modes: office, online, site, other ----------------------------- */
-.unified-app.dark {
-  --mode-office-soft: rgba(110, 231, 183, .15);
-  --mode-online-soft: rgba(147, 197, 253, .15);
-  --mode-site-soft:   rgba(203, 213, 225, .14);
-  --mode-other-soft:  rgba(168, 176, 189, .12);
-}
+/* --- work modes: office, online, site, other -----------------------------
+   The -soft tokens themselves are set where they are declared, further up.
+   These are the inks that go on them, which were still the daylight ones. */
 .unified-app.dark :is(.mode-chip, .shift-chip, .access-pill.live).tone-office { color: #6ee7b7; }
 .unified-app.dark :is(.mode-chip, .shift-chip, .access-pill.live).tone-site   { color: #cbd5e1; }
 .unified-app.dark .mode-chip.tone-other { color: #aab2c0; }
