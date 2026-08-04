@@ -1942,6 +1942,21 @@ type LeaveRequest = {
 };
 const LEAVE_TYPES = ["Annual", "Sick", "Unpaid", "Emergency", "Study", "Bereavement"];
 
+/* Who a request is waiting on right now, and which step of how many.
+   `holder` is null when the request carries no chain -- older records, and
+   anything created before flows existed -- and that case deliberately keeps
+   the old behaviour: whoever may approve, may approve. Turning enforcement on
+   must not strand requests that are already in flight.
+
+   One function, read by both the decision handler and the queue that draws the
+   buttons, so the screen cannot offer an action the handler will refuse. */
+function requestStage(record: LeaveRequest): { holder: string | null; step: number; total: number } {
+  const flow = Array.isArray(record.flow) ? record.flow.filter(Boolean) : [];
+  if (!flow.length) return { holder: null, step: 0, total: 0 };
+  const step = Math.max(0, Math.min(Number(record.step) || 0, flow.length - 1));
+  return { holder: flow[step] || null, step, total: flow.length };
+}
+
 // Whole days a request covers, inclusive of both ends.
 function requestDays(request: { from?: string; to?: string; date?: string }) {
   const from = request.from || request.date;
@@ -6619,10 +6634,51 @@ export default function Home() {
     const index = store.approvals.findIndex((row: LeaveRequest) => row.id === requestId);
     if (index < 0) { notify("That request could not be found."); return false; }
     const record = store.approvals[index] as LeaveRequest;
+
+    /* The approval chain, finally enforced. It has been recorded on every
+       request since flows were added -- flow is the ordered list of approver
+       ids, step is where the request has got to -- and then ignored: any one
+       person holding the approve permission could resolve anything, which
+       made a two-stage chain decorative. A configured chain is a statement
+       about who decides, and it has to mean that.
+
+       A request with no chain keeps the previous behaviour. Older records and
+       anything created before flows existed have no flow, and turning this on
+       must not freeze what is already in flight. */
+    const flow = Array.isArray(record.flow) ? record.flow.filter(Boolean) : [];
+    const { holder: waitingOn, step } = requestStage(record);
+    /* A chain with somebody who has left the company in it would otherwise
+       block for ever, so a Super Admin can still act -- but it is recorded as
+       an override in the history rather than passed off as a normal decision,
+       because somebody reading that trail later needs to see it happened. */
+    const overriding = Boolean(waitingOn && waitingOn !== actor.id);
+    if (overriding && !isAdmin(actor)) {
+      const holder = (store.users as StaffUser[]).find((row) => row.id === waitingOn);
+      notify(holder
+        ? `This request is with ${holder.name} at the moment.`
+        : "This request is with another approver at the moment.");
+      return false;
+    }
+
+    /* Approving at a step that is not the last advances the request instead of
+       closing it. Rejecting ends it wherever it stands -- a chain is a series
+       of people who must all agree, so any one of them can stop it. */
+    const advancing = status === "Approved" && flow.length > step + 1;
+    const settled: "Approved" | "Rejected" | "Pending" = advancing ? "Pending" : status;
+    const stamp = new Date().toISOString();
     store.approvals[index] = {
-      ...record, status,
-      decidedBy: actor.name, decidedAt: new Date().toISOString(),
-      history: [...(record.history || []), { by: actor.name, action: status, at: new Date().toISOString(), note }],
+      ...record,
+      status: settled,
+      step: advancing ? step + 1 : step,
+      /* Only a final decision names a decider. While a request is still moving
+         through the chain, "decided by" would be a lie on the employee's copy. */
+      ...(advancing ? {} : { decidedBy: actor.name, decidedAt: stamp }),
+      history: [...(record.history || []), {
+        by: actor.name,
+        action: advancing ? `Approved (step ${step + 1} of ${flow.length})` : status,
+        at: stamp,
+        note: overriding ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn` : note,
+      }],
     };
 
     /* An approved attendance correction is what actually writes the missing
@@ -6630,7 +6686,7 @@ export default function Home() {
        and breaks keep their own status values so they stay out of hour totals. */
     const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
     const updated = store.approvals[index] as LeaveRequest & { materialised?: boolean };
-    if (status === "Approved" && CORRECTIONS.includes(String(record.type)) && !updated.materialised) {
+    if (settled === "Approved" && CORRECTIONS.includes(String(record.type)) && !updated.materialised) {
       if (!Array.isArray(store.logs)) store.logs = [];
       const at = (time?: string) => new Date(`${record.date}T${time || "00:00"}:00`).toISOString();
       const stamp = `Approved correction (${record.type}) · ${record.reason || ""}`;
@@ -6654,7 +6710,7 @@ export default function Home() {
        is worth. The points still go through the normal review, which is also
        where Approved Points is set. Guarded on `materialised` so re-approving
        can never enter it twice. */
-    if (status === "Approved" && record.type === "Points Unlock" && record.entry && !updated.materialised) {
+    if (settled === "Approved" && record.type === "Points Unlock" && record.entry && !updated.materialised) {
       if (!Array.isArray(store.performance)) store.performance = [];
       (store.performance as PerformanceRow[]).unshift({
         ...record.entry,
@@ -6670,24 +6726,41 @@ export default function Home() {
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     const employee = (store.users as StaffUser[]).find((row) => row.id === record.uid);
-    if (employee) {
+    /* Still moving: the person who has to act next is the one who needs to
+       hear about it. Telling the employee their request was "approved" here
+       would be wrong twice over -- it is not approved, and there is nothing
+       for them to do. */
+    if (advancing) {
+      const next = (store.users as StaffUser[]).find((row) => row.id === flow[step + 1]);
+      if (next) {
+        raiseNotification({
+          event: "leave.raised",
+          title: `${record.type} request needs your decision`,
+          body: `${employee?.name || "An employee"} · ${record.requestType || record.type} · ${record.from} to ${record.to}. Approved by ${actor.name} at step ${step + 1} of ${flow.length}.`,
+          itemId: "my-requests",
+          fromName: actor.name, recipients: [next],
+        });
+      }
+    } else if (employee) {
       const isUnlock = record.type === "Points Unlock";
       raiseNotification({
         event: "leave.decided",
         title: isUnlock
-          ? `Late entry for week ${record.week} ${status.toLowerCase()}`
-          : `${record.type} request ${status.toLowerCase()}`,
+          ? `Late entry for week ${record.week} ${settled.toLowerCase()}`
+          : `${record.type} request ${settled.toLowerCase()}`,
         body: isUnlock
-          ? (status === "Approved"
+          ? (settled === "Approved"
             ? `${actor.name} let your ${record.entry?.["Job Number"] || record.entry?.Project || "entry"} into closed week ${record.week}. It now waits for the normal points review.${note ? ` · ${note}` : ""}`
             : `${actor.name} did not accept your late entry for week ${record.week}.${note ? ` · ${note}` : ""}`)
-          : `${actor.name} ${status.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
-        itemId: isUnlock && status === "Approved" ? "my-points" : "my-requests",
+          : `${actor.name} ${settled.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
+        itemId: isUnlock && settled === "Approved" ? "my-points" : "my-requests",
         fromName: actor.name, recipients: [employee],
       });
     }
     setStorageTick((value) => value + 1);
-    notify(`Request ${status.toLowerCase()}.`);
+    notify(advancing
+      ? `Approved. This request now goes to step ${step + 2} of ${flow.length}.`
+      : `Request ${settled.toLowerCase()}.`);
     return true;
   // raiseNotification is a module-level function, so it is not a dependency.
   }, [notify, refreshStaffEngine]);
@@ -13919,9 +13992,29 @@ function RequestsCentre({
                     <td>{row.entry ? row.entry.Date : `${row.from} → ${row.to}`}</td>
                     <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestQuantity(row)}</td>
                     <td>{detailCell(row)}</td>
+                    {/* Only the person the request is actually with gets the
+                        buttons. Everyone else sees whose desk it is on, which
+                        is the useful thing to know and saves a click that
+                        would only be refused. An administrator can still act,
+                        because a chain containing somebody who has left would
+                        otherwise never move. */}
                     <td><div className="review-actions">
-                      <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>Approve</button>
-                      <button type="button" onClick={() => decide(row.id, "Rejected", window.prompt("Reason for rejecting (optional):") || "")}>Reject</button>
+                      {(() => {
+                        const { holder, step, total } = requestStage(row);
+                        const mine = !holder || holder === viewer?.id;
+                        if (!mine && !(viewer && isAdmin(viewer))) {
+                          const who = users.find((user) => user.id === holder);
+                          return <small>With {who?.name || "another approver"}{total > 1 ? ` · step ${step + 1} of ${total}` : ""}</small>;
+                        }
+                        return (
+                          <>
+                            <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>
+                              {total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
+                            </button>
+                            <button type="button" onClick={() => decide(row.id, "Rejected", window.prompt("Reason for rejecting (optional):") || "")}>Reject</button>
+                          </>
+                        );
+                      })()}
                     </div></td>
                   </tr>
                 );
