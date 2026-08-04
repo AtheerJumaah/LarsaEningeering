@@ -1870,6 +1870,33 @@ i.is-due { background: #d97706; }
 .notify-switch.stacked input:checked ~ span { color: #1f9d76; }
 .notify-switch.stacked span svg { flex: none; }
 
+/* --- Viewer Accounts directory -------------------------------------------
+   The directory column is narrow, and "Create Viewer Account" on one nowrap
+   line was wider than the space left beside the heading. Flex had nowhere to
+   put it, so the button sat on top of the count: "0 viewers" wrapped to two
+   lines with the button across it. Letting the row wrap gives the button its
+   own line at narrow widths instead of overlapping the thing it sits next to. */
+.access-directory-head.viewer-head { flex-wrap: wrap; row-gap: 10px; }
+.access-directory-head.viewer-head > div { min-width: 0; flex: 1 1 auto; }
+.access-directory-head.viewer-head h3 { white-space: nowrap; }
+.access-directory-head.viewer-head > button { flex: 0 0 auto; }
+@media (max-width: 1100px) {
+  .access-directory-head.viewer-head > button { flex: 1 1 100%; }
+}
+
+/* The right-hand pane is tall and mostly empty until somebody is selected.
+   A single centred line floating in it read as a loading glitch rather than
+   a resting state, so it says what to do and fills the space it occupies. */
+.viewer-empty-pane {
+  display: grid; align-content: center; justify-items: center; gap: 6px;
+  min-height: 240px; padding: 32px 24px; text-align: center;
+}
+.viewer-empty-pane b { font-size: 15px; font-weight: 800; color: var(--ink); }
+.viewer-empty-pane p {
+  margin: 0; max-width: 42ch; font-size: 12.5px; font-weight: 600; line-height: 1.6;
+  color: var(--text-2, var(--muted));
+}
+
 .notify-hint {
   margin: 10px 2px 0; font-size: 11.5px; font-weight: 650; line-height: 1.5;
   color: var(--text-2, var(--muted));

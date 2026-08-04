@@ -12512,15 +12512,42 @@ function AccessCenter({
   const [viewerNewPasswordConfirm, setViewerNewPasswordConfirm] = useState("");
   const [viewerProjectQuery, setViewerProjectQuery] = useState("");
 
+  /* The sync layer signs this browser in anonymously during boot, and that is
+     what turns the request's role from `anon` into `authenticated` — the role
+     the viewer_accounts read policy is written for. This panel mounts first,
+     so firing the query straight away raced that sign-in and came back with a
+     permission error, which is why the screen showed "Could not load Viewer
+     accounts" and "No Viewer accounts yet" one above the other: an error from
+     a request that was simply too early, next to an empty list.
+
+     So it waits for the session rather than reporting a failure it caused. */
   const reloadViewers = useCallback(async () => {
     const client = getSupabaseClient();
     if (!client) return;
     setViewersLoading(true);
-    const { data, error } = await client.from("viewer_accounts").select("*").order("created_at", { ascending: false });
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const { data: session } = await client.auth.getSession();
+      if (!session.session) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        continue;
+      }
+      const { data, error } = await client
+        .from("viewer_accounts").select("*").order("created_at", { ascending: false });
+      if (!error) {
+        setViewers((data || []) as ViewerAccountRow[]);
+        setViewersError("");
+        setViewersLoading(false);
+        return;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
     setViewersLoading(false);
-    if (error) { setViewersError("Could not load Viewer accounts."); return; }
-    setViewersError("");
-    setViewers((data || []) as ViewerAccountRow[]);
+    // Only now is it a real failure rather than an early one.
+    setViewersError(lastError
+      ? "Could not load Viewer accounts. Check your connection and try again."
+      : "Still connecting to the account service — reopen this tab in a moment.");
   }, []);
 
   useEffect(() => { void reloadViewers(); }, [reloadViewers]);
@@ -13272,20 +13299,31 @@ function ViewerAccountsPanel({
   return (
     <section className="access-layout">
       <aside className="access-directory">
-        <div className="access-directory-head">
-          <div><span className="eyebrow">Directory</span><h3>{viewers.length} viewers</h3></div>
-          <button type="button" className="primary icon-label" onClick={startNewViewer} disabled={!canCreate}><Plus size={16} /> Create Viewer Account</button>
+        <div className="access-directory-head viewer-head">
+          <div><span className="eyebrow">Directory</span><h3>{viewers.length} {viewers.length === 1 ? "viewer" : "viewers"}</h3></div>
+          <button type="button" className="primary icon-label" onClick={startNewViewer} disabled={!canCreate}><Plus size={16} /> Create Viewer</button>
         </div>
         <p className="org-note">Read-only, project-scoped client accounts. No email, no email verification, no company password reset — an admin sets the username and password directly.</p>
         <label className="access-search">
           <Search size={16} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Viewer accounts" />
         </label>
+        {/* Exactly one of these at a time. Showing a failure and an empty list
+            together says two different things about the same moment and leaves
+            nobody sure which is true. */}
         <div className="access-user-list">
-          {viewersLoading && <div className="empty compact">Loading…</div>}
-          {viewersError && <div className="empty compact">{viewersError}</div>}
-          {!viewersLoading && !filteredViewers.length && <div className="empty compact">No Viewer accounts yet.</div>}
-          {filteredViewers.map((row) => (
+          {viewersLoading
+            ? <div className="empty compact">Loading…</div>
+            : viewersError
+              ? <div className="empty compact">{viewersError}</div>
+              : !filteredViewers.length
+                ? <div className="empty compact">
+                    {query.trim()
+                      ? "No Viewer account matches that search."
+                      : "No Viewer accounts yet. Create one to give a client read-only access to their project."}
+                  </div>
+                : null}
+          {!viewersLoading && !viewersError && filteredViewers.map((row) => (
             <button
               type="button"
               key={row.id}
@@ -13414,7 +13452,13 @@ function ViewerAccountsPanel({
             <button type="submit" className="primary icon-label" disabled={!canChangeDraft || busy}><Save size={16} /> {busy ? "Saving…" : "Save Viewer"}</button>
           </div>
         </form>
-      ) : <div className="empty">Select a Viewer account, or create a new one.</div>}
+      ) : (
+        <div className="empty viewer-empty-pane">
+          <b>No Viewer selected</b>
+          <p>Pick a client from the list to set their password, project access and
+            what they may see — or create one to get started.</p>
+        </div>
+      )}
     </section>
   );
 }
