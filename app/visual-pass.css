@@ -710,12 +710,12 @@ aside.sidebar .nav-item.active small { color: #ffffff !important; }
    its neighbours, and every one of them clears 7:1 against the night surface,
    which is what makes the OPEN labels readable rather than merely visible.
    Each fill is written from its own ink so a tone can never half-change. */
-.unified-app.dark .module-bubble.green  { --bubble-ink: #6ee7b7; --bubble-soft: rgba(110, 231, 183, .18); }
-.unified-app.dark .module-bubble.violet { --bubble-ink: #c4b5fd; --bubble-soft: rgba(196, 181, 253, .18); }
-.unified-app.dark .module-bubble.rose   { --bubble-ink: #fda4af; --bubble-soft: rgba(253, 164, 175, .18); }
-.unified-app.dark .module-bubble.amber  { --bubble-ink: #fcd34d; --bubble-soft: rgba(252, 211, 77, .18); }
-.unified-app.dark .module-bubble.blue   { --bubble-ink: #93c5fd; --bubble-soft: rgba(147, 197, 253, .18); }
-.unified-app.dark .module-bubble.slate  { --bubble-ink: #cbd5e1; --bubble-soft: rgba(203, 213, 225, .18); }
+.unified-app.dark .module-bubble.green  { --bubble-ink: #6ee7b7; --bubble-soft: rgba(110, 231, 183, .22); }
+.unified-app.dark .module-bubble.violet { --bubble-ink: #c4b5fd; --bubble-soft: rgba(196, 181, 253, .22); }
+.unified-app.dark .module-bubble.rose   { --bubble-ink: #fda4af; --bubble-soft: rgba(253, 164, 175, .22); }
+.unified-app.dark .module-bubble.amber  { --bubble-ink: #fcd34d; --bubble-soft: rgba(252, 211, 77, .22); }
+.unified-app.dark .module-bubble.blue   { --bubble-ink: #93c5fd; --bubble-soft: rgba(147, 197, 253, .22); }
+.unified-app.dark .module-bubble.slate  { --bubble-ink: #cbd5e1; --bubble-soft: rgba(203, 213, 225, .22); }
 /* The corner wash. Alpha here multiplies with the .5 below, landing at about
    14% -- present enough to tint the corner, faint enough that the heading
    stays the loudest thing on the card. */
