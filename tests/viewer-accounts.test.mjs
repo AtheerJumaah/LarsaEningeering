@@ -65,6 +65,15 @@ test("the account editor only ever shows password/PIN fields for username-only r
   assert.match(page, /Password and PIN are never shown or set here/);
 });
 
+test("a staff record can never be given a read-only client role — that lives in Viewer Accounts", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /const LEGACY_CLIENT_PRESETS = \["Client", "Viewer"\];/);
+  assert.match(page, /\.\.\.ROLE_PRESETS\.filter\(\(role\) => !LEGACY_CLIENT_PRESETS\.includes\(role\)\),/);
+  // An account created before the split still shows its own role rather than
+  // silently rendering as whatever option happens to come first.
+  assert.match(page, /\.\.\.\(draft\.access && LEGACY_CLIENT_PRESETS\.includes\(draft\.access\) \? \[draft\.access\] : \[\]\),/);
+});
+
 test("a brand-new email-based account cannot be created directly by an admin", async () => {
   const page = await read("app/page.tsx");
   assert.match(page, /New email-based accounts are created by the person themselves via Create Account\./);
