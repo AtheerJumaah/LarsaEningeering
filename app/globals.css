@@ -2682,16 +2682,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .break-banner.on { background: #2a1f12; border-color: #5c3d1a; }
 .dark .break-banner.on span { color: #fdba74; }
 
-.clock-others { margin-top: 16px; }
-.clock-others-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) auto; gap: 10px; align-items: end; }
-.clock-others-row label { display: flex; flex-direction: column; gap: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #7a8190; min-width: 0; }
-.clock-others-row select { padding: 10px 12px; border-radius: 12px; border: 1px solid #e3e6ea; background: #fff; font: inherit; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: normal; color: #17181b; }
-.clock-others-row button { padding: 11px 18px; border-radius: 12px; border: 1px solid #17181b; background: #17181b; color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
-.clock-others-row button:disabled { opacity: .45; cursor: not-allowed; }
-.clock-others-hint { margin: 10px 0 0; font-size: 12px; font-weight: 600; color: #7a8190; }
-.dark .clock-others-row select { border-color: #2f343d; background: #191c22; color: #f3f4f6; }
-.dark .clock-others-row button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
-@media (max-width: 700px) { .clock-others-row { grid-template-columns: minmax(0,1fr); } }
+/* The footnote under the trim panel. It used to borrow the clock-others
+   class; that panel is gone, so it has its own name and the rest of those
+   rules went with it. */
+.panel-footnote { margin: 10px 0 0; font-size: 12px; font-weight: 600; color: #7a8190; }
 
 /* A real, findable button. It was a faint dashed link before and people
    simply could not see it, which made the whole feature unusable. */

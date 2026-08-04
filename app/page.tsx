@@ -3936,11 +3936,6 @@ export default function Home() {
   const [navHistory, setNavHistory] = useState<Item[]>([]);
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
-  /* Appearance is a separate axis from light/dark: a person can be on
-     Larsa in either. "classic" writes no attribute at all, which is
-     what makes the existing look the guaranteed-unchanged default rather than
-     a theme that has to be kept in sync with it. */
-  const [appearance, setAppearance] = useState<"classic" | "larsa">("classic");
   const [message, setMessage] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallEvent | null>(null);
   const [installHelp, setInstallHelp] = useState(false);
@@ -4127,14 +4122,6 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       try {
         const saved = localStorage.getItem("larsa-control-theme");
-        /* "executive" is what the first version of this selector wrote. It is
-           migrated rather than ignored, so somebody who already chose the
-           theme keeps it instead of being quietly put back on Classic.
-           Anything unrecognised falls through to Classic, which is the safe
-           default because it is also the do-nothing one. */
-        const look = localStorage.getItem("larsa-control-appearance");
-        if (look === "larsa" || look === "executive") setAppearance("larsa");
-        else if (look === "classic") setAppearance("classic");
         if (saved === "dark" || saved === "light") setDark(saved === "dark");
         else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) setDark(true);
       } catch { /* private mode */ }
@@ -4157,16 +4144,6 @@ export default function Home() {
     if (!themeRead) return;
     try { localStorage.setItem("larsa-control-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
   }, [applyThemeToFrames, dark, themeRead]);
-
-  /* Appearance persists on its own rather than riding along with the light/dark
-     effect above. Sharing that effect meant it never fired when only the theme
-     changed — the deps list is [dark], so picking Larsa saved
-     nothing and the choice was lost on reload. It also has no business
-     re-running the iframe theme sync, which is all that effect is really for. */
-  useEffect(() => {
-    if (!themeRead) return;
-    try { localStorage.setItem("larsa-control-appearance", appearance); } catch { /* private mode */ }
-  }, [appearance, themeRead]);
 
   const applySessionToFrame = useCallback((engine: Engine, user: StaffUser, method: SignInMethod = "email") => {
     const frame = refs[engine].current;
@@ -6148,42 +6125,6 @@ export default function Home() {
 
   /* Clocking someone else in or out. Deliberately records who did it so the
      action is never anonymous in the attendance history. */
-  const punchOther = useCallback((targetId: string, mode: string, note = "") => {
-    const actor = sessionUserRef.current;
-    const clockItem = ITEMS.find((item) => item.id === "staff-clock");
-    if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
-      notify("Your account cannot clock other people in or out.");
-      return false;
-    }
-    const store = parseStore("larsaStaffV8");
-    if (!store) { notify("Attendance records are still loading."); return false; }
-    if (!Array.isArray(store.logs)) store.logs = [];
-    const target = (store.users as StaffUser[] | undefined)?.find((row) => row.id === targetId);
-    if (!target) { notify("Choose who you are clocking in or out."); return false; }
-    const latest = (store.logs as ClockLog[])
-      .filter((log) => log.uid === targetId && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    const status = latest && latest.status === "In" ? "Out" : "In";
-    const now = new Date().toISOString();
-    store.logs.push({
-      id: `l${Date.now()}`, uid: targetId, type: mode, status,
-      time: now, active: status === "In", lastSeen: now,
-      clockedBy: actor.name,
-      note: `${status === "In" ? "Clocked in" : "Clocked out"} by ${actor.name}${note.trim() ? ` · ${note.trim()}` : ""}`,
-    });
-    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    refreshStaffEngine();
-    setStorageTick((value) => value + 1);
-    raiseNotification({
-      event: "clock.byManager",
-      title: status === "In" ? "You were clocked in" : "You were clocked out",
-      body: `${actor.name} recorded this for you · ${mode}`,
-      itemId: "staff-clock", fromName: actor.name, recipients: [target],
-    });
-    notify(`${target.name} ${status === "In" ? "clocked in" : "clocked out"}.`);
-    return true;
-  // raiseNotification is a module-level function, so it is not a dependency.
-  }, [notify, refreshStaffEngine]);
 
   /* Trimming a session an authorized person can already see. Deliberately
      one-way: the new clock-out may only move EARLIER, so this can reduce
@@ -7799,10 +7740,7 @@ export default function Home() {
   }
 
   return (
-    <div
-      className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}
-      {...(appearance === "larsa" ? { "data-theme": "larsa" } : {})}
-    >
+    <div className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}>
       <div
         className={menuOpen ? "scrim open" : "scrim"}
         onClick={() => setMenuOpen(false)}
@@ -8027,20 +7965,6 @@ export default function Home() {
               </div>
             )}
             {!installed && <button type="button" className="primary" onClick={install}>Install App</button>}
-            {/* Two independent controls, deliberately: light/dark and the
-                visual system are different questions, and a person on
-                Larsa should still be able to work at night. */}
-            <label className="theme-picker">
-              <span className="visually-hidden">Theme</span>
-              <select
-                value={appearance}
-                aria-label="Theme"
-                onChange={(event) => setAppearance(event.target.value as "classic" | "larsa")}
-              >
-                <option value="classic">Classic</option>
-                <option value="larsa">Larsa</option>
-              </select>
-            </label>
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
@@ -8102,7 +8026,6 @@ export default function Home() {
               summary={homeSummary}
               punch={punchClock}
               punchBreak={punchBreak}
-              punchOther={punchOther}
               submitCorrection={submitCorrection}
               users={accessUsers}
               trimSession={trimSession}
@@ -14938,14 +14861,13 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak, punchOther, submitCorrection, users, trimSession, resetSession,
+  punchBreak, submitCorrection, users, trimSession, resetSession,
 }: {
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
   punch: (mode: string, note?: string) => boolean;
   punchBreak: (note?: string) => boolean;
-  punchOther: (targetId: string, mode: string, note?: string) => boolean;
   submitCorrection: (draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
     date: string; from: string; to: string; reason: string; mode: string;
@@ -14970,8 +14892,6 @@ function QuickClock({
     kind: "Missed Clock" as "Missed Clock" | "Missed Break" | "Extra Hours",
     date: dateInputValue(new Date()), from: "09:00", to: "17:00", reason: "", mode: "Office",
   });
-  const [otherId, setOtherId] = useState("");
-  const [otherMode, setOtherMode] = useState("Office");
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
@@ -14996,11 +14916,10 @@ function QuickClock({
     return last?.status === "Break Start" ? last : null;
   }, [logs, user]);
 
-  const mayClockOthers = Boolean(user && (() => {
+  const mayAdjustHours = Boolean(user && (() => {
     const item = ITEMS.find((row) => row.id === "staff-clock");
     return item ? hasItemPermission(user, item, "manage") : false;
   })());
-  const others = users.filter((row) => row.id !== user?.id && row.enabled !== false);
   /* Newest first, across the whole team, so a manager can close someone's
      forgotten clock-out without hunting through the reports. */
   const recentAll = [...sessions]
@@ -15134,38 +15053,6 @@ function QuickClock({
         </section>
       ) : null}
 
-      {mayClockOthers && (
-        <section className="report-panel clock-others">
-          <div className="section-head">
-            <div><span className="eyebrow">Authorised access</span><h3>Clock someone else in or out</h3></div>
-          </div>
-          <div className="clock-others-row">
-            <label>
-              Employee
-              <select value={otherId} onChange={(event) => setOtherId(event.target.value)}>
-                <option value="">Choose a person…</option>
-                {others.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Mode
-              <select value={otherMode} onChange={(event) => setOtherMode(event.target.value)}>
-                {WORK_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="primary"
-              disabled={!otherId}
-              onClick={() => { if (punchOther(otherId, otherMode, note)) { setNote(""); setOtherId(""); } }}
-            >Clock In / Out</button>
-          </div>
-          <p className="clock-others-hint">
-            For genuine cases only — a phone left at the desk, a shared terminal. Your name is recorded on every entry.
-          </p>
-        </section>
-      )}
-
       <section className="correction-block">
         {!showCorrection && (
           <button type="button" className="correction-open" onClick={() => setShowCorrection(true)}>
@@ -15180,7 +15067,7 @@ function QuickClock({
         {/* Sits beside the request button on purpose: same place, opposite
             rule. Adding time needs approval; taking it away does not, because
             nobody can inflate their own attendance by removing hours. */}
-        {mayClockOthers && !showCorrection && (
+        {mayAdjustHours && !showCorrection && (
           <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
             <Scissors size={18} />
             <span>
@@ -15190,7 +15077,7 @@ function QuickClock({
           </button>
         )}
 
-        {mayClockOthers && showTrim && !showCorrection && (
+        {mayAdjustHours && showTrim && !showCorrection && (
           <div className="report-panel trim-panel">
             <div className="section-head">
               <div><span className="eyebrow">Direct change · no approval</span><h3>Recent sessions</h3></div>
@@ -15235,7 +15122,7 @@ function QuickClock({
                 </div>
               );
             })}
-            <p className="clock-others-hint">
+            <p className="panel-footnote">
               Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval.
             </p>
           </div>
