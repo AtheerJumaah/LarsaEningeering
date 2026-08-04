@@ -30,10 +30,15 @@ test("the six work-area cards are preserved as large decorated cards", () => {
   assert.match(css, /\.module-bubble::after/);
   assert.match(css, /border-radius: 50%/);
   // They stay large, not shrunk into tiles or rows.
-  const size = /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) > \.module-bubble \{[^}]*min-height:\s*(\d+)px/.exec(pass);
+  /* The span moved from the bubble to the .smart-cell wrapper, so this rule
+     now lists both the direct and the nested bubble. The card metric it sets
+     is unchanged, which is the thing worth asserting. */
+  const size = /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\)[^{]*> \.module-bubble \{[^}]*min-height:\s*(\d+)px/.exec(pass);
   assert.ok(size && Number(size[1]) >= 210, "work-area cards must stay large (>=210px tall)");
   // Whole card is the click target.
   assert.match(page, /className=\{`module-bubble \$\{module\.color\}`\} onClick/);
+  // Still one grid, still permission-filtered before it is handed over.
+  assert.match(page, /<SmartCardGrid/);
 });
 
 test("rounded corners remain the visual language", () => {
@@ -205,8 +210,13 @@ test("density changes rounding and spacing, not just padding", () => {
     > pass.indexOf(".unified-app :is(button, .btn) { border-radius:"),
     "the card radius must be stated after the generic control radius");
   assert.match(pass, /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) \{ gap: var\(--grid-gap\); \}/);
+  // Compact must reach the nested bubble too, or the smart grid would sit at
+  // comfortable spacing while everything around it tightened.
+  assert.match(pass, /\[data-density="compact"\] \.module-grid[^,]*> \.smart-cell > \.smart-cell-body > \.module-bubble/);
   // Compact must actually reach the six home cards, whose own rule is stronger.
-  assert.match(pass, /\[data-density="compact"\] \.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) > \.module-bubble \{/);
+  // The selector now also lists the nested bubble, so the brace no longer
+  // follows immediately — the selector itself is what matters.
+  assert.match(pass, /\[data-density="compact"\] \.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) > \.module-bubble[,\s]/);
 });
 
 test("the brand mark is visible on its own tile", () => {
@@ -320,9 +330,13 @@ test("the clock labels read from the left", () => {
 test("responsive rules keep the six cards as cards on small screens", () => {
   assert.match(pass, /@media \(max-width: 700px\) \{/);
   // On a phone the grid becomes one column of full-width cards...
-  assert.match(pass, /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\) \{ grid-template-columns: minmax\(0, 1fr\) !important; \}/);
+  assert.match(pass, /\.module-grid:not\(\.quick-grid\):not\(\.accounting-grid\):not\(\.smart-grid\) \{ grid-template-columns: minmax\(0, 1fr\) !important; \}/);
+  // The smart grid collapses to one column its own way, so the blanket
+  // !important rule is scoped off it rather than fighting the computed spans.
+  assert.match(pass, /\.module-grid\.smart-grid > \.smart-cell \{ grid-column: 1 \/ -1 !important; grid-row: auto !important; \}/);
   // ...that keep a card's height and rounding rather than becoming rows.
   assert.match(pass, /> \.module-bubble \{ min-height: \d+px; padding: \d+px; border-radius: (?:\d+px|var\(--radius-card-sm\)); \}/);
+  assert.match(pass, /> \.smart-cell > \.smart-cell-body > \.module-bubble \{ min-height: \d+px/);
   // Decorations scale down rather than disappear.
   assert.match(pass, /\.module-bubble::after, \.module-bubble \.module-blob \{ width: \d+px/);
 });
