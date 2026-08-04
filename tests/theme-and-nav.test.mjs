@@ -21,14 +21,19 @@ const css = await read("app/visual-pass.css");
 // ------------------------------------------------------------- navigation
 test("Engineering Management has a nav channel of its own", () => {
   assert.match(page, /type NavChannel = "home" \| "time" \| "performance" \| "hr" \| "accounting" \| "engineering" \| "admin";/);
-  assert.match(page, /if \(item\.id === "org-structure"\) return "engineering";/);
+  /* This used to name org-structure directly. The area has four sections in
+     the sidebar now, so the channel is decided by the one table that says
+     which ids belong to it — the same table the permission check reads. */
+  assert.match(page, /if \(ENGINEERING_ITEM_TABS\[item\.id\]\) return "engineering";/);
+  assert.match(page, /if \(ENGINEERING_ITEM_TABS\[item\.id\]\) return canSeeOrgPortal\(\);/);
 });
 
 test("that channel resolves to a real sidebar group", () => {
-  assert.match(page, /engineering: GROUPS\.find\(\(group\) => group\.label === "Engineering Management"\)!,/);
+  assert.match(page, /engineering: \{\s*\n\s*label: "Engineering Management",/);
   // Built from the same GROUPS registry the rest of the nav reads, not a
   // second hardcoded list that could drift away from it.
-  assert.match(page, /label: "Engineering Management",\s*items: \[/);
+  assert.match(page, /GROUPS\.find\(\(group\) => group\.label === "Engineering Management"\)!\.items\s*\n\s*\.filter/);
+  assert.match(page, /label: "Engineering Management",\s*\n\s*items: \[/);
 });
 
 test("the Home card opens it on its own channel, not on Home", () => {
