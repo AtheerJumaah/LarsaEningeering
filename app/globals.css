@@ -3929,3 +3929,58 @@ html, body { max-width: 100%; overflow-x: hidden; }
    violet monogram is fine on white and is the same smudge as everything else
    on black. */
 .unified-app.dark .identity-chip > span { background: rgba(196, 181, 253, .2); color: #c4b5fd; }
+
+/* ==========================================================================
+   Profile photographs
+   ==========================================================================
+   The picture reuses whatever span the surrounding layout already sizes and
+   rounds -- the sidebar chip, the account list, the identity chip on the
+   points form -- so none of those had to change. It is laid over that span
+   and clipped to its shape, which means one rule covers every size the app
+   uses now and every one it grows later.
+   -------------------------------------------------------------------------- */
+.person-photo { position: relative; overflow: hidden; color: transparent; }
+.person-photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* The control itself, in My Settings and (take-down only) in Users & Access. */
+.photo-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+}
+.photo-row.compact { margin: 4px 0 12px; padding: 13px 14px; border-radius: 16px; }
+.photo-preview {
+  width: 72px; height: 72px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: #ede9fe; color: #6d28d9;
+  font-size: 20px; font-weight: 950;
+}
+.unified-app.dark .photo-preview { background: rgba(196, 181, 253, .2); color: #c4b5fd; }
+.photo-row.compact .photo-preview { width: 52px; height: 52px; font-size: 15px; }
+.photo-copy { display: grid; gap: 3px; min-width: 0; }
+.photo-copy b { font-size: 14px; }
+.photo-copy small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.photo-note { font-style: normal; font-size: 12px; font-weight: 800; color: var(--ok, #0f6b3c); }
+.photo-note.bad { color: var(--danger); }
+.unified-app.dark .photo-note { color: #5fd39b; }
+.photo-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.photo-actions button {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--ink);
+  font-size: 12.5px; font-weight: 850; cursor: pointer;
+}
+.photo-actions button.primary { border-color: transparent; background: var(--accent); color: #fff; }
+.unified-app.dark .photo-actions button.primary { color: #12151b; }
+@media (max-width: 640px) {
+  .photo-row { grid-template-columns: auto minmax(0, 1fr); }
+  .photo-actions { grid-column: 1 / -1; }
+}

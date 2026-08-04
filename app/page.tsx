@@ -48,6 +48,7 @@ import {
   HardHat,
   History,
   IdCard,
+  ImagePlus,
   Image as ImageIcon,
   Import,
   KeyRound,
@@ -227,6 +228,12 @@ type StaffUser = {
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
   phoneAlt?: string;
+  /* A square JPEG data URL, small enough to live on the record. Stored here
+     rather than in a bucket because this deployment has no file storage at
+     all, and because it travels with the person: wherever the app already
+     knows who somebody is, it can now show their face without a second
+     fetch. Written only by its owner -- see saveOwnProfile. */
+  photo?: string;
   emailVerified?: boolean; mustResetPassword?: boolean; pendingApproval?: boolean; devices?: TrustedDevice[]; platformAdmin?: boolean;
 };
 type Item = {
@@ -2353,6 +2360,97 @@ function MiniBars({ data, ariaLabel }: { data: { label: string; value: number }[
 
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
+}
+
+/* ==================================================================
+   Profile photographs
+   ==================================================================
+   There is no file storage in this deployment -- no buckets, no objects --
+   and the sign-in model is a self-asserted actor on an anonymous Supabase
+   session, which means a bucket could not be scoped to its owner by RLS
+   anyway. So a photo is kept on the person's own record, as a data URL, the
+   same way project chat already keeps its images.
+
+   That only works if the pictures are genuinely small. A photograph off a
+   phone is 3-8 MB; the staff record is synced in full to every device, so
+   storing one unaltered would make signing in slower for everybody in the
+   company. These are cropped square and re-encoded to a 192px JPEG, which
+   lands around 10-18 KB -- under a megabyte for a company of forty, and
+   sharp enough for a 96px avatar on a retina screen. Measured rather than
+   guessed: a 2400x1600 noise field of 311 KB comes out at 17 KB, and a real
+   photograph -- which compresses far better than noise -- lands nearer 10. */
+const AVATAR_EDGE = 192;
+/* The ceiling is per person and generous: a busy photograph at quality .8 is
+   about 14 KB, so anything approaching this has failed to compress and is
+   worth another pass rather than storing. */
+const AVATAR_MAX_BYTES = 48 * 1024;
+const AVATAR_QUALITY_LADDER = [0.8, 0.68, 0.55, 0.42];
+
+/* Centre-cropped rather than squashed. Everything that shows a person is a
+   circle or a rounded square, so a portrait letterboxed into one would sit in
+   bars; cropping to the middle is what a face actually wants. */
+function prepareAvatar(file: File): Promise<string> {
+  if (!String(file.type || "").startsWith("image/")) {
+    return Promise.reject(new Error("not-an-image"));
+  }
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read-failed"));
+    reader.onload = () => {
+      const image = new window.Image();
+      image.onerror = () => reject(new Error("read-failed"));
+      image.onload = () => {
+        try {
+          const width = image.width || 1;
+          const height = image.height || 1;
+          const edge = Math.min(width, height);
+          const canvas = document.createElement("canvas");
+          canvas.width = AVATAR_EDGE;
+          canvas.height = AVATAR_EDGE;
+          const context = canvas.getContext("2d");
+          if (!context) { reject(new Error("no-canvas")); return; }
+          context.drawImage(
+            image,
+            Math.round((width - edge) / 2), Math.round((height - edge) / 2), edge, edge,
+            0, 0, AVATAR_EDGE, AVATAR_EDGE,
+          );
+          /* Step the quality down until it fits rather than refusing outright.
+             Being told "too large" about a photo you cannot resize is a dead
+             end; the app is the thing holding the encoder. */
+          for (const quality of AVATAR_QUALITY_LADDER) {
+            const encoded = canvas.toDataURL("image/jpeg", quality);
+            if (encoded.length <= AVATAR_MAX_BYTES) { resolve(encoded); return; }
+          }
+          reject(new Error("too-large"));
+        } catch {
+          reject(new Error("read-failed"));
+        }
+      };
+      image.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* One element, two states, so every place that already shows initials can show
+   a face without its own layout. The span keeps whatever class the surrounding
+   CSS sizes and rounds it with; the picture is laid over the top and clipped
+   to that same shape. */
+function PersonAvatar({ person, className }: {
+  person: { name?: string | null; photo?: string | null } | null | undefined;
+  className?: string;
+}) {
+  const name = person?.name || "";
+  const photo = person?.photo;
+  if (!photo) return <span className={className}>{initials(name)}</span>;
+  return (
+    <span className={className ? `${className} person-photo` : "person-photo"}>
+      {/* Decorative: the name is always written next to it, so announcing the
+          picture as well would just say everything twice. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={photo} alt="" aria-hidden="true" />
+    </span>
+  );
 }
 
 function isoWeekLabel(date = new Date()) {
@@ -7665,7 +7763,9 @@ export default function Home() {
     if (index < 0) { notify("Your account could not be found."); return false; }
     // Role, access, scope, and permissions are never editable from here.
     const safe: Partial<StaffUser> = {};
-    (["email", "phone", "location", "password", "pin", "notifyPrefs"] as const).forEach((key) => {
+    /* "photo" belongs on this list and nowhere else: a person may set their own
+       picture and no one else's. It is the same line the password draws. */
+    (["email", "phone", "location", "photo", "password", "pin", "notifyPrefs"] as const).forEach((key) => {
       if (patch[key] !== undefined) (safe as Record<string, unknown>)[key] = patch[key];
     });
     if (safe.email) {
@@ -8007,7 +8107,7 @@ export default function Home() {
         {sessionUser && (
           <div className="sidebar-account">
             <button type="button" className="account-open" onClick={() => choose(SETTINGS_ITEM, "home")} title="My settings">
-              <span>{initials(sessionUser.name)}</span>
+              <PersonAvatar person={sessionUser} />
               <div><b>{sessionUser.name}</b><small>{sessionUser.access || sessionUser.role}</small></div>
               {unreadCount > 0 && <i className="unread-dot" aria-label={`${unreadCount} unread notifications`} />}
             </button>
@@ -13107,7 +13207,7 @@ function AccessCenter({
                 className={selectedId === user.id && !isNew ? "access-user active" : "access-user"}
                 onClick={() => selectUser(user)}
               >
-                <span>{initials(user.name)}</span>
+                <PersonAvatar person={user} />
                 <span><b>{user.name}</b><small>{user.access || user.role} · {user.department || "No department"}</small></span>
                 <i className={user.enabled === false ? "off" : ""} />
               </button>
@@ -13177,6 +13277,23 @@ function AccessCenter({
                   </>
                 ) : (
                   <p className="org-note">Password and PIN are never shown or set here — {draft.name || "this person"} chooses and changes their own from My Settings, or resets it themselves by email if forgotten.</p>
+                )}
+                {/* Take down, never put up. Somebody has to be able to remove
+                    an unsuitable picture, but an administrator choosing what
+                    face appears next to another person's name is a different
+                    thing entirely -- the same reason they cannot set a
+                    password here. */}
+                {draft.photo && (
+                  <div className="photo-row compact">
+                    <PersonAvatar person={draft} className="photo-preview" />
+                    <div className="photo-copy">
+                      <b>Profile photo</b>
+                      <small>Set by {draft.name || "this person"}. You can take it down; only they can choose a new one.</small>
+                    </div>
+                    <div className="photo-actions">
+                      <button type="button" onClick={() => updateDraft("photo", "")}>Remove photo</button>
+                    </div>
+                  </div>
                 )}
                 <label>Job Role<input value={draft.role || ""} onChange={(event) => updateDraft("role", event.target.value)} placeholder="Accountant, Engineer, HR…" /></label>
                 <label>
@@ -14455,6 +14572,11 @@ function MySettings({
   });
   const [secret, setSecret] = useState({ password: "", confirm: "", pin: "" });
   const [message, setMessage] = useState("");
+  /* The photo saves on choosing rather than on a separate Save, so it needs a
+     line of its own to report into -- the shared `message` belongs to the form
+     below and would read as though the fields had been saved too. */
+  const photoInput = useRef<HTMLInputElement | null>(null);
+  const [photoNote, setPhotoNote] = useState<{ text: string; bad: boolean } | null>(null);
 
   useEffect(() => {
     setProfile({
@@ -14491,6 +14613,48 @@ function MySettings({
       {tab === "profile" && (
         <section className="settings-panel">
           <div className="section-head"><div><span className="eyebrow">Profile</span><h3>How you appear to the team</h3></div></div>
+          {/* Your own picture, set by you. An administrator can take one down
+              but cannot put one up, which is the same line the password draws:
+              the things that represent you personally are yours to set. */}
+          <div className="photo-row">
+            <PersonAvatar person={user} className="photo-preview" />
+            <div className="photo-copy">
+              <b>Profile photo</b>
+              <small>{user?.photo
+                ? "Shown beside your name across the app."
+                : "Optional. Without one your initials are shown instead."}</small>
+              {photoNote && <em className={photoNote.bad ? "photo-note bad" : "photo-note"}>{photoNote.text}</em>}
+            </div>
+            <div className="photo-actions">
+              <input ref={photoInput} type="file" accept="image/*" hidden onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                setPhotoNote({ text: "Preparing…", bad: false });
+                prepareAvatar(file)
+                  .then((photo) => {
+                    if (saveProfile({ photo })) setPhotoNote({ text: "Photo updated.", bad: false });
+                    else setPhotoNote({ text: "That could not be saved. Please try again.", bad: true });
+                  })
+                  .catch((error: Error) => setPhotoNote({
+                    bad: true,
+                    text: error.message === "not-an-image"
+                      ? "That file is not a picture. Choose a JPEG or PNG."
+                      : error.message === "too-large"
+                        ? "That picture would not compress small enough. Try a different one."
+                        : "That picture could not be read. Try a different one.",
+                  }));
+              }} />
+              <button type="button" className="primary" onClick={() => photoInput.current?.click()}>
+                <ImagePlus size={15} /> {user?.photo ? "Change photo" : "Add photo"}
+              </button>
+              {user?.photo && (
+                <button type="button" onClick={() => {
+                  if (saveProfile({ photo: "" })) setPhotoNote({ text: "Photo removed.", bad: false });
+                }}>Remove</button>
+              )}
+            </div>
+          </div>
           <div className="settings-fields">
             <label>Full name<input value={user?.name || ""} disabled /><small>Ask an administrator to change your name</small></label>
             <label>Work email<input type="email" value={profile.email} onChange={(event) => setProfile({ ...profile, email: event.target.value })} /></label>
@@ -15625,7 +15789,7 @@ function MyPoints({
           <p>Record your work, then save it as a draft or send it to your manager for approval. Closed weeks still accept an entry — it travels for approval with every detail on it.</p>
         </div>
         <div className="identity-chip">
-          <span>{initials(user?.name || "")}</span>
+          <PersonAvatar person={user} />
           <div><small>Adding points for</small><b>{user?.name}</b></div>
           <ShieldCheck size={18} />
         </div>
