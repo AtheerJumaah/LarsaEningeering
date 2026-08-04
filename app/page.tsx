@@ -5919,15 +5919,28 @@ export default function Home() {
 
   /* Pushes the saved logs into the embedded engine so both views agree
      immediately rather than after the engine's next natural render. */
+  /* Deliberately deferred. This re-parses the whole staff blob inside the
+     engine's iframe and runs its full render(), and every caller was invoking
+     it synchronously between writing localStorage and React re-rendering — so
+     that work landed BETWEEN the click and the repaint. On a clock-in that is
+     the entire perceived lag: the button had already done its job and was
+     waiting on an iframe to finish redrawing before anything moved on screen.
+
+     Nothing depends on it having finished (the only failure path is a swallowed
+     catch, and the engine re-reads the store on its next render anyway), so
+     handing it to a timeout lets the click paint first and the engine catch up
+     immediately after. */
   const refreshStaffEngine = useCallback(() => {
-    try {
-      staffRef.current?.contentWindow?.eval(`
-        state=JSON.parse(localStorage.getItem("larsaStaffV8"));
-        if(typeof render==="function"&&currentUser)render();
-      `);
-    } catch {
-      // The engine picks the saved log up on its next render.
-    }
+    window.setTimeout(() => {
+      try {
+        staffRef.current?.contentWindow?.eval(`
+          state=JSON.parse(localStorage.getItem("larsaStaffV8"));
+          if(typeof render==="function"&&currentUser)render();
+        `);
+      } catch {
+        // The engine picks the saved log up on its next render.
+      }
+    }, 0);
   }, []);
 
   const saveMyPoints = (draft: PerformanceDraft, submit: boolean) => {
@@ -6058,13 +6071,25 @@ export default function Home() {
     const latest = (store.logs as ClockLog[])
       .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    /* A double-tap is one decision, not two. Without this, the second tap of
-       an accidental double-click reads the first tap's "In" and instantly
-       punches a zero-minute "Out" — a session that then pollutes every
-       average. Ten seconds is long past any UI double-fire and far below any
-       intentional shortest shift. */
-    if (latest?.time && Date.now() - new Date(latest.time).getTime() < 10000) {
-      return true;
+    /* A double-tap is one decision, not two: without this, the second tap of an
+       accidental double-click reads the first tap's "In" and instantly punches
+       a zero-minute "Out".
+
+       This used to swallow ten SECONDS of clicks and return true while doing
+       nothing — so a second, entirely deliberate press did not register, said
+       nothing, and still cleared the note as though it had worked. Pressing
+       again inside the window renewed nothing but the confusion, which is
+       exactly the "I have to click more than once" this fixes.
+
+       1.2s covers a genuine double-fire from a mouse or a touch screen and
+       nothing else. Past that, a press is a decision and is honoured — a short
+       session is visible and can be trimmed, whereas a refused clock-out is
+       silent and leaves the person looking like they never left. Returning
+       false on suppression matters too: the caller keeps the note instead of
+       clearing it, and the first press's toast is still on screen, so staying
+       quiet here is feedback rather than the absence of it. */
+    if (latest?.time && Date.now() - new Date(latest.time).getTime() < 1200) {
+      return false;
     }
     const status = latest && latest.status === "In" ? "Out" : "In";
     const now = new Date().toISOString();
