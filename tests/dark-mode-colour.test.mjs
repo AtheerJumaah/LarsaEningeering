@@ -107,3 +107,63 @@ test("none of this touches daylight", () => {
   assert.match(globals, /\.role-card\.due \{ border-color: #f0c9c1; background: #fdf6f4; \}/);
   assert.match(globals, /\.role-card\.due em \{ color: #b4341f; \}/);
 });
+
+// ------------------------------------------------------------- the whole rule
+/* The per-component tests above pin the places that were reported. This one
+   pins the RULE, across both stylesheets, so the next coloured surface somebody
+   adds at night cannot quietly be a dark one.
+ *
+ * Neutral is exempt and must be: panels, fields, the page itself and the rest
+ * of the chrome are surfaces, not colours, and they are meant to be dark. The
+ * test tells them apart by hue — the app's greys sit in a narrow blue band —
+ * and by chroma, so a near-grey is never mistaken for a colour. */
+function channels(value) {
+  const hex = value.match(/#([0-9a-f]{3}|[0-9a-f]{6})\b/i);
+  if (hex) {
+    const v = hex[1].length === 3 ? hex[1].split("").map((c) => c + c).join("") : hex[1];
+    return [0, 2, 4].map((i) => parseInt(v.slice(i, i + 2), 16));
+  }
+  const rgb = value.match(/rgb\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)\s*\)/);
+  return rgb ? rgb.slice(1, 4).map(Number) : null;
+}
+
+function isDarkColour([r, g, b]) {
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min;
+  if (chroma < 14) return false;                       // grey
+  let hue = 0;
+  if (max === r) hue = 60 * (((g - b) / chroma) % 6);
+  else if (max === g) hue = 60 * ((b - r) / chroma + 2);
+  else hue = 60 * ((r - g) / chroma + 4);
+  if (hue < 0) hue += 360;
+  if (hue > 195 && hue < 240) return false;            // the app's own blue-grey
+  return lum < 110;
+}
+
+test("no night rule paints a dark COLOUR — only tints and neutral chrome", () => {
+  const offenders = [];
+  for (const [name, css] of [["globals.css", globals], ["visual-pass.css", visual]]) {
+    for (const rule of css.matchAll(/([^{}\n]*\.dark[^{}]*)\{([^}]*)\}/g)) {
+      const [, selector, body] = rule;
+      for (const decl of body.matchAll(/(?<![-a-z])(background|background-color|border-color):\s*([^;]+);/g)) {
+        const rgb = channels(decl[2]);
+        if (rgb && isDarkColour(rgb)) {
+          offenders.push(`${name}  ${selector.trim().slice(0, 54)}  ${decl[1]}: ${decl[2].trim()}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `dark colours still painted at night:\n  ${offenders.join("\n  ")}`);
+});
+
+test("the tone systems beyond the cards were fixed too", () => {
+  // The two the owner named by sight: a dark yellow icon and a dark maroon one,
+  // both in the clock portals, both still wearing their light-mode ink.
+  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-amber\s+\.module-orb \{ background: rgba\(252, 211, 77, \.15\);\s+color: #fcd34d; \}/);
+  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-rose\s+\.module-orb \{ background: rgba\(253, 164, 175, \.15\); color: #fda4af; \}/);
+  // Work modes, driven by tokens rather than by a rule per chip.
+  assert.match(globals, /--mode-office-soft: rgba\(110, 231, 183, \.15\);/);
+  assert.match(globals, /--mode-online-soft: rgba\(147, 197, 253, \.15\);/);
+  // And a black badge is no longer black-on-near-black.
+  assert.match(globals, /\.unified-app\.dark \.black-badge \{ background: rgba\(203, 213, 225, \.16\); color: #e9ecf1; \}/);
+});
