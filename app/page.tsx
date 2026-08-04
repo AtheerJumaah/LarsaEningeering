@@ -12,7 +12,8 @@ import {
   EMPTY_COUNTS,
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
 import {
   ArrowLeft,
   ArrowRight,
@@ -8622,19 +8623,34 @@ function Overview({
           </div>
         )}
       </section>
-              <section className={quickAccess ? "module-grid quick-grid" : "module-grid"} aria-label="Available work areas">
-        {modules.map((module) => {
+      {/* `modules` is already filtered by canOpenInSession above, so the grid
+          only ever receives cards this person may open — nothing unauthorised
+          is rendered, and nothing unauthorised occupies a cell. The grid's job
+          is only to arrange whatever survived that filter. */}
+      <SmartCardGrid
+        cards={modules.map((module) => {
           const Icon = module.icon;
-          return (
-            <button type="button" key={module.id} className={`module-bubble ${module.color}`} onClick={() => open(module.id, module.channel)}>
-              <span className="module-blob" aria-hidden="true" />
-              <span className="module-orb"><Icon size={28} strokeWidth={2} /></span>
-              <span className="module-copy"><b>{module.title}</b><small>{module.text}</small></span>
-              <span className="module-open">Open</span>
-            </button>
-          );
+          return {
+            id: module.id,
+            /* Work-area cards are a title, a line of copy and an Open affordance.
+               That reads well across a third or a half, and a taller box would
+               only add empty space under the text — so no Tall or Large here. */
+            sizes: ["standard", "wide", "full"] as CardSize[],
+            node: (
+              <button type="button" className={`module-bubble ${module.color}`} onClick={() => open(module.id, module.channel)}>
+                <span className="module-blob" aria-hidden="true" />
+                <span className="module-orb"><Icon size={28} strokeWidth={2} /></span>
+                <span className="module-copy"><b>{module.title}</b><small>{module.text}</small></span>
+                <span className="module-open">Open</span>
+              </button>
+            ),
+          };
         })}
-      </section>
+        pageKey="home"
+        userId={user?.id || ""}
+        label="Available work areas"
+        className={quickAccess ? "quick-grid" : ""}
+      />
       {quickActions.length > 0 && <section className="home-quick-actions">
         <div className="section-head">
           <h3>Quick actions</h3>
@@ -8718,18 +8734,28 @@ function AdminCenter({
         </div>
         <span className="access-pill"><ShieldCheck size={16} /> Admin only</span>
       </section>
-      <section className="module-grid admin-grid" aria-label="Administrative tools">
-        {tools.map((tool) => {
+      {/* `tools` is filtered by canOpen just above, so the same guarantee holds
+          here: only authorised tools ever reach the grid. */}
+      <SmartCardGrid
+        cards={tools.map((tool) => {
           const Icon = tool.icon;
-          return (
-            <button type="button" key={tool.id} className={`module-bubble ${tool.color}`} onClick={() => open(tool.id)}>
-              <span className="module-orb"><Icon size={28} strokeWidth={2} /></span>
-              <span className="module-copy"><b>{tool.title}</b><small>{tool.text}</small></span>
-              <span className="module-open">Open</span>
-            </button>
-          );
+          return {
+            id: tool.id,
+            sizes: ["standard", "wide", "full"] as CardSize[],
+            node: (
+              <button type="button" className={`module-bubble ${tool.color}`} onClick={() => open(tool.id)}>
+                <span className="module-orb"><Icon size={28} strokeWidth={2} /></span>
+                <span className="module-copy"><b>{tool.title}</b><small>{tool.text}</small></span>
+                <span className="module-open">Open</span>
+              </button>
+            ),
+          };
         })}
-      </section>
+        pageKey="admin"
+        userId={user?.id || ""}
+        label="Administrative tools"
+        className="admin-grid"
+      />
       <section className="architecture admin-note">
         <span><ShieldCheck size={28} /></span>
         <div>

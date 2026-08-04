@@ -11,21 +11,21 @@
    unequal column counts, which produced a 2 / 3 / 1 staircase instead of two
    balanced rows. Markup order already puts Time, Performance and Engineering
    Management first. */
-.module-grid:not(.quick-grid):not(.accounting-grid) {
+.module-grid:not(.quick-grid):not(.accounting-grid):not(.smart-grid) {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   align-items: stretch;
 }
-.module-grid:not(.quick-grid):not(.accounting-grid) > * {
+.module-grid:not(.quick-grid):not(.accounting-grid):not(.smart-grid) > * {
   grid-column: auto !important;
   min-width: 0;
 }
 @media (max-width: 1180px) {
-  .module-grid:not(.quick-grid):not(.accounting-grid) {
+  .module-grid:not(.quick-grid):not(.accounting-grid):not(.smart-grid) {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 @media (max-width: 700px) {
-  .module-grid:not(.quick-grid):not(.accounting-grid) {
+  .module-grid:not(.quick-grid):not(.accounting-grid):not(.smart-grid) {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
@@ -663,7 +663,8 @@ aside.sidebar .nav-item.active small { color: #ffffff !important; }
    tightened: equal heights, one shared decoration origin, and states that
    were previously invisible. */
 .module-grid:not(.quick-grid):not(.accounting-grid) { gap: var(--grid-gap); }
-.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble {
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble,
+.module-grid:not(.quick-grid):not(.accounting-grid) > .smart-cell > .smart-cell-body > .module-bubble {
   min-height: 232px;
   padding: 22px;
   align-content: start;
@@ -974,8 +975,9 @@ aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offs
   .unified-app :is(.form-grid, .field-grid) { grid-template-columns: minmax(0, 1fr); }
   .unified-app :is(.modal, .dialog, .group-dialog) { max-width: 96vw; border-radius: 20px; }
   /* The six cards stack as cards, never as plain rows. */
-  .module-grid:not(.quick-grid):not(.accounting-grid) { grid-template-columns: minmax(0, 1fr) !important; }
-  .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble { min-height: 150px; padding: 18px; border-radius: var(--radius-card-sm); }
+  .module-grid:not(.quick-grid):not(.accounting-grid):not(.smart-grid) { grid-template-columns: minmax(0, 1fr) !important; }
+  .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble,
+.module-grid:not(.quick-grid):not(.accounting-grid) > .smart-cell > .smart-cell-body > .module-bubble { min-height: 150px; padding: 18px; border-radius: var(--radius-card-sm); }
   .module-bubble::after, .module-bubble .module-blob { width: 118px; height: 118px; top: -56px; inset-inline-end: -56px; right: -56px; }
   .topbar, .app-header { flex-wrap: wrap; row-gap: 8px; }
 }
@@ -1026,7 +1028,8 @@ aside.sidebar .nav-item:focus-visible { outline: 2px solid #7ea8f7; outline-offs
 /* Compact was being ignored on the six home cards: the geometry rule above is
    the more specific selector, so it kept the comfortable padding no matter
    what was chosen. Stated at matching strength, it now actually applies. */
-[data-density="compact"] .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble {
+[data-density="compact"] .module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble,
+[data-density="compact"] .module-grid:not(.quick-grid):not(.accounting-grid) > .smart-cell > .smart-cell-body > .module-bubble {
   min-height: 168px;
   padding: 14px 16px;
   row-gap: 8px;
@@ -1254,11 +1257,13 @@ aside.sidebar .sidebar-account .account-open > span { border-radius: 12px; }
    pushing the words into the bottom corner. They now ride nearer the middle,
    with a small indent so the text column reads as its own column rather than
    as something butted against the card edge. */
-.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-copy {
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-copy,
+.module-grid:not(.quick-grid):not(.accounting-grid) > .smart-cell > .smart-cell-body > .module-bubble > .module-copy {
   align-content: center;
   padding-inline-start: 6px;
 }
-.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-open {
+.module-grid:not(.quick-grid):not(.accounting-grid) > .module-bubble > .module-open,
+.module-grid:not(.quick-grid):not(.accounting-grid) > .smart-cell > .smart-cell-body > .module-bubble > .module-open {
   padding-inline-start: 6px;
 }
 
@@ -2001,3 +2006,94 @@ i.is-due { background: #d97706; }
 }
 /* Folded away, the main shell spans the full width and its own bar covers
    this strip completely — so it costs nothing when there is no notch. */
+
+/* --- Smart card grid ------------------------------------------------------
+   The old Home grid was `repeat(6,1fr)` with the first two cards spanning 3
+   and the rest spanning 2 — correct for one card count and ragged for every
+   other, which is a problem when the count is decided by each person's
+   permissions. Spans are computed now (see app/SmartCards.tsx); this file
+   only has to stop the old fixed rules from fighting the new ones, and dress
+   the edit mode. The card look itself is untouched. */
+.module-grid.smart-grid { gap: 14px; }
+.home-scroll > .module-grid.smart-grid .module-bubble,
+.home-scroll > .module-grid.smart-grid .module-bubble:nth-child(-n+2) {
+  /* The span now lives on .smart-cell, so the bubble stops carrying one. Its
+     metrics are the ones it always had — the point of this change is the
+     arrangement, not the card. */
+  grid-column: auto;
+  min-height: 232px;
+  padding: 22px;
+}
+/* The last-child full-width patch existed to paper over the same gap. With a
+   computed row plan there is no gap left to paper over, and leaving it in
+   would stretch a legitimately-thirds card across the page. */
+.module-grid.smart-grid > *:last-child:nth-child(odd) { grid-column: auto; }
+
+.smart-cell { display: grid; position: relative; min-width: 0; }
+.smart-cell-body { display: grid; min-width: 0; height: 100%; }
+.smart-cell-body > * { height: 100%; width: 100%; }
+/* A single card should not be stretched the width of a monitor just because
+   it is the only one authorised. */
+.module-grid.smart-grid > .smart-cell:only-child { justify-self: center; width: min(560px, 100%); }
+
+.smart-grid-bar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  flex-wrap: wrap; margin: 0 2px 10px;
+}
+.smart-grid-flag {
+  margin-inline-end: auto;
+  font-size: 11px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase;
+  color: #1f9d76;
+}
+.smart-grid-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.smart-grid-bar button {
+  min-height: 34px; padding: 0 13px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-raised, #fff); color: var(--ink);
+  font-size: 12.5px; font-weight: 750; cursor: pointer;
+}
+.smart-grid-bar button:hover { border-color: #b9bcc2; }
+.smart-grid-bar button.primary { background: #17181b; color: #fff; border-color: #17181b; }
+.smart-grid-customise { opacity: .75; }
+.smart-grid-customise:hover { opacity: 1; }
+.smart-grid-note {
+  margin: 0 2px 10px; font-size: 12px; font-weight: 700; line-height: 1.5; color: #b4341f;
+}
+
+/* Edit mode. Deliberately quiet — a dashed outline and a small tool strip,
+   not a different-looking page, so the arrangement being previewed is the
+   arrangement that gets saved. */
+.module-grid.smart-grid.is-editing .smart-cell {
+  outline: 1.5px dashed var(--line); outline-offset: 3px; border-radius: 26px;
+  cursor: grab;
+}
+.module-grid.smart-grid.is-editing .smart-cell:active { cursor: grabbing; }
+.smart-cell-tools {
+  position: absolute; inset-inline-end: 10px; top: 10px; z-index: 3;
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 6px; border-radius: 10px;
+  background: rgba(255,255,255,.94); border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(16,24,40,.10);
+}
+.unified-app.dark .smart-cell-tools { background: rgba(23,27,34,.95); }
+.smart-cell-tools button {
+  width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px;
+  background: none; color: var(--ink); font-size: 12px; font-weight: 800; cursor: pointer;
+}
+.smart-cell-tools button:disabled { opacity: .35; cursor: default; }
+.smart-cell-tools select {
+  min-height: 24px; padding: 0 5px; border-radius: 7px; font-size: 11px; font-weight: 700;
+}
+.smart-drag { font-size: 13px; color: var(--text-2, var(--muted)); cursor: grab; }
+/* Nothing inside a card should be reachable while it is being rearranged. */
+.smart-cell-body.is-locked { pointer-events: none; }
+
+@media (max-width: 720px) {
+  /* One per row on a phone, whatever the desktop preference says. A Wide
+     preset means nothing at this width and a Tall one just pushes the next
+     card off the screen. */
+  .module-grid.smart-grid > .smart-cell { grid-column: 1 / -1 !important; grid-row: auto !important; }
+  .module-grid.smart-grid > .smart-cell:only-child { width: 100%; }
+  .smart-grid-bar { justify-content: stretch; }
+  .smart-grid-actions { width: 100%; }
+  .smart-grid-actions button { flex: 1 1 auto; }
+}
