@@ -70,23 +70,31 @@ test("no opaque dark hex survives in the night card palette", () => {
 });
 
 // ------------------------------------------------------- the overview tiles
-test("the overview tiles are tinted, not near-black", () => {
+test("the overview tiles are mixed towards the card surface, not alpha'd over black", () => {
+  /* These sit straight on the page rather than on a raised card, so a low-alpha
+     tint composited against near-black and stayed a dark maroon -- which is
+     what was reported, twice. Mixing towards the raised surface is what makes
+     the rendered pixel light; tests/night-colour-e2e.smoke.mjs measures that
+     pixel, because a stylesheet cannot tell you what a composite looks like. */
   for (const state of ["due", "good"]) {
     const rule = globals.match(new RegExp(`\\.unified-app\\.dark \\.role-card\\.${state}\\s*\\{[^}]*\\}`));
     assert.ok(rule, `no night rule for .role-card.${state}`);
-    assert.match(rule[0], /background:\s*rgba\(/, `.role-card.${state} still has an opaque fill`);
+    assert.match(rule[0], /background:\s*color-mix\(in srgb, #[0-9a-f]{6} 28%, var\(--surface-raised/, `.role-card.${state} is not mixed towards the surface`);
   }
 });
 
 test("and their captions are no longer wearing the light-mode ink", () => {
   /* This was the worst of it: "Below the 5 person minimum" is the one line on
      the tile that has to be read at a glance, and it was #b4341f on black. */
-  for (const [state, expected] of [["due", "#f28b82"], ["good", "#5fd39b"]]) {
+  for (const [state, expected] of [["due", "#ffb4ab"], ["good", "#9df3c8"]]) {
     const rule = globals.match(new RegExp(`\\.unified-app\\.dark \\.role-card\\.${state} em\\s*\\{[^}]*\\}`));
     assert.ok(rule, `.role-card.${state} em has no night colour`);
     assert.match(rule[0], new RegExp(expected));
     assert.ok(luma(expected) > 140, `${expected} is too dark to read on black`);
   }
+  // Lighter again than the first attempt: the tile underneath them is no
+  // longer near-black, so the caption has to clear a lighter surface.
+  assert.match(globals, /\.unified-app\.dark :is\(\.role-card\.due, \.role-card\.good\) small \{ color: rgba\(255, 255, 255, \.78\); \}/);
   // The same hardcoded red reached two other places.
   assert.match(globals, /\.unified-app\.dark \.reminder-row\.due em \{ color: #f28b82; \}/);
   assert.match(globals, /\.unified-app\.dark \.dev-card em\.due \{ color: #f28b82; \}/);
@@ -159,11 +167,11 @@ test("no night rule paints a dark COLOUR — only tints and neutral chrome", () 
 test("the tone systems beyond the cards were fixed too", () => {
   // The two the owner named by sight: a dark yellow icon and a dark maroon one,
   // both in the clock portals, both still wearing their light-mode ink.
-  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-amber\s+\.module-orb \{ background: rgba\(252, 211, 77, \.15\);\s+color: #fcd34d; \}/);
-  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-rose\s+\.module-orb \{ background: rgba\(253, 164, 175, \.15\); color: #fda4af; \}/);
+  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-amber\s+\.module-orb \{ background: rgba\(252, 211, 77, \.2\);\s+color: #fcd34d; \}/);
+  assert.match(globals, /\.unified-app\.dark \.clock-portals \.portal-rose\s+\.module-orb \{ background: rgba\(253, 164, 175, \.2\); color: #fda4af; \}/);
   // Work modes, driven by tokens rather than by a rule per chip.
-  assert.match(globals, /--mode-office-soft: rgba\(110, 231, 183, \.15\);/);
-  assert.match(globals, /--mode-online-soft: rgba\(147, 197, 253, \.15\);/);
+  assert.match(globals, /--mode-office-soft: rgba\(110, 231, 183, \.2\);/);
+  assert.match(globals, /--mode-online-soft: rgba\(147, 197, 253, \.2\);/);
   // And a black badge is no longer black-on-near-black.
   assert.match(globals, /\.unified-app\.dark \.black-badge \{ background: rgba\(203, 213, 225, \.16\); color: #e9ecf1; \}/);
 });
