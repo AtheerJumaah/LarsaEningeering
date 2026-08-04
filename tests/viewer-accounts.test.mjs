@@ -1,0 +1,178 @@
+/* Larsa Control — Viewer accounts, front-end contract tests.
+ *
+ * The SQL suite (tests/viewer-accounts-sql.test.sql) proves the real
+ * enforcement — RLS, the grants, the guard trigger. These tests are about
+ * the surface the spec asked for by name: public sign-up can never become a
+ * Viewer, an admin approving a request never sees a password field, Users &
+ * Access is split into three tabs, deleting an account (either kind) always
+ * confirms first, and the Auto Build meeting day is no longer hardcoded to
+ * Monday.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("public Create Account can only ever become an email-based Engineer, never a Viewer", async () => {
+  const access = await read("app/AccountAccess.tsx");
+  assert.match(access, /const NEW_ACCOUNT_ACCESS = "Engineer";/);
+  assert.doesNotMatch(access, /const NEW_ACCOUNT_ACCESS = "Viewer";/);
+  // No role selector exists on the signup form at all — the person can
+  // never choose, and Viewer specifically can never be an option.
+  assert.doesNotMatch(access, /name="access"|<select[^>]*role/i);
+  assert.match(access, /it must never be reachable from this public form/);
+});
+
+test("a company-domain signup auto-approves; anything else is created disabled and pending", async () => {
+  const access = await read("app/AccountAccess.tsx");
+  assert.match(access, /const COMPANY_DOMAINS = \["larsaeng\.com", "larsaengineering\.com"\];/);
+  assert.match(access, /function isCompanyEmail\(email: string\) \{\s*return COMPANY_DOMAINS\.indexOf\(domainOf\(email\)\) >= 0;/);
+  assert.match(access, /enabled: company && policy\.signup_requires_approval !== true,/);
+  assert.match(access, /pendingApproval: !company \|\| policy\.signup_requires_approval === true,/);
+  assert.match(access, /access: NEW_ACCOUNT_ACCESS,/);
+  assert.match(access, /notifyAdminsOfPendingAccount\(created, list\);/);
+});
+
+test("the domain check is exact-match, not a suffix match (anti-spoofing)", async () => {
+  const access = await read("app/AccountAccess.tsx");
+  assert.match(access, /function domainOf\(email: string\) \{\s*return normalise\(email\)\.split\("@"\)\[1\] \|\| "";\s*\}/);
+  // indexOf on an exact-match array, not .endsWith()/.includes() against the
+  // raw domain — "notlarsaeng.com" or "larsaeng.com.evil.tld" must not pass.
+  assert.doesNotMatch(access, /domainOf\(email\)\.endsWith\(|domainOf\(email\)\.includes\(/);
+});
+
+test("Users & Access is split into Pending Requests, Active Users, and Viewer Accounts tabs", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /const \[tab, setTab\] = useState<"pending" \| "active" \| "viewers">\("active"\);/);
+  assert.match(page, /const pendingUsers = users\.filter\(\(user\) => user\.pendingApproval === true\);/);
+  assert.match(page, /const activeUsers = users\.filter\(\(user\) => user\.pendingApproval !== true && user\.access !== "Client"\);/);
+  assert.match(page, /const decidePending = async \(approve: boolean\) => \{/);
+  assert.match(page, /<ViewerAccountsPanel/);
+});
+
+test("approving or rejecting a pending request never touches password or PIN", async () => {
+  const page = await read("app/page.tsx");
+  const decideBlock = page.slice(page.indexOf("const decidePending"), page.indexOf("const decidePending") + 600);
+  assert.doesNotMatch(decideBlock, /password|\bpin\b/i);
+  assert.match(decideBlock, /pendingApproval: false/);
+});
+
+test("the account editor only ever shows password/PIN fields for username-only roles", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /const USERNAME_ONLY_PRESETS = \["Client", "Trainee", "Intern"\];/);
+  assert.match(page, /USERNAME_ONLY_PRESETS\.includes\(draft\.access \|\| ""\)/);
+  assert.match(page, /Password and PIN are never shown or set here/);
+});
+
+test("a brand-new email-based account cannot be created directly by an admin", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /New email-based accounts are created by the person themselves via Create Account\./);
+});
+
+test("deleting an account always asks for confirmation first — employee or Viewer", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /window\.confirm\(`Delete the sign-in account for \$\{target\.name\}\? Historical work records will be kept\.`\)/);
+  assert.match(page, /window\.confirm\(`Delete the Viewer account for \$\{draft\.displayName \|\| draft\.username\}\? They will immediately lose access, and this cannot be undone\.`\)/);
+});
+
+test("every account-lifecycle action is logged, and the log never carries a secret", async () => {
+  const page = await read("app/page.tsx");
+  const migration = await read("supabase/migrations/20260803_acct_016_viewer_accounts.sql");
+  assert.match(page, /function logAccountChanges\(/);
+  assert.match(page, /account\.approved|account\.rejected/);
+  assert.match(page, /account\.role_changed/);
+  assert.match(page, /account\.permissions_changed/);
+  assert.match(migration, /Never stores a password, PIN, hash,\s*\n--\s*or reset token/);
+  const edgeFn = await read("supabase/functions/viewer-admin/index.ts");
+  assert.match(edgeFn, /Never log the password itself — only that a reset happened\./);
+});
+
+test("Viewer accounts are created only by an admin — username and password, no email", async () => {
+  const edgeFn = await read("supabase/functions/viewer-admin/index.ts");
+  assert.match(edgeFn, /const WRITE_ROLES = \["Super Admin", "Admin", "Admin HR"\];/);
+  assert.match(edgeFn, /function usernameProblem\(username: string\)/);
+  assert.match(edgeFn, /function passwordProblem\(password: string, confirm: string\)/);
+  assert.doesNotMatch(edgeFn, /requires?\s+an?\s+email/i);
+});
+
+test("a Viewer's project scope is enforced server-side, never fetched-all-then-hidden", async () => {
+  const page = await read("app/page.tsx");
+  // The portal queries acct_projects/acct_progress_updates directly and
+  // calls the gated RPC for numbers — never accountingSnapshot, the
+  // client-side-filtered, everyone-signed-in-can-read local cache the rest
+  // of the app uses.
+  const portal = page.slice(page.indexOf("function ViewerPortal("), page.indexOf("function AccessCenter("));
+  assert.match(portal, /\.from\("acct_projects"\)/);
+  assert.match(portal, /\.from\("acct_progress_updates"\)/);
+  assert.match(portal, /\.rpc\("viewer_project_summary"/);
+  assert.doesNotMatch(portal, /accountingSnapshot/);
+});
+
+test("a Viewer never reaches the staff app shell", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /if \(viewerSession\) \{\s*return <ViewerPortal session=\{viewerSession\} onSignOut=\{viewerSignOut\} \/>;/);
+});
+
+test("Viewer sign-in is tried only after the employee lookup has already failed, using the same box", async () => {
+  const page = await read("app/page.tsx");
+  const block = page.slice(page.indexOf("const credentialOk = user"), page.indexOf("const credentialOk = user") + 900);
+  assert.match(block, /if \(!user \|\| !credentialOk\) \{/);
+  assert.match(block, /const viewerResult = await tryViewerSignIn\(enteredLocal, enteredPass\);/);
+  assert.match(block, /if \(viewerResult === "signed-in"\) return;/);
+});
+
+test("Viewer sign-in uses Supabase Auth directly, never larsaStaffV8", async () => {
+  const page = await read("app/page.tsx");
+  const fn = page.slice(page.indexOf("const tryViewerSignIn"), page.indexOf("const tryViewerSignIn") + 1400);
+  assert.match(fn, /client\.auth\.signInWithPassword\(\{/);
+  assert.match(fn, /email: `\$\{uname\}@\$\{VIEWER_EMAIL_DOMAIN\}`,/);
+  assert.doesNotMatch(fn, /larsaStaffV8/);
+});
+
+test("the Auto Build team meeting day is configurable, not hardcoded to Monday", async () => {
+  const page = await read("app/page.tsx");
+  assert.doesNotMatch(page, /mondayMeeting/);
+  assert.match(page, /teamMeetingDay: string/);
+  assert.match(page, /teamMeetingDay: "Monday",/); // the default still matches old behaviour
+  assert.match(page, /if \(settings\.teamMeetingDay && day === settings\.teamMeetingDay\)/);
+  assert.match(page, /\{OFFICE_WEEK\.map\(\(day\) => <option key=\{day\} value=\{day\}>\{day\}<\/option>\)\}/);
+});
+
+test("the team meeting time is chosen too, not fixed at 16:00", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /teamMeetingStart: string;/);
+  assert.match(page, /teamMeetingEnd: string;/);
+  // Two real time pickers, not a hardcoded string in the copy.
+  assert.match(page, /<label>Meeting starts\s*\n\s*<input type="time" value=\{meetingStart\}/);
+  assert.match(page, /<label>Meeting ends\s*\n\s*<input type="time" value=\{meetingEnd\}/);
+  assert.doesNotMatch(page, /16:00 team meeting is mandatory/);
+  // Empty means "leave what the office already runs alone", so an office that
+  // had already corrected the meeting hours by hand keeps them.
+  assert.match(page, /teamMeetingStart: "",\s*\n\s*teamMeetingEnd: "",/);
+  assert.match(page, /const meetingStart = build\.teamMeetingStart \|\| savedMeetingHours\[0\] \|\| "16:00";/);
+});
+
+test("choosing the meeting hours corrects the shift catalogue, so the legend cannot drift", async () => {
+  const page = await read("app/page.tsx");
+  const build = page.slice(page.indexOf("const autoBuildWeek"), page.indexOf("const saveShiftColours"));
+  assert.match(build, /if \(settings\.teamMeetingDay && meetingStart && meetingEnd\) \{/);
+  assert.match(build, /code: "MON",/);
+  assert.match(build, /time: `\$\{meetingStart\} – \$\{meetingEnd\}`,/);
+  // The catalogue is corrected BEFORE the roster is written, so the entries
+  // pick the new hours up through the ordinary shiftTimesFor lookup.
+  assert.ok(build.indexOf('code: "MON",') < build.indexOf("const times = shiftTimesFor(code, store);"));
+});
+
+test("a meeting that ends before it starts cannot be built", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /const meetingHoursBackwards = Boolean\(meetingStart && meetingEnd && meetingEnd <= meetingStart\);/);
+  assert.match(page, /disabled=\{meetingHoursBackwards\}/);
+  assert.match(page, /The meeting ends before it starts\./);
+});
+
+test("the shift legend no longer names Monday specifically", async () => {
+  const page = await read("app/page.tsx");
+  assert.doesNotMatch(page, /"Monday meeting"/);
+  assert.match(page, /label: "Team meeting"/);
+});
