@@ -649,7 +649,25 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    label: "Engineering Management",    items: [      { id: "org-structure", label: "Engineering Management", description: "Departments, teams, and access", code: "EM", native: "orgStructure" },    ],  },  {    label: "Timeclock & Performance",
+    /* Engineering Management is one screen with four sections behind tabs, and
+       for a long time only the screen itself was in the sidebar — so from the
+       outside it looked like a single page and the other three were invisible
+       until you were already inside. Each section is listed now.
+
+       They all open the same native screen and differ only in which tab it
+       lands on. org-structure keeps its id and stays the entry that opens the
+       Dashboard, because the Home card, the recent list and its permission all
+       point at it; only its label changed. */
+    label: "Engineering Management",
+    items: [
+      { id: "org-structure", label: "Engineering Dashboard", description: "Headcount, hours, and points across the structure", code: "EM", native: "orgStructure" },
+      { id: "org-chart", label: "Structure", description: "Departments, teams, and access", code: "ES", native: "orgStructure" },
+      { id: "org-team-time", label: "Team Timesheets", description: "Hours for everyone you are responsible for", code: "ET", native: "orgStructure" },
+      { id: "org-team-points", label: "Team Performance", description: "Points and targets across your teams", code: "EP", native: "orgStructure" },
+    ],
+  },
+  {
+    label: "Timeclock & Performance",
     items: [
       engineItem("staff", "staff-dashboard", "Performance Dashboard", "Workboard summaries, alerts, and KPIs", "DB", "dashboard"),
       PERFORMANCE_CENTER_ITEM,
@@ -808,6 +826,21 @@ const PAYROLL_PORTAL_ITEM: Item = {
   native: "payrollPortal",
 };
 const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_ITEM, QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, ACCOUNTING_HUB_ITEM, SETTINGS_ITEM, REQUESTS_ITEM, PRESENCE_ITEM, MY_PAY_ITEM, PAYROLL_PORTAL_ITEM];
+
+/* Which tab of the Engineering Management screen each sidebar entry opens.
+   One place, so the nav channel, the permission check and the screen itself
+   cannot disagree about what these ids mean. */
+type EngineeringTab = "dashboard" | "structure" | "time" | "performance";
+const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = {
+  "org-structure": "dashboard",
+  "org-chart": "structure",
+  "org-team-time": "time",
+  "org-team-points": "performance",
+};
+/* The two that only mean anything to somebody responsible for other people.
+   They are hidden rather than shown-and-empty, and the screen falls back to
+   the Dashboard if one is reached any other way. */
+const ENGINEERING_MANAGER_ITEMS = new Set(["org-team-time", "org-team-points"]);
 const DEFAULT_ITEM = ITEMS.find((item) => item.id === "overview")!;
 const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "my-points", "staff-development", "my-settings", "my-requests", "live-presence", "my-pay"]);
 const PERMISSION_ACTIONS: { id: PermissionAction; label: string }[] = [
@@ -1045,6 +1078,9 @@ const ICONS: Record<string, LucideIcon> = {
   "staff-development": BookOpen,
   "performance-history": History,
   "my-points": TrendingUp,
+  "org-chart": Network,
+  "org-team-time": FileClock,
+  "org-team-points": TrendingUp,
   "staff-timesheet": FileClock,
   "staff-approvals": CheckCircle2,
   "staff-people": UsersRound,
@@ -1539,7 +1575,11 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
     const approvals = ITEMS.find((row) => row.id === "staff-approvals");
     return approvals ? hasItemPermission(user, approvals, action) : false;
   }
-  if (item.id === "org-structure") return canSeeOrgPortal();
+  /* All four entries are the one portal, which is open to everybody — an
+     ordinary engineer opens it to see which team they are in and who they
+     report to. What differs is how much of it they can see, and that is
+     decided inside the screen, not here. */
+  if (ENGINEERING_ITEM_TABS[item.id]) return canSeeOrgPortal();
   /* Platform Super Admins always reach platform settings; everyone else falls
      through to the ordinary grant check for this same item. That fall-through
      has to be the grant lookup itself — asking hasItemPermission again with
@@ -1707,7 +1747,7 @@ function channelForItem(item: Item): NavChannel {
      fell back to the Home group the moment you opened it — so the only way
      back was through a Home card. It owns a channel now, exactly like
      Accounting and HR, and keeps its own sidebar entry while you are in it. */
-  if (item.id === "org-structure") return "engineering";
+  if (ENGINEERING_ITEM_TABS[item.id]) return "engineering";
   if (
     item.id === "admin"
     || item.id === "access"
@@ -5936,9 +5976,9 @@ export default function Home() {
       notify("The performance area is still loading. Please try again.");
       return false;
     }
-    /* Points belong to the week the work was done in, not the week it happens to
-       be typed in -- otherwise a Monday morning catch-up lands in the wrong
-       week and the lock means nothing. */
+    /* Points belong to the week the work was completed in, not the week it
+       happens to be typed in -- otherwise a Monday morning catch-up lands in
+       the wrong week and the lock means nothing. */
     const workDate = draft.workDate || new Date().toISOString().slice(0, 10);
     const week = weekOfDate(workDate);
     /* Checked here and not only in the form: the form's copy of the store can be
@@ -7652,6 +7692,13 @@ export default function Home() {
     [sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers, accountingSnapshot],
   );
   const homeGroup = GROUPS.find((group) => group.label === "Home")!;
+  /* The same question the Engineering Management screen asks itself before it
+     draws its management tabs, asked here so the sidebar offers exactly what
+     the page will show. */
+  const managesOthers = useMemo(
+    () => isResponsibleForOthers(effectiveOrg(accessUsers), sessionUser, accessUsers),
+    [accessUsers, sessionUser],
+  );
   const staffItems = GROUPS.find((group) => group.label === "Timeclock & Performance")!.items;
   const channelGroups: Record<Exclude<NavChannel, "home" | "admin">, Group> = {
     time: {
@@ -7682,18 +7729,31 @@ export default function Home() {
 
          staff-dashboard / staff-performance / staff-reports resolve to this
          channel in channelForItem, so they must be listed here or they have no
-         sidebar entry at all. */
+         sidebar entry at all.
+
+         Add My Points sits second, straight after the Dashboard. It used to be
+         reachable only from a Home quick link, which meant somebody who opened
+         Performance to add points had to go back out to Home to do it. It is
+         not part of the staff group, so it is named directly rather than
+         looked up. Access is unchanged — the sidebar filters every entry
+         through canOpenInSession, so it appears only for people who may
+         submit performance. */
       items: [
-        "staff-dashboard",
-        "performance-center",
-        "staff-performance",
-        "performance-history",
-        "staff-reports",
-      ]
-        .map((id) => staffItems.find((item) => item.id === id)!)
-        .filter(Boolean),
+        staffItems.find((item) => item.id === "staff-dashboard")!,
+        MY_POINTS_ITEM,
+        ...["performance-center", "staff-performance", "performance-history", "staff-reports"]
+          .map((id) => staffItems.find((item) => item.id === id)!),
+      ].filter(Boolean),
     },
-    engineering: GROUPS.find((group) => group.label === "Engineering Management")!,
+    engineering: {
+      label: "Engineering Management",
+      /* Team Timesheets and Team Performance are only shown to somebody who is
+         actually responsible for other people — the same test the screen uses
+         to decide whether to draw those tabs at all, so the sidebar and the
+         page agree. */
+      items: GROUPS.find((group) => group.label === "Engineering Management")!.items
+        .filter((item) => !ENGINEERING_MANAGER_ITEMS.has(item.id) || managesOthers),
+    },
     hr: GROUPS.find((group) => group.label === "HR & Skills")!,
     accounting: {
       label: "Accounting",
@@ -8066,7 +8126,7 @@ export default function Home() {
             />
           </div>
           <div className={active.native === "orgStructure" ? "native active" : "native"}>
-            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} />
+            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
           </div><div className={active.native === "platformSettings" ? "native active" : "native"}><PlatformSettings viewer={sessionUser} users={accessUsers} /></div><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
@@ -8361,7 +8421,7 @@ export default function Home() {
 }
 
 function EngineeringManagementPortal({
-  viewer, users, sessions, rows, targets, go, onSaved,
+  viewer, users, sessions, rows, targets, go, onSaved, openTab,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
@@ -8370,10 +8430,26 @@ function EngineeringManagementPortal({
   targets: Record<string, number>;
   go: (id: string) => void;
   onSaved: () => void;
+  /* Which section the sidebar entry that opened this asked for. The tabs still
+     work on their own — this only decides where you arrive. */
+  openTab?: EngineeringTab;
 }) {
   const org = effectiveOrg(users);
   const manages = isResponsibleForOthers(org, viewer, users);
-  const [tab, setTab] = useState<"dashboard" | "structure" | "time" | "performance">("dashboard");
+  /* The section the sidebar asked for. A management section reached by
+     somebody who manages nobody would draw an empty page, so it falls back to
+     the Dashboard rather than showing nothing. The sidebar already hides those
+     entries; this covers every other way in. */
+  const requestedTab: EngineeringTab =
+    openTab && (manages || (openTab !== "time" && openTab !== "performance")) ? openTab : "dashboard";
+  /* Derived rather than synchronised. The tab is whatever the sidebar asked
+     for until somebody clicks a different one, and the click is stamped with
+     the entry it was made under -- so arriving from a different sidebar entry
+     lands on that entry's section instead of wherever you last clicked. No
+     effect, so there is no render where the two disagree. */
+  const [picked, setPicked] = useState<{ from: EngineeringTab | undefined; tab: EngineeringTab } | null>(null);
+  const tab = picked && picked.from === openTab ? picked.tab : requestedTab;
+  const setTab = (next: EngineeringTab) => setPicked({ from: openTab, tab: next });
   const today = dateInputValue(new Date());
   const start = new Date();
   start.setDate(start.getDate() - 6);
@@ -12554,6 +12630,32 @@ function AccessCenter({
   const [projectQuery, setProjectQuery] = useState("");
   const [formError, setFormError] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  /* The company's departments, read from the Engineering Management chart —
+     the same source the structure page edits, so the two can never drift
+     apart. When no chart has been saved yet this falls back to the departments
+     implied by the staff list, which is what the rest of the app already does.
+
+     Typing this field free-hand is what produced "Structural", "structural"
+     and "Struct." as three separate departments, and a report that counted
+     them as three. */
+  const orgDepartments = useMemo(
+    () => effectiveOrg(users).departments.map((row) => String(row.name || "").trim()).filter(Boolean),
+    [users],
+  );
+  /* A value already on somebody's record stays in the list even when it is not
+     in the chart. Dropping it would mean opening an account to change a phone
+     number and silently clearing their department on save. */
+  const departmentChoices = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    [...orgDepartments, String(draft?.department || "").trim()].forEach((name) => {
+      const key = name.toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      list.push(name);
+    });
+    return list.sort((left, right) => left.localeCompare(right));
+  }, [orgDepartments, draft?.department]);
   /* Three tabs, one directory each: requests waiting on a decision,
      existing email-based staff, and admin-managed Viewer accounts. Viewer
      accounts are never in `users` — they live in Supabase's viewer_accounts
@@ -13004,7 +13106,18 @@ function AccessCenter({
                   <p className="org-note">Password and PIN are never shown or set here — {draft.name || "this person"} chooses and changes their own from My Settings, or resets it themselves by email if forgotten.</p>
                 )}
                 <label>Job Role<input value={draft.role || ""} onChange={(event) => updateDraft("role", event.target.value)} placeholder="Accountant, Engineer, HR…" /></label>
-                <label>Department<input value={draft.department || ""} onChange={(event) => updateDraft("department", event.target.value)} /></label>
+                <label>
+                  Department
+                  <select value={draft.department || ""} onChange={(event) => updateDraft("department", event.target.value)}>
+                    <option value="">No department selected</option>
+                    {departmentChoices.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                  {orgDepartments.length
+                    ? <small>From the Engineering Management structure.</small>
+                    : <small>No departments defined yet — add them in Engineering Management, under Structure.</small>}
+                </label>
                 <label>
                   Reports To
                   <select value={draft.manager || ""} onChange={(event) => updateDraft("manager", event.target.value)}>
@@ -15402,8 +15515,8 @@ function MyPoints({
   };
 
   /* Which week this entry lands in, and whether it is closed. Both follow the
-     work date, so changing the date changes the answer -- that is the whole
-     point of asking for a date rather than assuming today. */
+     completion date, so changing the date changes the answer -- that is the
+     whole point of asking for a date rather than assuming today. */
   const week = weekOfDate(draft.workDate || today);
   const lock = weekLockFor(store, week);
   const locked = Boolean(lock);
@@ -15459,10 +15572,17 @@ function MyPoints({
           <span className={locked ? "kept locked" : "kept"}>{locked ? `Week ${week} closed` : `Week ${week}`}</span>
         </div>
         <div className="points-fields">
-          {/* Points belong to the day the work happened. Defaulting to today keeps
-              the common case one field shorter, while still letting somebody log
-              Friday's work on Monday -- into Friday's week, not Monday's. */}
-          <label>Work Date<input required type="date" max={today} value={draft.workDate} onChange={(event) => update("workDate", event.target.value)} /></label>
+          {/* The day the work was FINISHED, not the day it was started and not
+              the day it is being typed. A job spread across three days is one
+              entry, and it counts in the week it was completed. Defaulting to
+              today keeps the common case one field shorter, while still letting
+              somebody log Friday's finished work on Monday -- into Friday's
+              week, not Monday's.
+
+              Kept under workDate, the key it has always used. Every entry on
+              record, every week lock and every report reads that key; renaming
+              it would orphan all of them. What changed is what we ask for. */}
+          <label>Completion Date<input required type="date" max={today} value={draft.workDate} onChange={(event) => update("workDate", event.target.value)} /></label>
           {/* The job number identifies the work now that the project name is
               gone, so it carries the requirement the project name used to. */}
           <label>Job Number<input required value={draft.jobNumber} onChange={(event) => update("jobNumber", event.target.value)} placeholder="Example: 26-104" /></label>
@@ -15499,8 +15619,13 @@ function MyPoints({
           {draft.workCategory === "Review" && (
             <label>Hours Spent<input required type="number" min="0.25" step="0.25" inputMode="decimal" value={draft.hoursSpent} onChange={(event) => update("hoursSpent", event.target.value)} placeholder="e.g. 3.5" /></label>
           )}
-          <label>Assigned Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.assignedPoints} onChange={(event) => update("assignedPoints", event.target.value)} placeholder="0" /></label>
+          {/* Total first, then Assigned. The total is the figure somebody
+              actually knows when they sit down to log the work; the assigned
+              figure is what it was estimated at, and is optional. Asking for
+              the estimate first made people stop and go looking for it before
+              they could record what they had done. */}
           <label>Total Points<input required type="number" min="0.5" step="0.5" inputMode="decimal" value={draft.submittedPoints} onChange={(event) => update("submittedPoints", event.target.value)} placeholder="0" /></label>
+          <label>Assigned Points<input type="number" min="0" step="0.5" inputMode="decimal" value={draft.assignedPoints} onChange={(event) => update("assignedPoints", event.target.value)} placeholder="0" /></label>
           <label className="wide">Notes<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Add a short description of the completed work." /></label>
           {/* Asked for only on a closed week. This is the one thing the approver
               cannot read off the entry itself: why it missed the week. */}

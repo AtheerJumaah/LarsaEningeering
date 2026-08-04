@@ -647,15 +647,20 @@ aside.sidebar .nav-item.active small { color: #ffffff !important; }
   --field-border: #333a47;
   --focus-ring: #7ea8f7;
 
-  --info: #8ab4f8;      --info-soft: #16233a;
-  --success: #5fd39b;   --success-soft: #12301f;
-  --warning: #f0b357;   --warning-soft: #33260f;
-  --danger: #f28b82;    --danger-soft: #3a1a1a;
+  /* The inks were already light. The soft fills were not: a near-black maroon
+     behind light red text is a dark box, not a red one, and six of those in a
+     row are what made this screen look grubby. Each fill is now its own ink at
+     low alpha, which reads as a tint of the colour on any surface it lands on
+     and can never drift away from the ink it belongs to. */
+  --info: #8ab4f8;      --info-soft: rgba(138, 180, 248, .15);
+  --success: #5fd39b;   --success-soft: rgba(95, 211, 155, .15);
+  --warning: #f0b357;   --warning-soft: rgba(240, 179, 87, .15);
+  --danger: #f28b82;    --danger-soft: rgba(242, 139, 130, .15);
 
-  --st-pending: #f0b357;   --st-pending-soft: #33260f;
-  --st-approved: #5fd39b;  --st-approved-soft: #12301f;
-  --st-rejected: #f28b82;  --st-rejected-soft: #3a1a1a;
-  --st-draft: #a8b0bd;     --st-draft-soft: #1f242d;
+  --st-pending: #f0b357;   --st-pending-soft: rgba(240, 179, 87, .15);
+  --st-approved: #5fd39b;  --st-approved-soft: rgba(95, 211, 155, .15);
+  --st-rejected: #f28b82;  --st-rejected-soft: rgba(242, 139, 130, .15);
+  --st-draft: #a8b0bd;     --st-draft-soft: rgba(168, 176, 189, .15);
 }
 
 /* --- 2. The six work-area cards ------------------------------------------
@@ -693,22 +698,39 @@ aside.sidebar .nav-item.active small { color: #ffffff !important; }
 .module-bubble:hover > .grip-dots,
 .module-bubble:focus-within > .grip-dots { opacity: .55; }
 
-/* Night mode: the same six colours, adapted rather than removed. The pale
-   pastels were printing as bright discs on near-black; these are the same
-   hues at night-appropriate depth, with legible OPEN labels. */
-.unified-app.dark .module-bubble.green  { --bubble-soft: #14361f; --bubble-ink: #6fdca6; }
-.unified-app.dark .module-bubble.violet { --bubble-soft: #241f47; --bubble-ink: #b9a7fb; }
-.unified-app.dark .module-bubble.rose   { --bubble-soft: #3d1b28; --bubble-ink: #f9a3b6; }
-.unified-app.dark .module-bubble.amber  { --bubble-soft: #3a2712; --bubble-ink: #f3bd6b; }
-.unified-app.dark .module-bubble.blue   { --bubble-soft: #16294a; --bubble-ink: #8fb6fb; }
-.unified-app.dark .module-bubble.slate  { --bubble-soft: #242a34; --bubble-ink: #b9c2d1; }
-.unified-app.dark .module-bubble.green  .module-blob { background: #1c4a2c; }
-.unified-app.dark .module-bubble.violet .module-blob { background: #2f2860; }
-.unified-app.dark .module-bubble.rose   .module-blob { background: #522435; }
-.unified-app.dark .module-bubble.amber  .module-blob { background: #4d341a; }
-.unified-app.dark .module-bubble.blue   .module-blob { background: #1d3763; }
-.unified-app.dark .module-bubble.slate  .module-blob { background: #2f3644; }
-.unified-app.dark .module-blob { opacity: .55; }
+/* Night mode: the same six hues, LIT rather than darkened.
+
+   Darkening them was the mistake. A dark green disc on a near-black card is
+   not a green card, it is a smudge -- and six smudges in a grid read as dirt
+   on the screen rather than as six colours. Colour on black has to come from
+   light: a pale ink, and every fill made of that same ink at low alpha, so it
+   glows out of the surface instead of sinking into it.
+
+   The six inks sit at the same lightness as each other so no card shouts over
+   its neighbours, and every one of them clears 7:1 against the night surface,
+   which is what makes the OPEN labels readable rather than merely visible.
+   Each fill is written from its own ink so a tone can never half-change. */
+.unified-app.dark .module-bubble.green  { --bubble-ink: #6ee7b7; --bubble-soft: rgba(110, 231, 183, .18); }
+.unified-app.dark .module-bubble.violet { --bubble-ink: #c4b5fd; --bubble-soft: rgba(196, 181, 253, .18); }
+.unified-app.dark .module-bubble.rose   { --bubble-ink: #fda4af; --bubble-soft: rgba(253, 164, 175, .18); }
+.unified-app.dark .module-bubble.amber  { --bubble-ink: #fcd34d; --bubble-soft: rgba(252, 211, 77, .18); }
+.unified-app.dark .module-bubble.blue   { --bubble-ink: #93c5fd; --bubble-soft: rgba(147, 197, 253, .18); }
+.unified-app.dark .module-bubble.slate  { --bubble-ink: #cbd5e1; --bubble-soft: rgba(203, 213, 225, .18); }
+/* The corner wash. Alpha here multiplies with the .5 below, landing at about
+   14% -- present enough to tint the corner, faint enough that the heading
+   stays the loudest thing on the card. */
+.unified-app.dark .module-bubble.green  .module-blob { background: rgba(110, 231, 183, .28); }
+.unified-app.dark .module-bubble.violet .module-blob { background: rgba(196, 181, 253, .28); }
+.unified-app.dark .module-bubble.rose   .module-blob { background: rgba(253, 164, 175, .28); }
+.unified-app.dark .module-bubble.amber  .module-blob { background: rgba(252, 211, 77, .28); }
+.unified-app.dark .module-bubble.blue   .module-blob { background: rgba(147, 197, 253, .28); }
+.unified-app.dark .module-bubble.slate  .module-blob { background: rgba(203, 213, 225, .28); }
+.unified-app.dark .module-blob { opacity: .5; }
+
+/* The overview tiles are fixed where they are defined, in globals.css, rather
+   than overridden from here -- this file is emitted BEFORE globals in the
+   bundle, so an equal-specificity rule written here quietly loses. Worth
+   knowing before adding another one. */
 /* Cards were sinking into the page at night; a slightly raised surface and a
    readable edge separate them without adding a hard border. */
 .unified-app.dark .module-bubble {
@@ -1391,12 +1413,15 @@ aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
 .pay-status.is-partial  { background: #ffedd5; border-color: #f0b978; color: #7c2d12; }
 .pay-status.is-rejected { background: #fee2e2; border-color: #f0a3a3; color: #7f1d1d; }
 .pay-status.is-draft    { background: var(--soft); border-color: var(--line); color: var(--text-2, var(--muted)); }
-.unified-app.dark .pay-status.is-paid     { background: #12351f; border-color: #2c6b42; color: #86efac; }
-.unified-app.dark .pay-status.is-approved { background: #16294a; border-color: #2f5490; color: #a8c8ff; }
-.unified-app.dark .pay-status.is-pending  { background: #3a2712; border-color: #7a5720; color: #f6ce85; }
-.unified-app.dark .pay-status.is-partial  { background: #3d2413; border-color: #86501f; color: #f9bd88; }
-.unified-app.dark .pay-status.is-rejected { background: #3d1b1b; border-color: #7f3535; color: #fca5a5; }
-.unified-app.dark .pay-status.is-draft    { background: #232833; border-color: #333a46; color: #aab2c0; }
+/* Same principle as the cards above: the fill is the label's own colour at low
+   alpha, so a paid pill is a pale green pill rather than a dark green box that
+   happens to have green text in it. */
+.unified-app.dark .pay-status.is-paid     { background: rgba(134, 239, 172, .16); border-color: rgba(134, 239, 172, .45); color: #86efac; }
+.unified-app.dark .pay-status.is-approved { background: rgba(168, 200, 255, .16); border-color: rgba(168, 200, 255, .45); color: #a8c8ff; }
+.unified-app.dark .pay-status.is-pending  { background: rgba(246, 206, 133, .16); border-color: rgba(246, 206, 133, .45); color: #f6ce85; }
+.unified-app.dark .pay-status.is-partial  { background: rgba(249, 189, 136, .16); border-color: rgba(249, 189, 136, .45); color: #f9bd88; }
+.unified-app.dark .pay-status.is-rejected { background: rgba(252, 165, 165, .16); border-color: rgba(252, 165, 165, .45); color: #fca5a5; }
+.unified-app.dark .pay-status.is-draft    { background: rgba(170, 178, 192, .16); border-color: rgba(170, 178, 192, .40); color: #aab2c0; }
 
 .pay-note { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-tile); background: var(--soft); color: var(--text-2, var(--muted)); font-size: 13px; font-weight: 650; }
 .pay-note.soft { background: transparent; }

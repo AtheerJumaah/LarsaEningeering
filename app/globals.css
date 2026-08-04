@@ -1549,6 +1549,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .reminder-row em { display: block; margin-top: 5px; font-style: normal; font-size: 10px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reminder-row.due em { color: #b4341f; }
+/* Light-mode red on a near-black row is barely a colour. */
+.unified-app.dark .reminder-row.due em { color: #f28b82; }
 .reminder-row > svg { flex: none; margin-top: 3px; color: #98a2b3; }
 
 /* dark theme */
@@ -1832,6 +1834,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .dev-card small { font-size: 11.5px; font-weight: 650; color: #6b7280; }
 .dev-card em { font-style: normal; font-size: 10.5px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; color: #7a8190; }
 .dev-card em.due { color: #b4341f; }
+.unified-app.dark .dev-card em.due { color: #f28b82; }
 .dev-meter { width: 100%; height: 6px; border-radius: 999px; background: #eceef2; overflow: hidden; }
 .dev-meter span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
 .unified-app.dark .dev-meter { background: #272b33; }
@@ -1964,10 +1967,17 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .role-card > svg { position: absolute; top: 15px; inset-inline-end: 15px; color: #b3b8c2; }
 .role-card.due { border-color: #f0c9c1; background: #fdf6f4; }
 .role-card.due em { color: #b4341f; }
-.unified-app.dark .role-card.due { background: #241714; border-color: #4a2820; }
 .role-card.good { border-color: #c6e6d4; background: #f6fcf9; }
 .role-card.good em { color: #0f6b3c; }
-.unified-app.dark .role-card.good { background: #12211a; border-color: #24422f; }
+/* At night these were dark boxes with the LIGHT-mode red and green still on
+   the caption -- so "Below the 5 person minimum", the one line on the tile
+   that has to be read at a glance, was the hardest thing on it to read. The
+   fill is now the caption's own colour at low alpha: a red tile rather than a
+   near-black one that happens to contain red text. */
+.unified-app.dark .role-card.due  { background: rgba(242, 139, 130, .13); border-color: rgba(242, 139, 130, .36); }
+.unified-app.dark .role-card.due em  { color: #f28b82; }
+.unified-app.dark .role-card.good { background: rgba(95, 211, 155, .13); border-color: rgba(95, 211, 155, .34); }
+.unified-app.dark .role-card.good em { color: #5fd39b; }
 
 /* schedule summary strip */
 .schedule-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
