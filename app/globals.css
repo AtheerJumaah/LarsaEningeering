@@ -568,7 +568,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 11px;
   font-weight: 800;
 }
-.dark .preview-mode { border-color: #5b21b6; background: #26164b; color: #ddd6fe; }
+.dark .preview-mode { border-color: rgba(196, 181, 253, .4); background: rgba(196, 181, 253, .14); color: #ddd6fe; }
 .preview-mode span { white-space: nowrap; }
 .preview-mode button { min-height: 30px; padding: 6px 9px; border: 0; border-radius: 9px; background: #6d28d9; color: #fff; font-size: 10px; font-weight: 900; }
 
@@ -2689,7 +2689,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .break-banner { border-color: #2f343d; background: #191c22; }
 .dark .break-banner span { color: #b1b7c2; }
 .dark .break-banner button { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
-.dark .break-banner.on { background: #2a1f12; border-color: #5c3d1a; }
+.dark .break-banner.on { background: rgba(252, 211, 77, .14); border-color: rgba(252, 211, 77, .4); }
 .dark .break-banner.on span { color: #fdba74; }
 
 /* The footnote under the trim panel. It used to borrow the clock-others
@@ -2793,7 +2793,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .session-edit button { border-color: #2f343d; background: #191c22; color: #b1b7c2; }
 .dark .session-edit button:hover { border-color: #f3f4f6; color: #f3f4f6; }
 .dark .session-edit button.primary { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
-.dark .session-edit button.danger { border-color: #5c2020; background: #2a1414; color: #fca5a5; }
+.dark .session-edit button.danger { border-color: rgba(242, 139, 130, .4); background: rgba(242, 139, 130, .14); color: #fca5a5; }
 
 /* Verification gate shown before a password, PIN, or email change lands. */
 .guard-box { width: 100%; margin-top: 12px; padding: 14px 16px; border: 1px solid #dfe2e8; border-radius: 14px; background: #f9fafb; }
@@ -2830,13 +2830,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
    light colours and went invisible in the dark theme. */
 .filter-summary { display: inline-flex; align-items: center; gap: 6px; }
 .filter-summary.locked { background: #fee2e2; color: #991b1b; }
-.dark .filter-summary.locked { background: #3a1c1c; color: #fca5a5; }
+.dark .filter-summary.locked { background: rgba(242, 139, 130, .15); color: #fca5a5; }
 .kept.locked { background: #fee2e2; color: #991b1b; }
-.dark .kept.locked { background: #3a1c1c; color: #fca5a5; }
+.dark .kept.locked { background: rgba(242, 139, 130, .15); color: #fca5a5; }
 
 .week-lock { padding: 22px 24px; border: 1px solid var(--line); border-radius: 24px; background: var(--panel); margin-bottom: 18px; }
 .week-lock.closed { border-color: #f0b4b4; background: linear-gradient(180deg, rgba(254,226,226,.55), var(--panel) 60%); }
-.dark .week-lock.closed { border-color: #5c2b2b; background: linear-gradient(180deg, rgba(90,32,32,.35), var(--panel) 60%); }
+.dark .week-lock.closed { border-color: rgba(242, 139, 130, .42); background: linear-gradient(180deg, rgba(242,139,130,.14), var(--panel) 60%); }
 .week-lock-note { margin: 10px 0 0; font-size: 13px; font-weight: 600; line-height: 1.55; color: var(--muted); }
 .week-lock-note.quoted { margin-top: 6px; font-style: italic; color: var(--ink); }
 .week-lock-field { display: grid; gap: 7px; margin-top: 16px; color: var(--muted); font-size: 10px; font-weight: 950; text-transform: uppercase; letter-spacing: .075em; }
@@ -2860,9 +2860,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* The employee's side. Explains the lock, then offers the one way through it. */
 .lock-banner { padding: 20px 22px; border: 1px solid #f0b4b4; border-radius: 24px;
   background: linear-gradient(180deg, rgba(254,226,226,.55), var(--panel) 60%); margin-bottom: 18px; }
-.dark .lock-banner { border-color: #5c2b2b; background: linear-gradient(180deg, rgba(90,32,32,.35), var(--panel) 60%); }
+.dark .lock-banner { border-color: rgba(242, 139, 130, .42); background: linear-gradient(180deg, rgba(242,139,130,.14), var(--panel) 60%); }
 .lock-banner.open { border-color: #a7d8b4; background: linear-gradient(180deg, rgba(220,252,231,.6), var(--panel) 60%); }
-.dark .lock-banner.open { border-color: #2b5c3a; background: linear-gradient(180deg, rgba(32,90,50,.32), var(--panel) 60%); }
+.dark .lock-banner.open { border-color: rgba(95, 211, 155, .42); background: linear-gradient(180deg, rgba(95,211,155,.13), var(--panel) 60%); }
 .lock-banner-head { display: flex; align-items: flex-start; gap: 12px; }
 .lock-banner-head svg { flex: none; margin-top: 2px; color: var(--ink); }
 .lock-banner-head div { display: grid; gap: 3px; min-width: 0; }
@@ -3057,7 +3057,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .install-callout.ok { border-color: #a7dcc0; background: #f0fdf4; }
 .install-callout.ok, .install-callout.ok p { color: #14532d; font-weight: 750; }
-.unified-app.dark .install-callout { border-color: #6b4a1c; background: #241c10; }
+.unified-app.dark .install-callout { border-color: rgba(252, 211, 77, .38); background: rgba(252, 211, 77, .13); }
 .unified-app.dark .install-callout b, .unified-app.dark .install-callout p { color: #f5d9a8; }
 
 
@@ -3836,3 +3836,75 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .viewer-portal-body { grid-template-columns: 1fr; }
   .viewer-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ==========================================================================
+   NIGHT COLOUR — one rule, applied everywhere
+   ==========================================================================
+
+   The complaint, twice, with a screenshot: dark colours on black do not work.
+   It was right, and one wrong instinct produced every instance of it — that to
+   make a colour work on a dark screen you darken it. A dark maroon pill or a
+   dark yellow icon on a near-black card is not a red pill or a yellow icon,
+   it is a smudge. Colour on black has to come from light.
+
+   So: at night every coloured fill is its own ink at low alpha, and every ink
+   is light. Neutral chrome — panels, fields, the page itself — stays dark on
+   purpose; those are surfaces, not colours. Daylight is untouched throughout.
+
+   This block lives at the end of globals.css deliberately. visual-pass.css is
+   emitted BEFORE globals in the bundle, so an equal-specificity rule written
+   there loses; anything written here wins by source order without needing a
+   specificity trick to do it.
+
+   The six inks are the same ones the work-area cards use, so a green chip and
+   a green card are the same green.
+     green #6ee7b7   violet #c4b5fd   rose #fda4af
+     amber #fcd34d   blue   #93c5fd   slate #cbd5e1
+   -------------------------------------------------------------------------- */
+
+/* --- work modes: office, online, site, other ----------------------------- */
+.unified-app.dark {
+  --mode-office-soft: rgba(110, 231, 183, .15);
+  --mode-online-soft: rgba(147, 197, 253, .15);
+  --mode-site-soft:   rgba(203, 213, 225, .14);
+  --mode-other-soft:  rgba(168, 176, 189, .12);
+}
+.unified-app.dark :is(.mode-chip, .shift-chip, .access-pill.live).tone-office { color: #6ee7b7; }
+.unified-app.dark :is(.mode-chip, .shift-chip, .access-pill.live).tone-site   { color: #cbd5e1; }
+.unified-app.dark .mode-chip.tone-other { color: #aab2c0; }
+
+/* --- the clock portals -------------------------------------------------
+   These were the worst of it. Each orb kept its light-mode ink at night, so
+   the amber one was a dark yellow icon and the rose one a dark maroon icon —
+   the two the owner named. */
+.unified-app.dark .clock-portals .portal-green  .module-orb { background: rgba(110, 231, 183, .15); color: #6ee7b7; }
+.unified-app.dark .clock-portals .portal-violet .module-orb { background: rgba(196, 181, 253, .15); color: #c4b5fd; }
+.unified-app.dark .clock-portals .portal-rose   .module-orb { background: rgba(253, 164, 175, .15); color: #fda4af; }
+.unified-app.dark .clock-portals .portal-amber  .module-orb { background: rgba(252, 211, 77, .15);  color: #fcd34d; }
+
+/* --- small status pills -------------------------------------------------
+   .kept is the "Week 31" chip beside the points form; .black-badge.due is the
+   count badge that turns red when something is overdue. A black badge on a
+   near-black page is also invisible, so it gets a surface of its own.
+
+   The lock banners, the break banner, the preview strip and the install
+   callout are fixed where they are defined, further up this file, rather than
+   overridden from down here. A rule that is dead the moment it is written is
+   worse than no rule. */
+.unified-app.dark .kept { background: rgba(110, 231, 183, .15); color: #6ee7b7; }
+.unified-app.dark .kept.locked { background: rgba(242, 139, 130, .15); color: #f28b82; }
+.unified-app.dark .black-badge { background: rgba(203, 213, 225, .16); color: #e9ecf1; }
+.unified-app.dark .black-badge.due { background: rgba(242, 139, 130, .2); border-color: rgba(242, 139, 130, .5); color: #f28b82; }
+
+/* --- "this row is you" and "this message is mine" -----------------------
+   Faint on purpose. These mark a row rather than announce it, so the tint is
+   half the strength of a status pill. */
+.unified-app.dark .schedule-table tr.is-me td { background: rgba(147, 197, 253, .09); }
+.unified-app.dark .presence-row.is-me { background: rgba(147, 197, 253, .09); }
+.unified-app.dark .inbox-row.unread { background: rgba(147, 197, 253, .09); }
+.unified-app.dark .room-msg.own { background: rgba(147, 197, 253, .11); border-color: rgba(147, 197, 253, .3); }
+.unified-app.dark .room-reaction.mine { background: rgba(147, 197, 253, .14); }
+/* The initials disc on "Adding points for". A pale violet tile with a dark
+   violet monogram is fine on white and is the same smudge as everything else
+   on black. */
+.unified-app.dark .identity-chip > span { background: rgba(196, 181, 253, .16); color: #c4b5fd; }
