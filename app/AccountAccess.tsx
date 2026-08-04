@@ -58,11 +58,15 @@ const STORE_KEY = "larsaStaffV8";
    already use outside addresses, so this cannot simply reject them. */
 const COMPANY_DOMAINS = ["larsaeng.com", "larsaengineering.com"];
 
-/* What a brand-new account can do until someone grants it more: sign in, clock
-   in and out, and see its own performance points. Viewer is the narrowest of
-   the access levels already in use, and a project mode of "none" means no
-   project data at all. */
-const NEW_ACCOUNT_ACCESS = "Viewer";
+/* What a brand-new self-registered account can do until an admin grants it
+   more: sign in, clock in and out, submit performance, see its own points.
+   This is the default *requested* role for every public sign-up — the
+   person can never choose a different one here, and an admin can still
+   change it afterward. It is deliberately never "Viewer": Viewer is a
+   distinct, admin-only, username+password client account with no self-
+   registration path at all (see the Viewer Accounts tab in Users & Access),
+   so it must never be reachable from this public form. */
+const NEW_ACCOUNT_ACCESS = "Engineer";
 
 function readStore(): { users: AccessUser[] } & Record<string, unknown> {
   try {

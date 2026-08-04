@@ -486,6 +486,23 @@ const NOTIFY_STORE_KEY = "larsaNotificationsV1";
 // it stays encrypted behind the device lock instead of sitting in plain text.
 const KEEP_SESSION_KEY = "larsa-control-session-keep";
 const REMEMBER_EMAIL_KEY = "larsa-control-remember-email";
+// A Viewer is never a StaffUser and never touches larsaStaffV8 — this is a
+// separate session, for a separate kind of account, stored under its own
+// key. It holds no secret: the real credential is the live Supabase Auth
+// session (a cookie-less bearer token Supabase's own client keeps track of);
+// this is only the display shell rebuilt from viewer_accounts on reload.
+const VIEWER_SESSION_KEY = "larsa-viewer-session";
+// Must match VIEWER_DOMAIN in supabase/functions/viewer-admin/index.ts — a
+// domain nobody can receive mail at, used only so Supabase Auth's own
+// email+password mechanism can back a username+password sign-in.
+const VIEWER_EMAIL_DOMAIN = "viewer.larsaeng.internal";
+type ViewerSession = {
+  id: string;
+  username: string;
+  displayName: string;
+  projectAccessMode: "all" | "assigned" | "none";
+  allowedProjectIds: string[];
+};
 const PROJECT_CHAT_KEY = "larsaProjectRoomsV1";
 // Notifications start enabled. Delivery still respects every channel switch:
 // when a person clears all three boxes for an event, nothing is sent.
@@ -1700,7 +1717,9 @@ const SHIFT_CODES: Record<string, { label: string; time: string; tone: "office" 
   M: { label: "Morning", time: "09:00 – 15:00", tone: "office" },
   MID: { label: "Mid", time: "12:00 – 18:00", tone: "office" },
   E: { label: "Evening", time: "14:30 – 20:00", tone: "office" },
-  MON: { label: "Monday meeting", time: "16:00", tone: "office" },
+  /* The default hours only. The day and the time are both chosen in Auto
+     Build, which writes the choice back here so the legend agrees. */
+  MON: { label: "Team meeting", time: "16:00 – 18:00", tone: "office" },
   USA: { label: "USA online", time: "16:00 – 00:00", tone: "online" },
   WFH: { label: "From home", time: "Flexible", tone: "online" },
   SITE: { label: "Site / execution", time: "Field", tone: "site" },
@@ -1724,7 +1743,7 @@ const SHIFT_TINTS: Record<string, string> = {
   M: "#3cb873",    // morning, 09:00 — lightest
   MID: "#159b56",  // midday, 12:00 — the existing office green
   E: "#14804a",    // evening, 14:30 — deeper
-  MON: "#0b5a34",  // Monday meeting, 16:00 — latest, so darkest
+  MON: "#0b5a34",  // Team meeting, latest by default, so darkest
 };
 type ShiftMeta = { label: string; time: string; tone: "office" | "online" | "site" | "other" };
 type ShiftType = ShiftMeta & { code: string; start: string; end: string; custom?: boolean };
@@ -1865,7 +1884,17 @@ type BuildSettings = {
   officeHoursTarget: number;
   onlineHoursTarget: number;
   respectConstraints: boolean;
-  mondayMeeting: boolean;
+  /* Which day of OFFICE_WEEK gets the mandatory team meeting, or "" for
+     none. Used to default to Monday specifically; kept as a day-of-week
+     choice so any office day works, not just Monday. */
+  teamMeetingDay: string;
+  /* The hours that meeting runs. Empty means "leave whatever the office
+     already runs alone" — the MON shift's own hours in the catalogue, which
+     start at the built-in 16:00–18:00. Set them here and Auto Build writes
+     them back to the catalogue, so the roster, the legend, and the palette
+     chip all quote the same time instead of drifting apart. */
+  teamMeetingStart: string;
+  teamMeetingEnd: string;
 };
 const DEFAULT_BUILD: BuildSettings = {
   officeDaysPerPerson: 3,
@@ -1874,7 +1903,9 @@ const DEFAULT_BUILD: BuildSettings = {
   officeHoursTarget: 18,
   onlineHoursTarget: 6,
   respectConstraints: true,
-  mondayMeeting: true,
+  teamMeetingDay: "Monday",
+  teamMeetingStart: "",
+  teamMeetingEnd: "",
 };
 
 type RoleCard = {
@@ -5113,6 +5144,96 @@ export default function Home() {
     notify("Access preview closed.");
   };
 
+  const [viewerSession, setViewerSession] = useState<ViewerSession | null>(null);
+  const viewerSessionRef = useRef<ViewerSession | null>(null);
+
+  const completeViewerSignIn = useCallback((session: ViewerSession) => {
+    viewerSessionRef.current = session;
+    setViewerSession(session);
+    try { sessionStorage.setItem(VIEWER_SESSION_KEY, JSON.stringify(session)); } catch { /* a refused write must never block sign-in */ }
+    setLoginError("");
+  }, []);
+
+  const viewerSignOut = useCallback(async () => {
+    const client = getSupabaseClient();
+    if (client) { try { await client.auth.signOut(); } catch { /* the local session is cleared either way */ } }
+    try { sessionStorage.removeItem(VIEWER_SESSION_KEY); } catch { /* nothing to clear */ }
+    viewerSessionRef.current = null;
+    setViewerSession(null);
+  }, []);
+
+  // Rebuilds a Viewer's shell from their live viewer_accounts row, never from
+  // the cached snapshot alone — an admin who disables or rescopes a Viewer
+  // between visits must take effect on the very next load, not the next
+  // password change. A stale or now-invalid Supabase session (expired,
+  // deleted, disabled) always ends in a clean sign-out, never a stuck screen.
+  useEffect(() => {
+    let cancelled = false;
+    const raw = (() => { try { return sessionStorage.getItem(VIEWER_SESSION_KEY); } catch { return null; } })();
+    if (!raw) return;
+    let cached: ViewerSession | null = null;
+    try { cached = JSON.parse(raw) as ViewerSession; } catch { cached = null; }
+    if (!cached?.id) { try { sessionStorage.removeItem(VIEWER_SESSION_KEY); } catch { /* nothing to clear */ } return; }
+    const client = getSupabaseClient();
+    if (!client) return;
+    client.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      const authUserId = data.session?.user?.id;
+      if (!authUserId) { try { sessionStorage.removeItem(VIEWER_SESSION_KEY); } catch { /* nothing to clear */ } return; }
+      client
+        .from("viewer_accounts")
+        .select("id, username, display_name, project_access_mode, allowed_project_ids, enabled, expires_at")
+        .eq("auth_user_id", authUserId)
+        .maybeSingle()
+        .then(({ data: row }) => {
+          if (cancelled) return;
+          const expired = Boolean(row?.expires_at) && new Date(row!.expires_at as string).getTime() < Date.now();
+          if (!row || row.enabled === false || expired) {
+            void client.auth.signOut();
+            try { sessionStorage.removeItem(VIEWER_SESSION_KEY); } catch { /* nothing to clear */ }
+            return;
+          }
+          const restored: ViewerSession = {
+            id: row.id, username: row.username, displayName: row.display_name,
+            projectAccessMode: ((row.project_access_mode as string) || "assigned") as "all" | "assigned" | "none",
+            allowedProjectIds: Array.isArray(row.allowed_project_ids) ? row.allowed_project_ids as string[] : [],
+          };
+          viewerSessionRef.current = restored;
+          setViewerSession(restored);
+        });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Tried only after the employee lookup below has already failed: Viewer
+  // usernames live in their own table, never in larsaStaffV8, so this never
+  // changes which employee a matching email+password signs in as.
+  const tryViewerSignIn = async (candidateUsername: string, candidatePassword: string): Promise<"signed-in" | "disabled" | "no-match"> => {
+    const uname = candidateUsername.trim().toLowerCase();
+    if (!uname || !supabaseConfigured()) return "no-match";
+    const client = getSupabaseClient();
+    if (!client) return "no-match";
+    const { data, error } = await client.auth.signInWithPassword({
+      email: `${uname}@${VIEWER_EMAIL_DOMAIN}`,
+      password: candidatePassword,
+    });
+    if (error || !data.session) return "no-match";
+    const { data: row } = await client
+      .from("viewer_accounts")
+      .select("id, username, display_name, project_access_mode, allowed_project_ids, enabled, expires_at")
+      .eq("auth_user_id", data.session.user.id)
+      .maybeSingle();
+    if (!row) { await client.auth.signOut(); return "no-match"; }
+    const expired = Boolean(row.expires_at) && new Date(row.expires_at as string).getTime() < Date.now();
+    if (row.enabled === false || expired) { await client.auth.signOut(); return "disabled"; }
+    completeViewerSignIn({
+      id: row.id, username: row.username, displayName: row.display_name,
+      projectAccessMode: ((row.project_access_mode as string) || "assigned") as "all" | "assigned" | "none",
+      allowedProjectIds: Array.isArray(row.allowed_project_ids) ? row.allowed_project_ids as string[] : [],
+    });
+    return "signed-in";
+  };
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
@@ -5312,6 +5433,19 @@ export default function Home() {
         && emailMatches(row)
         );
     const credentialOk = user ? (loginMode === "pin" ? true : await verifyPassword(enteredPass, user.password)) : false; if (!user || !credentialOk) {
+      // No employee matched — the same box also accepts a Viewer's
+      // username+password (see tryViewerSignIn), so that is checked before
+      // giving up. Employee usernames and Viewer usernames are separate
+      // namespaces in separate tables, so this never changes which employee
+      // a correct email+password pair signs in as.
+      if (loginMode === "email") {
+        const viewerResult = await tryViewerSignIn(enteredLocal, enteredPass);
+        if (viewerResult === "signed-in") return;
+        if (viewerResult === "disabled") {
+          setLoginError("This account is no longer active. Contact your Larsa Engineering contact.");
+          return;
+        }
+      }
       // Separate the two failures so people stop retyping a correct password
       // against an address that simply has no account.
       const known = loginMode === "email" && users.some((row) => emailMatches(row));
@@ -6119,7 +6253,7 @@ export default function Home() {
           assigned[user.id][day] = keep;
           return;
         }
-        if (settings.mondayMeeting && day === "Monday") {
+        if (settings.teamMeetingDay && day === settings.teamMeetingDay) {
           assigned[user.id][day] = profile === "site" ? "SITE" : "MON";
           perDay[day] += 1; officeDays += 1;
           return;
@@ -6153,6 +6287,31 @@ export default function Home() {
         perDay[day] += 1;
       }
     });
+
+    /* The meeting's hours are chosen alongside its day, so they are saved onto
+       the MON shift itself before the roster is written. Everything downstream
+       — the entries below, the legend, the palette chip, the drag-and-drop
+       assignment — already reads the catalogue, so correcting it in one place
+       keeps them all quoting the same time. Left empty, nothing is touched and
+       whatever the office already runs stands. */
+    const meetingStart = String(settings.teamMeetingStart || "").trim();
+    const meetingEnd = String(settings.teamMeetingEnd || "").trim();
+    if (settings.teamMeetingDay && meetingStart && meetingEnd) {
+      const savedTypes: ShiftType[] = Array.isArray(store[SHIFT_TYPES_KEY]) ? store[SHIFT_TYPES_KEY] : [];
+      const existing = savedTypes.find((row) => String(row?.code || "").toUpperCase() === "MON");
+      store[SHIFT_TYPES_KEY] = [
+        ...savedTypes.filter((row) => String(row?.code || "").toUpperCase() !== "MON"),
+        {
+          ...(existing || {}),
+          code: "MON",
+          label: existing?.label || SHIFT_CODES.MON.label,
+          start: meetingStart,
+          end: meetingEnd,
+          time: `${meetingStart} – ${meetingEnd}`,
+          tone: existing?.tone || SHIFT_CODES.MON.tone,
+        },
+      ];
+    }
 
     staff.forEach((user, userIndex) => {
       store.schedule[user.id] ||= {};
@@ -7508,6 +7667,17 @@ export default function Home() {
     setNavCollapsed(folded);
     try { localStorage.setItem("larsa-control-nav-collapsed", folded ? "1" : "0"); } catch { /* private mode */ }
   };
+
+  // A signed-in Viewer never reaches the staff app shell below — not the
+  // sidebar, not the engines, not any of the StaffUser-shaped state this
+  // component otherwise threads through. It gets its own small, read-only
+  // screen fed only by data it is allowed to see, fetched straight from
+  // Supabase rather than from the shared, everyone-signed-in-can-read
+  // localStorage sync used by the rest of the app.
+  if (viewerSession) {
+    return <ViewerPortal session={viewerSession} onSignOut={viewerSignOut} />;
+  }
+
   return (
     <div className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}>
       <div
@@ -11973,6 +12143,289 @@ function ProjectRoom({
   );
 }
 
+/* An admin-managed, project-scoped, read-only client account. Lives in
+   Supabase's viewer_accounts table with a real Supabase Auth identity —
+   never in the larsaStaffV8 users[] array — so it is a distinct shape,
+   not a StaffUser variant. */
+type ViewerAccountRow = {
+  id: string;
+  auth_user_id: string;
+  username: string;
+  display_name: string;
+  project_access_mode: "all" | "assigned" | "none";
+  allowed_project_ids: string[];
+  enabled: boolean;
+  expires_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_by: string | null;
+  updated_at: string;
+};
+type ViewerDraft = {
+  id: string;
+  username: string;
+  displayName: string;
+  projectAccessMode: "all" | "assigned" | "none";
+  allowedProjectIds: string[];
+  enabled: boolean;
+  expiresAt: string;
+};
+
+/* Fire-and-forget audit entries for the account-lifecycle actions that
+   stay client/localStorage-driven (role changes, permission changes,
+   activate/deactivate, approve/reject). Viewer-account actions are
+   logged server-side by the viewer-admin Edge Function instead. Never
+   includes a password, PIN, or hash. */
+function logAccountEvent(actor: StaffUser | null, action: string, targetId: string, targetLabel: string, details: Record<string, unknown> = {}) {
+  const client = getSupabaseClient();
+  const email = actor?.email?.trim().toLowerCase();
+  if (!client || !email) return;
+  void client.rpc("account_audit_log", {
+    actor: { email, access: actor?.access || "" },
+    p_action: action,
+    p_target_type: "staff_user",
+    p_target_id: targetId,
+    p_target_label: targetLabel,
+    p_details: details,
+  }).then(({ error }: { error: unknown }) => { if (error) console.warn("[audit]", action, error); });
+}
+
+function logAccountChanges(actor: StaffUser | null, previous: StaffUser | undefined, next: StaffUser, isNew: boolean) {
+  if (isNew) {
+    logAccountEvent(actor, "account.created", next.id, next.name, { access: next.access || "" });
+    return;
+  }
+  if (!previous) return;
+  if (previous.pendingApproval && !next.pendingApproval && next.enabled !== false) {
+    logAccountEvent(actor, "account.approved", next.id, next.name, { access: next.access || "" });
+  }
+  if ((previous.access || "") !== (next.access || "")) {
+    logAccountEvent(actor, "account.role_changed", next.id, next.name, { from: previous.access || "", to: next.access || "" });
+  }
+  if ((previous.enabled !== false) !== (next.enabled !== false)) {
+    logAccountEvent(actor, next.enabled === false ? "account.deactivated" : "account.activated", next.id, next.name, {});
+  }
+  const prevGrants = JSON.stringify(previous.permissionProfile?.grants || {});
+  const nextGrants = JSON.stringify(next.permissionProfile?.grants || {});
+  if (prevGrants !== nextGrants) {
+    logAccountEvent(actor, "account.permissions_changed", next.id, next.name, { preset: next.permissionProfile?.preset || "" });
+  }
+}
+
+type ViewerProjectRow = {
+  id: string; code: string; name: string; client: string; region: string;
+  type: string; status: string; contract_value: number | null; currency: string; created_at: string;
+};
+type ViewerProgressRow = { id: string; percent: number | null; update_date: string | null; note: string | null; created_at: string };
+type ViewerSummary = Record<string, unknown> | null;
+
+function fmtIQD(value: unknown): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " IQD" : "—";
+}
+function fmtUSD(value: unknown): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—";
+}
+function fmtPct(value: unknown): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) + "%" : "—";
+}
+
+/* What a Viewer sees after signing in: a fixed, minimal, read-only screen —
+   never the staff app shell. Every fetch here goes straight to Supabase and
+   is scoped by the RESTRICTIVE policies and viewer_project_summary's own
+   check in 20260803_acct_016/018_*.sql; nothing is loaded first and hidden
+   second. If a project is not this Viewer's, the query simply never returns
+   it — there is no client-side filter here doing that job. */
+function ViewerPortal({ session, onSignOut }: { session: ViewerSession; onSignOut: () => void }) {
+  const [projects, setProjects] = useState<ViewerProjectRow[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [summary, setSummary] = useState<ViewerSummary>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [progress, setProgress] = useState<ViewerProgressRow[]>([]);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const client = getSupabaseClient();
+    if (!client) { setProjectsError("This deployment is not connected to Supabase."); setProjectsLoading(false); return; }
+    if (session.projectAccessMode === "none") { setProjectsLoading(false); return; }
+    client
+      .from("acct_projects")
+      .select("id, code, name, client, region, type, status, contract_value, currency, created_at")
+      .order("code", { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        setProjectsLoading(false);
+        if (error) { setProjectsError("Could not load your projects. Try reloading the page."); return; }
+        const rows = (data || []) as ViewerProjectRow[];
+        setProjects(rows);
+        if (rows.length) setSelectedId(rows[0].id);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) { setSummary(null); setProgress([]); return; }
+    let cancelled = false;
+    const client = getSupabaseClient();
+    if (!client) return;
+    setSummaryLoading(true);
+    client.rpc("viewer_project_summary", { p_project_id: selectedId }).then(({ data }) => {
+      if (cancelled) return;
+      setSummaryLoading(false);
+      setSummary((data as ViewerSummary) || null);
+    });
+    client
+      .from("acct_progress_updates")
+      .select("id, percent, update_date, note, created_at")
+      .eq("project_id", selectedId)
+      .order("update_date", { ascending: false })
+      .limit(25)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setProgress((data || []) as ViewerProgressRow[]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedId]);
+
+  const selectedProject = projects.find((row) => row.id === selectedId) || null;
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    await onSignOut();
+  };
+
+  return (
+    <div className="viewer-portal">
+      <header className="viewer-portal-header">
+        <div className="viewer-portal-brand">
+          <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={140} height={54} priority />
+          <div>
+            <span className="eyebrow">Client Access</span>
+            <h1>{session.displayName}</h1>
+          </div>
+        </div>
+        <button type="button" className="btn icon-label" onClick={handleSignOut} disabled={signingOut}>
+          <LogOut size={16} /> {signingOut ? "Signing out…" : "Sign out"}
+        </button>
+      </header>
+
+      <main className="viewer-portal-body">
+        {session.projectAccessMode === "none" ? (
+          <div className="viewer-portal-empty">
+            <FolderLock size={28} />
+            <p>No projects are shared with your account yet. Contact your Larsa Engineering representative if you believe this is a mistake.</p>
+          </div>
+        ) : projectsLoading ? (
+          <div className="viewer-portal-empty"><p>Loading your projects…</p></div>
+        ) : projectsError ? (
+          <div className="viewer-portal-empty"><p>{projectsError}</p></div>
+        ) : !projects.length ? (
+          <div className="viewer-portal-empty">
+            <FolderLock size={28} />
+            <p>No projects are shared with your account yet. Contact your Larsa Engineering representative if you believe this is a mistake.</p>
+          </div>
+        ) : (
+          <>
+            <aside className="viewer-portal-list" aria-label="Your projects">
+              {projects.map((project) => (
+                <button
+                  type="button"
+                  key={project.id}
+                  className={project.id === selectedId ? "viewer-project-row active" : "viewer-project-row"}
+                  onClick={() => setSelectedId(project.id)}
+                >
+                  <b>{project.code || project.name}</b>
+                  <span>{project.name}</span>
+                  <small>{project.status || "Active"}</small>
+                </button>
+              ))}
+            </aside>
+
+            <section className="viewer-portal-detail">
+              {selectedProject && (
+                <>
+                  <div className="viewer-portal-detail-head">
+                    <div>
+                      <span className="eyebrow">{selectedProject.code}</span>
+                      <h2>{selectedProject.name}</h2>
+                      <small>{[selectedProject.region, selectedProject.type].filter(Boolean).join(" · ")}</small>
+                    </div>
+                    <span className="black-badge">{selectedProject.status || "Active"}</span>
+                  </div>
+
+                  {summaryLoading ? (
+                    <p className="viewer-portal-hint">Loading numbers…</p>
+                  ) : !summary ? (
+                    <p className="viewer-portal-hint">Numbers are not available for this project right now.</p>
+                  ) : (
+                    <div className="viewer-summary-grid">
+                      <div className="viewer-summary-card">
+                        <Wallet size={18} />
+                        <span className="eyebrow">Funded</span>
+                        <b>{fmtIQD(summary.gross_funding_iqd)}</b>
+                        <small>{fmtUSD(summary.gross_funding_usd)}</small>
+                      </div>
+                      <div className="viewer-summary-card">
+                        <CircleDollarSign size={18} />
+                        <span className="eyebrow">Spent to date</span>
+                        <b>{fmtIQD(summary.total_used_iqd)}</b>
+                        <small>{fmtUSD(summary.total_used_usd)}</small>
+                      </div>
+                      <div className="viewer-summary-card">
+                        <HardHat size={18} />
+                        <span className="eyebrow">Construction cost</span>
+                        <b>{fmtIQD(summary.actual_construction_cost_iqd)}</b>
+                        <small>Materials {fmtIQD(summary.materials_iqd)} · Labor {fmtIQD(summary.labor_iqd)}</small>
+                      </div>
+                      <div className="viewer-summary-card">
+                        <TrendingUp size={18} />
+                        <span className="eyebrow">Remaining balance</span>
+                        <b>{fmtIQD(summary.approved_remaining_balance_iqd)}</b>
+                      </div>
+                      <div className="viewer-summary-card">
+                        <Gauge size={18} />
+                        <span className="eyebrow">Cost progress</span>
+                        <b>{fmtPct(summary.cost_progress_pct)}</b>
+                      </div>
+                      <div className="viewer-summary-card">
+                        <CalendarDays size={18} />
+                        <span className="eyebrow">Schedule progress</span>
+                        <b>{fmtPct(summary.schedule_progress_pct)}</b>
+                        <small>{String(summary.schedule_progress_date || "")}</small>
+                      </div>
+                    </div>
+                  )}
+
+                  <h3 className="viewer-portal-subhead">Progress updates</h3>
+                  {progress.length ? (
+                    <ul className="viewer-progress-list">
+                      {progress.map((row) => (
+                        <li key={row.id}>
+                          <b>{fmtPct(row.percent)}</b>
+                          <span>{row.update_date || ""}</span>
+                          <small>{row.note || ""}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="viewer-portal-hint">No progress updates have been posted yet.</p>
+                  )}
+                </>
+              )}
+            </section>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
 function AccessCenter({
   users,
   projects,
@@ -12004,6 +12457,37 @@ function AccessCenter({
   const [projectQuery, setProjectQuery] = useState("");
   const [formError, setFormError] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  /* Three tabs, one directory each: requests waiting on a decision,
+     existing email-based staff, and admin-managed Viewer accounts. Viewer
+     accounts are never in `users` — they live in Supabase's viewer_accounts
+     table with a real auth identity, so this tab keeps its own state and
+     talks to the viewer-admin Edge Function rather than saveUser/deleteUser. */
+  const [tab, setTab] = useState<"pending" | "active" | "viewers">("active");
+  const [viewers, setViewers] = useState<ViewerAccountRow[]>([]);
+  const [viewersLoading, setViewersLoading] = useState(false);
+  const [viewersError, setViewersError] = useState("");
+  const [viewerSelectedId, setViewerSelectedId] = useState("");
+  const [viewerDraft, setViewerDraft] = useState<ViewerDraft | null>(null);
+  const [viewerIsNew, setViewerIsNew] = useState(false);
+  const [viewerBusy, setViewerBusy] = useState(false);
+  const [viewerError, setViewerError] = useState("");
+  const [viewerResetting, setViewerResetting] = useState(false);
+  const [viewerNewPassword, setViewerNewPassword] = useState("");
+  const [viewerNewPasswordConfirm, setViewerNewPasswordConfirm] = useState("");
+  const [viewerProjectQuery, setViewerProjectQuery] = useState("");
+
+  const reloadViewers = useCallback(async () => {
+    const client = getSupabaseClient();
+    if (!client) return;
+    setViewersLoading(true);
+    const { data, error } = await client.from("viewer_accounts").select("*").order("created_at", { ascending: false });
+    setViewersLoading(false);
+    if (error) { setViewersError("Could not load Viewer accounts."); return; }
+    setViewersError("");
+    setViewers((data || []) as ViewerAccountRow[]);
+  }, []);
+
+  useEffect(() => { void reloadViewers(); }, [reloadViewers]);
 
   const selectUser = useCallback((user: StaffUser) => {
     setSelectedId(user.id);
@@ -12153,6 +12637,16 @@ function AccessCenter({
        ever applies), and the PIN is optional for them. Everyone else keeps
        the full requirement. */
     const usernameOnly = USERNAME_ONLY_PRESETS.includes(draft.access || "");
+    /* Email-based (non-username-only) accounts are self-registered by the
+       person via Create Account — the account owner chooses their own
+       password, an admin only approves/assigns role and access afterward.
+       A brand-new email-based record has no such registration behind it,
+       so this form no longer originates one; only username-only roles
+       (an admin-managed account with no email) can still be created here. */
+    if (isNew && !usernameOnly) {
+      setFormError("New email-based accounts are created by the person themselves via Create Account. Approve their request from Pending Requests once they've signed up, or choose a username-only role for an account an admin fully manages.");
+      return;
+    }
     if (!draft.name.trim() || !draft.password || (!usernameOnly && (!email || !pin))) {
       setFormError(usernameOnly
         ? "Name and password are required."
@@ -12198,7 +12692,9 @@ function AccessCenter({
       projectIds: protectedAccount ? [] : draft.projectIds || [],
       permissions: staffPermissionsForUser(draft),
     };
+    const previousUser = users.find((user) => user.id === draft.id);
     const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
+      logAccountChanges(currentUser, previousUser, securedUser, isNew);
       if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = window.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
       setIsNew(false);
@@ -12206,7 +12702,31 @@ function AccessCenter({
     }
   };
 
-  const filteredUsers = users.filter((user) =>
+  /* Approve/reject a pending self-registered request. Deliberately not
+     routed through submit(): this never touches password/PIN, and a
+     rejected account is disabled and logged, not deleted — an admin who
+     genuinely wants it gone can still use Delete Account afterward. */
+  const decidePending = async (approve: boolean) => {
+    if (!draft || !canChangeDraft) return;
+    const nextUser: StaffUser = {
+      ...draft,
+      enabled: approve,
+      pendingApproval: false,
+      projectAccessMode: draft.projectAccessMode || projectAccessForPreset(draft.access || "Engineer"),
+      permissions: staffPermissionsForUser(draft),
+    };
+    if (saveUser(nextUser, false)) {
+      logAccountEvent(currentUser, approve ? "account.approved" : "account.rejected", nextUser.id, nextUser.name, { access: nextUser.access || "" });
+      setSelectedId(nextUser.id);
+      setDraft(nextUser);
+      setFormError("");
+    }
+  };
+
+  const pendingUsers = users.filter((user) => user.pendingApproval === true);
+  const activeUsers = users.filter((user) => user.pendingApproval !== true && user.access !== "Client");
+  const tabUsers = tab === "pending" ? pendingUsers : tab === "active" ? activeUsers : [];
+  const filteredUsers = tabUsers.filter((user) =>
     [user.name, user.email, user.department, user.access]
       .some((value) => String(value || "").toLowerCase().includes(query.trim().toLowerCase())),
   );
@@ -12256,17 +12776,31 @@ function AccessCenter({
         <span className="access-pill"><LockKeyhole size={16} /> Detailed custom access</span>
       </section>
 
+      <div className="scope-switch" role="group" aria-label="Users & Access view">
+        <span className="scope-switch-label">View</span>
+        <div className="scope-switch-track">
+          <button type="button" className={tab === "pending" ? "active" : ""} aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>
+            Pending Requests{pendingUsers.length ? ` (${pendingUsers.length})` : ""}
+          </button>
+          <button type="button" className={tab === "active" ? "active" : ""} aria-pressed={tab === "active"} onClick={() => setTab("active")}>Active Users</button>
+          <button type="button" className={tab === "viewers" ? "active" : ""} aria-pressed={tab === "viewers"} onClick={() => setTab("viewers")}>Viewer Accounts</button>
+        </div>
+      </div>
+
+      {tab !== "viewers" && (
       <section className="access-layout">
         <aside className="access-directory">
           <div className="access-directory-head">
-            <div><span className="eyebrow">Directory</span><h3>{users.length} users</h3></div>
-            <button type="button" className="primary icon-label" onClick={startNewUser} disabled={!canCreate}><Plus size={16} /> New User</button>
+            <div><span className="eyebrow">Directory</span><h3>{tabUsers.length} {tab === "pending" ? "pending" : "active"}</h3></div>
+            {tab === "active" && <button type="button" className="primary icon-label" onClick={startNewUser} disabled={!canCreate}><Plus size={16} /> New User</button>}
           </div>
+          {tab === "pending" && <p className="org-note">Username-only roles (Trainee, Intern) are still created directly — use Active Users. New email-based accounts only ever arrive here, from the person&apos;s own Create Account request.</p>}
           <label className="access-search">
             <Search size={16} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search users" />
           </label>
           <div className="access-user-list">
+            {!filteredUsers.length && <div className="empty compact">{tab === "pending" ? "No pending requests." : "No matching users."}</div>}
             {filteredUsers.map((user) => (
               <button
                 type="button"
@@ -12308,26 +12842,43 @@ function AccessCenter({
             </div>
 
             <fieldset className="access-edit-fields" disabled={!canChangeDraft}>
+            {draft.pendingApproval ? (
+              <section className="access-section">
+                <div className="access-section-title">
+                  <div><ShieldCheck size={18} /><span><b>Pending request</b><small>Review the name and email below, then approve or reject — no password or PIN is ever shown here.</small></span></div>
+                </div>
+                <div className="access-fields">
+                  <div className="rowActions">
+                    <button type="button" className="primary icon-label" onClick={() => void decidePending(true)} disabled={!canChangeDraft}>Approve</button>
+                    <button type="button" className="icon-label" onClick={() => void decidePending(false)} disabled={!canChangeDraft}>Reject</button>
+                  </div>
+                </div>
+              </section>
+            ) : null}
             <section className="access-section">
               <div className="access-section-title">
-                <div><KeyRound size={18} /><span><b>Sign-in & identity</b><small>Email + password and Employee PIN</small></span></div>
+                <div><KeyRound size={18} /><span><b>Sign-in & identity</b><small>{USERNAME_ONLY_PRESETS.includes(draft.access || "") ? "Username and password, set by an admin" : "Email address only — the account owner controls their own password and PIN"}</small></span></div>
               </div>
               <div className="access-fields">
                 <label>Full Name<input value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
                 <label>{USERNAME_ONLY_PRESETS.includes(draft.access || "") ? "Email (optional)" : "Work Email"}<input type="email" value={draft.email || ""} onChange={(event) => updateDraft("email", event.target.value)} /></label>
                 {USERNAME_ONLY_PRESETS.includes(draft.access || "") ? (
-                  <p className="org-note">This account signs in with a username and password only — no email or verification codes. Username: <b>{(draft.username?.trim() || draft.email?.split("@")[0]?.trim() || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "user")}</b> (PIN optional).</p>
-                ) : null}
-                <label>
-                  Password
-                  <span className="password-field access-password">
-                    <input type={showSecret ? "text" : "password"} value={isHashed(draft.password) ? "" : (draft.password || "")} onChange={(event) => updateDraft("password", event.target.value)} />
-                    <button type="button" onClick={() => setShowSecret((value) => !value)} aria-label={showSecret ? "Hide password" : "Show password"}>
-                      {showSecret ? <EyeOff size={17} /> : <Eye size={17} />}
-                    </button>
-                  </span>
-                </label>
-                <label>Employee PIN<input inputMode="numeric" value={isHashed(draft.pin) ? "" : (draft.pin || "")} onChange={(event) => updateDraft("pin", event.target.value.replace(/\D/g, ""))} /></label>
+                  <>
+                    <p className="org-note">This account signs in with a username and password only — no email or verification codes. Username: <b>{(draft.username?.trim() || draft.email?.split("@")[0]?.trim() || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "user")}</b> (PIN optional).</p>
+                    <label>
+                      Password
+                      <span className="password-field access-password">
+                        <input type={showSecret ? "text" : "password"} value={isHashed(draft.password) ? "" : (draft.password || "")} onChange={(event) => updateDraft("password", event.target.value)} />
+                        <button type="button" onClick={() => setShowSecret((value) => !value)} aria-label={showSecret ? "Hide password" : "Show password"}>
+                          {showSecret ? <EyeOff size={17} /> : <Eye size={17} />}
+                        </button>
+                      </span>
+                    </label>
+                    <label>Employee PIN<input inputMode="numeric" value={isHashed(draft.pin) ? "" : (draft.pin || "")} onChange={(event) => updateDraft("pin", event.target.value.replace(/\D/g, ""))} /></label>
+                  </>
+                ) : (
+                  <p className="org-note">Password and PIN are never shown or set here — {draft.name || "this person"} chooses and changes their own from My Settings, or resets it themselves by email if forgotten.</p>
+                )}
                 <label>Job Role<input value={draft.role || ""} onChange={(event) => updateDraft("role", event.target.value)} placeholder="Accountant, Engineer, HR…" /></label>
                 <label>Department<input value={draft.department || ""} onChange={(event) => updateDraft("department", event.target.value)} /></label>
                 <label>
@@ -12350,7 +12901,9 @@ function AccessCenter({
                 <label>
                   Role Preset
                   <select value={draft.access || "Engineer"} onChange={(event) => applyPreset(event.target.value)} disabled={protectedAccount}>
-                    {ROLE_PRESETS.map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount}>{role}</option>)}
+                    {/* "Client" is reserved for the Viewer Accounts tab's real-auth,
+                        RLS-scoped implementation — never selectable here. */}
+                    {ROLE_PRESETS.filter((role) => role !== "Client").map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount}>{role}</option>)}
                   </select>
                 </label>
                 <label>
@@ -12490,9 +13043,336 @@ function AccessCenter({
               <button type="submit" className="primary icon-label" disabled={!canChangeDraft}><Save size={16} /> Save Access</button>
             </div>
           </form>
-        ) : <div className="empty">Select a user to edit access.</div>}
+        ) : <div className="empty">{tab === "pending" ? "Select a request to review." : "Select a user to edit access."}</div>}
       </section>
+      )}
+
+      {tab === "viewers" && (
+        <ViewerAccountsPanel
+          viewers={viewers}
+          viewersLoading={viewersLoading}
+          viewersError={viewersError}
+          reloadViewers={reloadViewers}
+          projects={projects}
+          currentUser={currentUser}
+          canCreate={canCreate}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          selectedId={viewerSelectedId}
+          setSelectedId={setViewerSelectedId}
+          draft={viewerDraft}
+          setDraft={setViewerDraft}
+          isNew={viewerIsNew}
+          setIsNew={setViewerIsNew}
+          busy={viewerBusy}
+          setBusy={setViewerBusy}
+          error={viewerError}
+          setError={setViewerError}
+          resetting={viewerResetting}
+          setResetting={setViewerResetting}
+          newPassword={viewerNewPassword}
+          setNewPassword={setViewerNewPassword}
+          newPasswordConfirm={viewerNewPasswordConfirm}
+          setNewPasswordConfirm={setViewerNewPasswordConfirm}
+          projectQuery={viewerProjectQuery}
+          setProjectQuery={setViewerProjectQuery}
+        />
+      )}
     </div>
+  );
+}
+
+/* Admin-only management of Viewer accounts — the client/read-only role.
+   Deliberately never touches saveUser/deleteUser/users[]: every mutation
+   goes through the viewer-admin Edge Function, which is what actually
+   creates/edits/resets/deletes the real Supabase Auth identity and the
+   viewer_accounts row that the restrictive RLS policies key off. This
+   component only ever reads/writes that one Edge Function and the
+   read-only viewer_accounts table. */
+function ViewerAccountsPanel({
+  viewers, viewersLoading, viewersError, reloadViewers, projects, currentUser,
+  canCreate, canEdit, canDelete,
+  selectedId, setSelectedId, draft, setDraft, isNew, setIsNew,
+  busy, setBusy, error, setError,
+  resetting, setResetting, newPassword, setNewPassword, newPasswordConfirm, setNewPasswordConfirm,
+  projectQuery, setProjectQuery,
+}: {
+  viewers: ViewerAccountRow[]; viewersLoading: boolean; viewersError: string; reloadViewers: () => Promise<void>;
+  projects: AccountingProject[]; currentUser: StaffUser | null;
+  canCreate: boolean; canEdit: boolean; canDelete: boolean;
+  selectedId: string; setSelectedId: (id: string) => void;
+  draft: ViewerDraft | null; setDraft: (draft: ViewerDraft | ((current: ViewerDraft | null) => ViewerDraft | null) | null) => void;
+  isNew: boolean; setIsNew: (value: boolean) => void;
+  busy: boolean; setBusy: (value: boolean) => void;
+  error: string; setError: (value: string) => void;
+  resetting: boolean; setResetting: (value: boolean) => void;
+  newPassword: string; setNewPassword: (value: string) => void;
+  newPasswordConfirm: string; setNewPasswordConfirm: (value: string) => void;
+  projectQuery: string; setProjectQuery: (value: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const canChangeDraft = isNew ? canCreate : canEdit;
+  const actor = { email: currentUser?.email || "", access: currentUser?.access || "" };
+
+  const selectViewer = (row: ViewerAccountRow) => {
+    setSelectedId(row.id);
+    setDraft({
+      id: row.id, username: row.username, displayName: row.display_name,
+      projectAccessMode: row.project_access_mode, allowedProjectIds: [...row.allowed_project_ids],
+      enabled: row.enabled, expiresAt: row.expires_at ? row.expires_at.slice(0, 10) : "",
+    });
+    setIsNew(false);
+    setResetting(false);
+    setError("");
+  };
+
+  const startNewViewer = () => {
+    if (!canCreate) return;
+    setSelectedId("");
+    setDraft({ id: "", username: "", displayName: "", projectAccessMode: "assigned", allowedProjectIds: [], enabled: true, expiresAt: "" });
+    setIsNew(true);
+    setResetting(false);
+    setError("");
+    setNewPassword("");
+    setNewPasswordConfirm("");
+  };
+
+  const updateDraft = (patch: Partial<ViewerDraft>) => setDraft((current) => current ? { ...current, ...patch } : current);
+
+  const toggleProject = (projectId: string, checked: boolean) => {
+    if (!draft) return;
+    const selected = new Set(draft.allowedProjectIds);
+    if (checked) selected.add(projectId); else selected.delete(projectId);
+    updateDraft({ allowedProjectIds: [...selected] });
+  };
+
+  const callViewerAdmin = async (body: Record<string, unknown>) => {
+    const client = getSupabaseClient();
+    if (!client) return { ok: false, error: "Supabase is not configured on this deployment." };
+    try {
+      const { data, error: fnError } = await client.functions.invoke("viewer-admin", { body });
+      if (fnError) return { ok: false, error: "Could not reach the Viewer account service." };
+      return (data || { ok: false, error: "No response." }) as { ok: boolean; error?: string; viewer?: ViewerAccountRow; droppedProjectIds?: string[] };
+    } catch {
+      return { ok: false, error: "Could not reach the Viewer account service." };
+    }
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft || !canChangeDraft) return;
+    if (!draft.displayName.trim()) { setError("Enter a client/display name."); return; }
+    if (isNew && (!newPassword || newPassword.length < 8 || newPassword !== newPasswordConfirm)) {
+      setError("Enter a password of at least 8 characters, and confirm it.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = isNew
+      ? await callViewerAdmin({
+          op: "create", actor,
+          username: draft.username, displayName: draft.displayName,
+          password: newPassword, confirmPassword: newPasswordConfirm,
+          projectAccessMode: draft.projectAccessMode, allowedProjectIds: draft.allowedProjectIds,
+          enabled: draft.enabled, expiresAt: draft.expiresAt || null,
+        })
+      : await callViewerAdmin({
+          op: "update", actor, id: draft.id,
+          username: draft.username, displayName: draft.displayName,
+          projectAccessMode: draft.projectAccessMode, allowedProjectIds: draft.allowedProjectIds,
+          enabled: draft.enabled, expiresAt: draft.expiresAt || null,
+        });
+    setBusy(false);
+    if (!result.ok) { setError(result.error || "Could not save the Viewer account."); return; }
+    await reloadViewers();
+    if (result.viewer) selectViewer(result.viewer);
+    setIsNew(false);
+    setNewPassword("");
+    setNewPasswordConfirm("");
+    if (result.droppedProjectIds?.length) {
+      setError(`Saved. ${result.droppedProjectIds.length} project id(s) did not match a real project and were dropped.`);
+    }
+  };
+
+  const submitReset = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!draft || !canChangeDraft) return;
+    if (!newPassword || newPassword.length < 8 || newPassword !== newPasswordConfirm) {
+      setError("Enter a password of at least 8 characters, and confirm it.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = await callViewerAdmin({ op: "resetPassword", actor, id: draft.id, password: newPassword, confirmPassword: newPasswordConfirm });
+    setBusy(false);
+    if (!result.ok) { setError(result.error || "Could not reset the password."); return; }
+    setNewPassword(""); setNewPasswordConfirm(""); setResetting(false);
+    setError("Password reset.");
+  };
+
+  const removeDraft = async () => {
+    if (!draft || isNew || !canDelete) return;
+    if (!window.confirm(`Delete the Viewer account for ${draft.displayName || draft.username}? They will immediately lose access, and this cannot be undone.`)) return;
+    setBusy(true);
+    const result = await callViewerAdmin({ op: "delete", actor, id: draft.id });
+    setBusy(false);
+    if (!result.ok) { setError(result.error || "Could not delete the Viewer account."); return; }
+    await reloadViewers();
+    setSelectedId(""); setDraft(null); setIsNew(false); setError("");
+  };
+
+  const filteredViewers = viewers.filter((row) =>
+    [row.display_name, row.username].some((value) => value.toLowerCase().includes(query.trim().toLowerCase())));
+  const filteredProjects = projects.filter((project) =>
+    [project.code, project.name, project.clientName].some((value) => String(value || "").toLowerCase().includes(projectQuery.trim().toLowerCase())));
+
+  return (
+    <section className="access-layout">
+      <aside className="access-directory">
+        <div className="access-directory-head">
+          <div><span className="eyebrow">Directory</span><h3>{viewers.length} viewers</h3></div>
+          <button type="button" className="primary icon-label" onClick={startNewViewer} disabled={!canCreate}><Plus size={16} /> Create Viewer Account</button>
+        </div>
+        <p className="org-note">Read-only, project-scoped client accounts. No email, no email verification, no company password reset — an admin sets the username and password directly.</p>
+        <label className="access-search">
+          <Search size={16} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Viewer accounts" />
+        </label>
+        <div className="access-user-list">
+          {viewersLoading && <div className="empty compact">Loading…</div>}
+          {viewersError && <div className="empty compact">{viewersError}</div>}
+          {!viewersLoading && !filteredViewers.length && <div className="empty compact">No Viewer accounts yet.</div>}
+          {filteredViewers.map((row) => (
+            <button
+              type="button"
+              key={row.id}
+              className={selectedId === row.id && !isNew ? "access-user active" : "access-user"}
+              onClick={() => selectViewer(row)}
+            >
+              <span>{initials(row.display_name || row.username)}</span>
+              <span><b>{row.display_name}</b><small>@{row.username} · {row.project_access_mode === "all" ? "All projects" : row.project_access_mode === "none" ? "No projects" : `${row.allowed_project_ids.length} project(s)`}</small></span>
+              <i className={row.enabled === false ? "off" : ""} />
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {draft ? (
+        <form className="access-editor" onSubmit={submit}>
+          <div className="access-editor-head">
+            <div>
+              <span className="eyebrow">{isNew ? "New Viewer account" : "Selected Viewer"}</span>
+              <h3>{draft.displayName || "New Viewer"}</h3>
+              <p>{draft.projectAccessMode === "all" ? "Sees every project" : draft.projectAccessMode === "none" ? "Sees no projects" : `${draft.allowedProjectIds.length} project(s) assigned`}</p>
+            </div>
+            <div className="editor-badges">
+              {!isNew && canDelete && (
+                <button type="button" className="delete-user-button" onClick={() => void removeDraft()}>
+                  <Trash2 size={14} /> Delete Account
+                </button>
+              )}
+              <span className={draft.enabled === false ? "status-badge off" : "status-badge"}>{draft.enabled === false ? "Disabled" : "Active"}</span>
+            </div>
+          </div>
+
+          <fieldset className="access-edit-fields" disabled={!canChangeDraft}>
+            <section className="access-section">
+              <div className="access-section-title">
+                <div><KeyRound size={18} /><span><b>Client identity</b><small>Username + password only — no email is ever required</small></span></div>
+              </div>
+              <div className="access-fields">
+                <label>Client / display name<input value={draft.displayName} onChange={(event) => updateDraft({ displayName: event.target.value })} /></label>
+                <label>Username<input value={draft.username} onChange={(event) => updateDraft({ username: event.target.value.trim().toLowerCase() })} placeholder="e.g. alnoor-client" disabled={!isNew} /></label>
+                {!isNew && <p className="org-note">Username changes are supported by the service, but are left fixed here to avoid confusing a client mid-engagement. Ask if you need it changed.</p>}
+                {isNew ? (
+                  <>
+                    <label>
+                      Password
+                      <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" />
+                    </label>
+                    <label>
+                      Confirm Password
+                      <input type="password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} autoComplete="new-password" />
+                    </label>
+                  </>
+                ) : resetting ? (
+                  <>
+                    <label>New Password<input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" /></label>
+                    <label>Confirm New Password<input type="password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} autoComplete="new-password" /></label>
+                    <div className="rowActions">
+                      <button type="button" className="primary" onClick={() => void submitReset()} disabled={busy}>Save new password</button>
+                      <button type="button" onClick={() => { setResetting(false); setNewPassword(""); setNewPasswordConfirm(""); }}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <button type="button" className="icon-label" onClick={() => { setResetting(true); setError(""); }} disabled={!canChangeDraft}><KeyRound size={14} /> Reset password</button>
+                )}
+                <label className="enable-user">
+                  <input type="checkbox" checked={draft.enabled !== false} onChange={(event) => updateDraft({ enabled: event.target.checked })} />
+                  <span><b>Account enabled</b><small>Disable sign-in without deleting the account.</small></span>
+                </label>
+                <label>Expires (optional)<input type="date" value={draft.expiresAt} onChange={(event) => updateDraft({ expiresAt: event.target.value })} /></label>
+              </div>
+            </section>
+
+            <section className="access-section project-access-section">
+              <div className="access-section-title">
+                <div><FolderLock size={18} /><span><b>Project visibility</b><small>Enforced in the database — a Viewer&apos;s session can only ever read these projects, regardless of what the app requests.</small></span></div>
+                <span className="black-badge">
+                  {draft.projectAccessMode === "all" ? "All projects" : draft.projectAccessMode === "none" ? "No projects" : `${draft.allowedProjectIds.length} selected`}
+                </span>
+              </div>
+              <div className="project-access-modes" role="group" aria-label="Viewer project visibility">
+                {([
+                  ["assigned", "Assigned only", "Choose projects below"],
+                  ["all", "All projects", "Company-wide visibility"],
+                  ["none", "No projects", "Hide all project records"],
+                ] as [ViewerDraft["projectAccessMode"], string, string][]).map(([mode, label, description]) => (
+                  <button
+                    type="button"
+                    key={mode}
+                    className={draft.projectAccessMode === mode ? "active" : ""}
+                    onClick={() => updateDraft({ projectAccessMode: mode })}
+                  >
+                    <span>{mode === "assigned" ? <FolderKanban size={17} /> : mode === "all" ? <Eye size={17} /> : <FolderLock size={17} />}</span>
+                    <b>{label}</b>
+                    <small>{description}</small>
+                  </button>
+                ))}
+              </div>
+              {draft.projectAccessMode === "assigned" && (
+                <div className="project-picker">
+                  <label className="access-search">
+                    <Search size={16} />
+                    <input value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} placeholder="Find project, client, or lead" />
+                  </label>
+                  <div className="project-check-list">
+                    {filteredProjects.length ? filteredProjects.map((project) => (
+                      <label key={project.id}>
+                        <input
+                          type="checkbox"
+                          checked={draft.allowedProjectIds.includes(project.id)}
+                          onChange={(event) => toggleProject(project.id, event.target.checked)}
+                        />
+                        <span>
+                          <b>{project.code || "Project"} · {project.name}</b>
+                          <small>{project.clientName || "No client"}</small>
+                        </span>
+                      </label>
+                    )) : <div className="empty compact">No matching construction projects.</div>}
+                  </div>
+                </div>
+              )}
+            </section>
+          </fieldset>
+
+          <div className="access-savebar">
+            <div><span className="auth-error">{error}</span><small>{canChangeDraft ? "Changes take effect immediately." : "View-only access."}</small></div>
+            <button type="submit" className="primary icon-label" disabled={!canChangeDraft || busy}><Save size={16} /> {busy ? "Saving…" : "Save Viewer"}</button>
+          </div>
+        </form>
+      ) : <div className="empty">Select a Viewer account, or create a new one.</div>}
+    </section>
   );
 }
 
@@ -13386,6 +14266,16 @@ function WeekSchedule({
     () => (Array.isArray(store?.[SHIFT_TYPES_KEY]) ? store[SHIFT_TYPES_KEY] as ShiftType[] : []),
     [store],
   );
+  /* Build Rules opens on the hours the office actually runs the meeting —
+     the MON shift's own — and only shows something different once this panel
+     has been used to change them. Reading it live rather than seeding a copy
+     means the panel cannot drift from the catalogue behind it. */
+  const savedMeetingHours = shiftTimesFor("MON", store);
+  const meetingStart = build.teamMeetingStart || savedMeetingHours[0] || "16:00";
+  const meetingEnd = build.teamMeetingEnd || savedMeetingHours[1] || "18:00";
+  // "HH:MM" is zero-padded and 24-hour, so it compares correctly as text.
+  const meetingHoursBackwards = Boolean(meetingStart && meetingEnd && meetingEnd <= meetingStart);
+  const buildSettings: BuildSettings = { ...build, teamMeetingStart: meetingStart, teamMeetingEnd: meetingEnd };
   const [showTypes, setShowTypes] = useState(false);
   const [typeDraft, setTypeDraft] = useState<ShiftType>({
     code: "", label: "", start: "", end: "", time: "", tone: "office",
@@ -13477,7 +14367,7 @@ function WeekSchedule({
         </div>
         <div className="hero-actions">
           {canManageAll && <button type="button" onClick={() => setShowSettings((value) => !value)}><SlidersHorizontal size={16} /> Build Rules</button>}
-          {canManageAll && <button type="button" onClick={() => autoBuild(build)}><Sparkles size={16} /> Auto Build</button>}
+          {canManageAll && <button type="button" onClick={() => autoBuild(buildSettings)}><Sparkles size={16} /> Auto Build</button>}
           <button type="button" onClick={() => go("quick-clock")}>Clock In / Out</button>
         </div>
       </section>
@@ -13533,13 +14423,36 @@ function WeekSchedule({
                 onChange={(event) => setBuild({ ...build, respectConstraints: event.target.checked })} />
               <span><b>Respect employee constraints</b><small>Keep government duty, site work, and recorded rest days</small></span></label>
             <label className="rule-check">
-              <input type="checkbox" checked={build.mondayMeeting}
-                onChange={(event) => setBuild({ ...build, mondayMeeting: event.target.checked })} />
-              <span><b>Monday meeting for everyone</b><small>16:00 team meeting is mandatory</small></span></label>
+              <input type="checkbox" checked={Boolean(build.teamMeetingDay)}
+                onChange={(event) => setBuild({ ...build, teamMeetingDay: event.target.checked ? (build.teamMeetingDay || "Monday") : "" })} />
+              <span><b>Team meeting for everyone</b><small>{build.teamMeetingDay
+                ? `Mandatory for everyone on ${build.teamMeetingDay}, ${meetingStart} to ${meetingEnd}`
+                : "A mandatory meeting on the day and time you choose"}</small></span></label>
+            {build.teamMeetingDay && (
+              <>
+                <label>Meeting day
+                  <select value={build.teamMeetingDay} onChange={(event) => setBuild({ ...build, teamMeetingDay: event.target.value })}>
+                    {OFFICE_WEEK.map((day) => <option key={day} value={day}>{day}</option>)}
+                  </select>
+                </label>
+                <label>Meeting starts
+                  <input type="time" value={meetingStart}
+                    onChange={(event) => setBuild({ ...build, teamMeetingStart: event.target.value })} />
+                </label>
+                <label>Meeting ends
+                  <input type="time" value={meetingEnd}
+                    onChange={(event) => setBuild({ ...build, teamMeetingEnd: event.target.value })} />
+                </label>
+              </>
+            )}
           </div>
+          {build.teamMeetingDay && meetingHoursBackwards && (
+            <p className="builder-note">The meeting ends before it starts. Set an end time later than {meetingStart}.</p>
+          )}
           <div className="form-actions">
             <button type="button" onClick={() => setBuild(DEFAULT_BUILD)}>Reset</button>
-            <button type="button" className="primary" onClick={() => { autoBuild(build); setShowSettings(false); }}>
+            <button type="button" className="primary" disabled={meetingHoursBackwards}
+              onClick={() => { autoBuild(buildSettings); setShowSettings(false); }}>
               <Sparkles size={15} /> Build with these rules
             </button>
           </div>
@@ -13755,7 +14668,7 @@ function WeekSchedule({
           <p className="builder-note">
             Drag a shift onto a cell to assign it. Drag <b>OFF</b> onto a cell to clear the day, or use the × on a shift.
             {canManageAll
-              ? " Every colour is yours to set and is used across the clock, schedule, and reports. Auto Build fills the week to the Larsa coverage rule and keeps the Monday meeting for everyone."
+              ? ` Every colour is yours to set and is used across the clock, schedule, and reports. Auto Build fills the week to the Larsa coverage rule${build.teamMeetingDay ? ` and keeps the team meeting for everyone on ${build.teamMeetingDay} at ${meetingStart}` : ""}.`
               : " You can adjust your own row. Rearranging other people needs the Manage permission on Weekly Schedule."}
           </p>
         </section>
