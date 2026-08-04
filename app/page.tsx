@@ -653,7 +653,10 @@ const GROUPS: Group[] = [
     items: [
       engineItem("staff", "staff-dashboard", "Performance Dashboard", "Workboard summaries, alerts, and KPIs", "DB", "dashboard"),
       PERFORMANCE_CENTER_ITEM,
-      DEVELOPMENT_ITEM,
+      /* Development Portal used to sit here. It is learning and growth — the
+         same subject as the skills matrix — so it lives under HR & Skills now.
+         Only its home moved: the id, its permissions and every handler that
+         checks them are untouched. */
       engineItem("staff", "staff-clock", "Clock In / Out", "Daily clocking and attendance", "TC", "clock"),
       engineItem("staff", "staff-live", "Live Presence", "Office, remote, site, and out status", "LP", "live"),
       engineItem("staff", "staff-schedule", "Weekly Schedule", "Shift builder and attendance planning", "WS", "schedule"),
@@ -673,6 +676,7 @@ const GROUPS: Group[] = [
       engineItem("hr", "hr-dashboard", "HR Dashboard", "Visual HR counts and distributions", "HD", "dashboard"),
       engineItem("hr", "hr-people", "People & Skills", "Employee classifications and skill files", "PS", "people"),
       engineItem("hr", "hr-matrix", "Skills Matrix", "Editable categories and yes/no coverage", "SM", "matrix"),
+      DEVELOPMENT_ITEM,
       engineItem("hr", "hr-reports", "HR Reports", "Compact HR report and exports", "HR", "reports"),
     ],
   },
@@ -900,13 +904,16 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
   },
   {
     label: "Performance & Workboard",
+    /* Same order as the sidebar, so an admin granting access reads the tree in
+       the shape the person will see. Development Portal is not missing — it
+       moved to HR & Skills below and is listed there, with every one of its
+       actions intact. Nothing in this tree was dropped. */
     items: [
-      PERFORMANCE_CENTER_ITEM,
       ITEMS.find((item) => item.id === "staff-dashboard")!,
+      PERFORMANCE_CENTER_ITEM,
       ITEMS.find((item) => item.id === "staff-performance")!,
       PERFORMANCE_REVIEW_ITEM,
       PERFORMANCE_TARGETS_ITEM,
-      DEVELOPMENT_ITEM,
       PERFORMANCE_HISTORY_ITEM,
       ITEMS.find((item) => item.id === "staff-reports")!,
     ],
@@ -1712,10 +1719,12 @@ function channelForItem(item: Item): NavChannel {
   if (item.id === "my-settings" || item.id === "my-pay") return "home";
   if (item.id === "my-requests" || item.id === "live-presence") return "time";
   if (item.id === "quick-clock" || item.id === "week-schedule") return "time";
+  /* Learning and growth belong with skills, not with points. The portal keeps
+     its own permissions; this only decides which sidebar it opens beside. */
+  if (item.id === "staff-development") return "hr";
   if (
     item.id === "my-points"
     || item.id === "performance-center"
-    || item.id === "staff-development"
     || item.id === "performance-history"
     || item.id === "staff-performance"
     || item.id === "staff-dashboard"
@@ -7647,28 +7656,38 @@ export default function Home() {
   const channelGroups: Record<Exclude<NavChannel, "home" | "admin">, Group> = {
     time: {
       label: "Time & Attendance",
-      // The native clock and schedule replace the engine's own pages, so those are
-      // not listed again here — one Clock In / Out, one Weekly Schedule.
+      /* Everything about hours, in the order somebody works through them:
+         clock, the week you are clocking against, the sheet it adds up to,
+         the requests that change it, and who is in right now.
+
+         The native clock and schedule replace the engine's own pages, so those
+         are not listed again — one Clock In / Out, one Weekly Schedule. */
       items: [
         QUICK_CLOCK_ITEM,
         WEEK_SCHEDULE_ITEM,
-        REQUESTS_ITEM,
-        PRESENCE_ITEM,
         ...["staff-timesheet"]
           .map((id) => staffItems.find((item) => item.id === id)!)
           .filter(Boolean),
+        REQUESTS_ITEM,
+        PRESENCE_ITEM,
       ],
     },
     performance: {
       label: "Performance & Workboard",
-      // staff-dashboard / staff-performance / staff-reports resolve to this channel in
-      // channelForItem, so they must be listed here or they have no sidebar entry at all.
+      /* Dashboard first, then the two things performance actually consists of
+         — points and approvals, then reviews and recognition — then reports.
+         Nothing about attendance appears here: clocking, schedules, timesheets
+         and leave all live in Time & Attendance, and the Development Portal
+         moved to HR & Skills.
+
+         staff-dashboard / staff-performance / staff-reports resolve to this
+         channel in channelForItem, so they must be listed here or they have no
+         sidebar entry at all. */
       items: [
-        "performance-center",
-        "staff-development",
-        "performance-history",
-        "staff-performance",
         "staff-dashboard",
+        "performance-center",
+        "staff-performance",
+        "performance-history",
         "staff-reports",
       ]
         .map((id) => staffItems.find((item) => item.id === id)!)
@@ -8446,18 +8465,40 @@ function Overview({
     const item = ITEMS.find((row) => row.id === id);
     if (item) choose(item, channel);
   };
-  const accountingLanding = canOpenInSession(user, ACCOUNTING_HUB_ITEM, method)
-    ? ACCOUNTING_HUB_ITEM
-    : GROUPS.find((group) => group.label === "Accounting")?.items
-      .find((item) => canOpenInSession(user, item, method));
-  const hrLanding = GROUPS.find((group) => group.label === "HR & Skills")?.items
-    .find((item) => canOpenInSession(user, item, method));
-  const timeLanding = ["quick-clock", "week-schedule", "my-requests", "live-presence", "staff-timesheet"]
-    .map((id) => ITEMS.find((item) => item.id === id))
-    .find((item): item is Item => Boolean(item && canOpenInSession(user, item, method)));
-  const performanceLanding = ["performance-center", "staff-development", "performance-history"]
-    .map((id) => ITEMS.find((item) => item.id === id))
-    .find((item): item is Item => Boolean(item && canOpenInSession(user, item, method)));
+  /* A work-area card opens that area's Dashboard.
+     
+     It used to open whichever page in the area the person happened to be
+     allowed into first — and for Accounting that was accounting-hub, whose own
+     description is "Choose an accounting area": an index page standing between
+     someone and the overview they actually wanted. The Dashboard is the point
+     of a work area, so it goes first.
+     
+     The fallback list is the previous behaviour, kept intact: somebody whose
+     permissions do not include the Dashboard still lands on the first page
+     they can open rather than on a refusal. So this changes where people
+     arrive, never what they may reach. */
+  const landingFor = (dashboardId: string, fallbacks: (Item | undefined)[]) => {
+    const dashboard = ITEMS.find((item) => item.id === dashboardId);
+    if (dashboard && canOpenInSession(user, dashboard, method)) return dashboard;
+    return fallbacks.find((item): item is Item => Boolean(item && canOpenInSession(user, item, method)));
+  };
+  const byId = (id: string) => ITEMS.find((item) => item.id === id);
+
+  const accountingLanding = landingFor("acc-dashboard", [
+    ACCOUNTING_HUB_ITEM,
+    ...(GROUPS.find((group) => group.label === "Accounting")?.items || []),
+  ]);
+  const hrLanding = landingFor("hr-dashboard",
+    GROUPS.find((group) => group.label === "HR & Skills")?.items || []);
+  /* Time is the exception, and deliberately so. Clock In / Out is already the
+     overview — today's status, this week against the schedule, recent sessions,
+     the way into a correction — so a separate Time Dashboard would be a second
+     page showing the same figures with an extra click in front of them. It is
+     also the thing people open Time to do. */
+  const timeLanding = landingFor("quick-clock",
+    ["week-schedule", "staff-timesheet", "my-requests", "live-presence"].map(byId));
+  const performanceLanding = landingFor("staff-dashboard",
+    ["performance-center", "performance-history", "staff-reports"].map(byId));
   const fullModules = [
     { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clock, schedule, leave", icon: Timer, color: "green" },
     { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance", text: "Points, targets, approvals", icon: TrendingUp, color: "violet" },
