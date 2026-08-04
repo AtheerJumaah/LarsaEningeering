@@ -2097,3 +2097,133 @@ i.is-due { background: #d97706; }
   .smart-grid-actions { width: 100%; }
   .smart-grid-actions button { flex: 1 1 auto; }
 }
+
+/* --- LARSA Executive -------------------------------------------------------
+   A second theme, selected with data-theme="executive" on the app root.
+   Classic is the ABSENCE of that attribute, so a person who never touches the
+   selector sees byte-identical CSS to before — backward compatibility by
+   construction rather than by carefully mirroring every rule.
+
+   The restraint here is deliberate and narrow: the six work-area accents and
+   the decorative blob are what make the current Home read as colourful, so
+   those are neutralised to a grey ramp and the decoration is quietened. What
+   is NOT touched is any colour that carries meaning — approved, returned,
+   overdue, error. A monochrome theme that also greys out a red warning has
+   removed information, not decoration. */
+.unified-app[data-theme="executive"] {
+  --exec-ink: #17181b;
+  --exec-ink-soft: #5c6068;
+  --exec-line: #e3e5e9;
+  --exec-surface: #ffffff;
+  --exec-canvas: #f6f7f8;
+  --larsa-accent: #17181b;
+}
+.unified-app[data-theme="executive"].dark {
+  --exec-ink: #f2f4f7;
+  --exec-ink-soft: #a9adb3;
+  --exec-line: #2e3135;
+  --exec-surface: #1b1d1f;
+  --exec-canvas: #101113;
+}
+
+/* The accent tokens each coloured card sets for itself, flattened to one
+   architectural grey. The class stays on the element so nothing else that
+   keys off it breaks; only what it resolves to changes. */
+.unified-app[data-theme="executive"] .module-bubble.green,
+.unified-app[data-theme="executive"] .module-bubble.blue,
+.unified-app[data-theme="executive"] .module-bubble.amber,
+.unified-app[data-theme="executive"] .module-bubble.violet,
+.unified-app[data-theme="executive"] .module-bubble.rose,
+.unified-app[data-theme="executive"] .module-bubble.slate {
+  --bubble-soft: #eceef1;
+  --bubble-ink: #2f3236;
+}
+.unified-app[data-theme="executive"].dark .module-bubble.green,
+.unified-app[data-theme="executive"].dark .module-bubble.blue,
+.unified-app[data-theme="executive"].dark .module-bubble.amber,
+.unified-app[data-theme="executive"].dark .module-bubble.violet,
+.unified-app[data-theme="executive"].dark .module-bubble.rose,
+.unified-app[data-theme="executive"].dark .module-bubble.slate {
+  --bubble-soft: #26282b;
+  --bubble-ink: #e7e9ec;
+}
+
+/* Card surfaces: one quiet vertical gradient instead of a tinted wash, a
+   thin border to do the work the colour used to do, and a restrained shadow. */
+.unified-app[data-theme="executive"] .module-bubble {
+  background: linear-gradient(180deg, var(--exec-surface) 0%, var(--exec-canvas) 100%);
+  border: 1px solid var(--exec-line);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+  color: var(--exec-ink);
+}
+.unified-app[data-theme="executive"] .module-bubble:hover {
+  border-color: #c8ccd3;
+  box-shadow: 0 10px 26px rgba(16, 24, 40, .10);
+}
+.unified-app[data-theme="executive"].dark .module-bubble:hover { border-color: #3b3e44; }
+
+/* The decorative circles are the "colourful print" the brief rules out. They
+   are kept — removing them would change the card's shape language — but
+   dropped to a whisper so they read as paper texture, not pattern. */
+.unified-app[data-theme="executive"] .module-bubble::after,
+.unified-app[data-theme="executive"] .module-bubble .module-blob {
+  background: currentColor;
+  opacity: .035;
+}
+.unified-app[data-theme="executive"].dark .module-bubble::after,
+.unified-app[data-theme="executive"].dark .module-bubble .module-blob { opacity: .06; }
+
+/* The icon medallion carries the one remaining tonal step, so a card still has
+   a focal point without a hue. */
+.unified-app[data-theme="executive"] .module-orb {
+  background: var(--bubble-soft);
+  color: var(--bubble-ink);
+  border: 1px solid var(--exec-line);
+}
+.unified-app[data-theme="executive"] .module-copy b { color: var(--exec-ink); }
+.unified-app[data-theme="executive"] .module-copy small { color: var(--exec-ink-soft); }
+.unified-app[data-theme="executive"] .module-open {
+  background: var(--exec-ink); color: var(--exec-surface); border-color: var(--exec-ink);
+}
+
+/* Panels and the shell follow the same restraint. */
+.unified-app[data-theme="executive"] .report-panel,
+.unified-app[data-theme="executive"] .home-stat,
+.unified-app[data-theme="executive"] .overview-hero {
+  background: var(--exec-surface);
+  border: 1px solid var(--exec-line);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+
+/* Status colour is information, not decoration, so it survives the theme
+   intact. Anything that tells you a thing was approved, returned, overdue or
+   failed keeps its hue — desaturating these would cost meaning. */
+.unified-app[data-theme="executive"] .record-status,
+.unified-app[data-theme="executive"] .auth-error,
+.unified-app[data-theme="executive"] .coverage-day span,
+.unified-app[data-theme="executive"] .black-badge.due,
+.unified-app[data-theme="executive"] .notify-hint.bad,
+.unified-app[data-theme="executive"] .notify-hint.good,
+.unified-app[data-theme="executive"] .notify-switch input:checked + i,
+.unified-app[data-theme="executive"] .reminder-row.due i,
+.unified-app[data-theme="executive"] .status-badge.off {
+  filter: none;
+}
+
+/* The theme selector sits in the top bar beside the light/dark toggle, styled
+   as one of the bar's quiet controls rather than a form field. */
+.theme-picker { display: inline-flex; align-items: center; }
+.theme-picker select {
+  min-height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px;
+  background: none; color: var(--ink); font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.theme-picker select:hover { border-color: #b9bcc2; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+@media (max-width: 860px) {
+  /* The bar is tight on a phone; the selector keeps its label through
+     aria-label and shrinks rather than wrapping the row. */
+  .theme-picker select { max-width: 104px; }
+}

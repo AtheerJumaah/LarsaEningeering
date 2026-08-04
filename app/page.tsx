@@ -131,7 +131,7 @@ type NativeView =
   | "myPay"
   | "payrollPortal";
 type SignInMethod = "email" | "pin";
-type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "admin";
+type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "engineering" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
 type PermissionAction = "view" | "add" | "edit" | "delete" | "approve" | "export" | "manage";
 type DataScope = "own" | "team" | "department" | "company";
@@ -1696,6 +1696,11 @@ function canOpenInSession(user: StaffUser | null, item: Item, method: SignInMeth
 
 function channelForItem(item: Item): NavChannel {
   if (item.id === "overview") return "home";
+  /* Engineering Management used to resolve to "home", which meant the sidebar
+     fell back to the Home group the moment you opened it — so the only way
+     back was through a Home card. It owns a channel now, exactly like
+     Accounting and HR, and keeps its own sidebar entry while you are in it. */
+  if (item.id === "org-structure") return "engineering";
   if (
     item.id === "admin"
     || item.id === "access"
@@ -3931,6 +3936,11 @@ export default function Home() {
   const [navHistory, setNavHistory] = useState<Item[]>([]);
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
+  /* Appearance is a separate axis from light/dark: a person can be on
+     LARSA Executive in either. "classic" writes no attribute at all, which is
+     what makes the existing look the guaranteed-unchanged default rather than
+     a theme that has to be kept in sync with it. */
+  const [appearance, setAppearance] = useState<"classic" | "executive">("classic");
   const [message, setMessage] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallEvent | null>(null);
   const [installHelp, setInstallHelp] = useState(false);
@@ -4117,6 +4127,8 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       try {
         const saved = localStorage.getItem("larsa-control-theme");
+        const look = localStorage.getItem("larsa-control-appearance");
+        if (look === "executive" || look === "classic") setAppearance(look);
         if (saved === "dark" || saved === "light") setDark(saved === "dark");
         else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) setDark(true);
       } catch { /* private mode */ }
@@ -4139,6 +4151,16 @@ export default function Home() {
     if (!themeRead) return;
     try { localStorage.setItem("larsa-control-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
   }, [applyThemeToFrames, dark, themeRead]);
+
+  /* Appearance persists on its own rather than riding along with the light/dark
+     effect above. Sharing that effect meant it never fired when only the theme
+     changed — the deps list is [dark], so picking LARSA Executive saved
+     nothing and the choice was lost on reload. It also has no business
+     re-running the iframe theme sync, which is all that effect is really for. */
+  useEffect(() => {
+    if (!themeRead) return;
+    try { localStorage.setItem("larsa-control-appearance", appearance); } catch { /* private mode */ }
+  }, [appearance, themeRead]);
 
   const applySessionToFrame = useCallback((engine: Engine, user: StaffUser, method: SignInMethod = "email") => {
     const frame = refs[engine].current;
@@ -7680,6 +7702,7 @@ export default function Home() {
         .map((id) => staffItems.find((item) => item.id === id)!)
         .filter(Boolean),
     },
+    engineering: GROUPS.find((group) => group.label === "Engineering Management")!,
     hr: GROUPS.find((group) => group.label === "HR & Skills")!,
     accounting: {
       label: "Accounting",
@@ -7745,7 +7768,10 @@ export default function Home() {
   }
 
   return (
-    <div className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}>
+    <div
+      className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}
+      {...(appearance === "executive" ? { "data-theme": "executive" } : {})}
+    >
       <div
         className={menuOpen ? "scrim open" : "scrim"}
         onClick={() => setMenuOpen(false)}
@@ -7970,6 +7996,20 @@ export default function Home() {
               </div>
             )}
             {!installed && <button type="button" className="primary" onClick={install}>Install App</button>}
+            {/* Two independent controls, deliberately: light/dark and the
+                visual system are different questions, and a person on
+                LARSA Executive should still be able to work at night. */}
+            <label className="theme-picker">
+              <span className="visually-hidden">Theme</span>
+              <select
+                value={appearance}
+                aria-label="Theme"
+                onChange={(event) => setAppearance(event.target.value as "classic" | "executive")}
+              >
+                <option value="classic">Classic</option>
+                <option value="executive">LARSA Executive</option>
+              </select>
+            </label>
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
@@ -8467,7 +8507,7 @@ function Overview({
   const fullModules = [
     { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clock, schedule, leave", icon: Timer, color: "green" },
     { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance", text: "Points, targets, approvals", icon: TrendingUp, color: "violet" },
-    { id: "org-structure", channel: "home" as const, title: "Engineering Management", text: "Departments, teams, reports", icon: Network, color: "blue" },      { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, records", icon: UserRoundSearch, color: "rose" },
+    { id: "org-structure", channel: "engineering" as const, title: "Engineering Management", text: "Departments, teams, reports", icon: Network, color: "blue" },      { id: hrLanding?.id || "hr-dashboard", channel: "hr" as const, title: "HR & Skills", text: "People, skills, records", icon: UserRoundSearch, color: "rose" },
     { id: accountingLanding?.id || "acc-dashboard", channel: "accounting" as const, title: "Accounting", text: "Finance, payroll, projects", icon: BadgeDollarSign, color: "amber" },
     { id: "admin", channel: "admin" as const, title: "Administration", text: "Users, access, data", icon: Settings, color: "slate" },
   ];
