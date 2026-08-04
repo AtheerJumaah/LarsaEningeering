@@ -1985,12 +1985,19 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
    which is exactly what it still looked like. The declared colour was light
    and the rendered colour was not, and I had only checked the declared one.
 
-   So these mix towards the raised card surface at a strength chosen from the
-   result: both land near luminance 70, in the same band as the icon discs on
-   the cards below them, which is what "light" has to mean here. */
-.unified-app.dark .role-card.due  { background: color-mix(in srgb, #f28b82 28%, var(--surface-raised, #1d212a)); border-color: rgba(242, 139, 130, .45); }
+   So these are solid, and light: 28% of the caption ink mixed into the raised
+   card surface #1d212a, worked out once and written down. Both land near
+   luminance 70, in the same band as the icon discs on the cards below them,
+   which is what "light" has to mean here.
+
+   Written as literals rather than color-mix() on purpose. The bundler emits a
+   no-color-mix fallback ahead of the @supports block, and for these it emitted
+   the UNMIXED ink -- a fully opaque salmon tile with pale text on it. A
+   fallback that is worse than the bug it guards against is not worth the
+   tidiness of computing the value in the stylesheet. */
+.unified-app.dark .role-card.due  { background: #593f43; border-color: rgba(242, 139, 130, .45); }
 .unified-app.dark .role-card.due em  { color: #ffb4ab; }
-.unified-app.dark .role-card.good { background: color-mix(in srgb, #5fd39b 28%, var(--surface-raised, #1d212a)); border-color: rgba(95, 211, 155, .4); }
+.unified-app.dark .role-card.good { background: #2f534a; border-color: rgba(95, 211, 155, .4); }
 .unified-app.dark .role-card.good em { color: #9df3c8; }
 /* The eyebrow is a muted grey, which was right against near-black and is not
    against a tile this much lighter. It stays quieter than the figure, just
