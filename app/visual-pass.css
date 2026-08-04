@@ -2098,132 +2098,199 @@ i.is-due { background: #d97706; }
   .smart-grid-actions button { flex: 1 1 auto; }
 }
 
-/* --- LARSA Executive -------------------------------------------------------
-   A second theme, selected with data-theme="executive" on the app root.
-   Classic is the ABSENCE of that attribute, so a person who never touches the
-   selector sees byte-identical CSS to before — backward compatibility by
-   construction rather than by carefully mirroring every rule.
 
-   The restraint here is deliberate and narrow: the six work-area accents and
-   the decorative blob are what make the current Home read as colourful, so
-   those are neutralised to a grey ramp and the decoration is quietened. What
-   is NOT touched is any colour that carries meaning — approved, returned,
-   overdue, error. A monochrome theme that also greys out a red warning has
-   removed information, not decoration. */
-.unified-app[data-theme="executive"] {
-  --exec-ink: #17181b;
-  --exec-ink-soft: #5c6068;
-  --exec-line: #e3e5e9;
-  --exec-surface: #ffffff;
-  --exec-canvas: #f6f7f8;
-  --larsa-accent: #17181b;
-}
-.unified-app[data-theme="executive"].dark {
-  --exec-ink: #f2f4f7;
-  --exec-ink-soft: #a9adb3;
-  --exec-line: #2e3135;
-  --exec-surface: #1b1d1f;
-  --exec-canvas: #101113;
-}
+/* --- Larsa theme -----------------------------------------------------------
+   Selected with data-theme="larsa" on the app root. Classic is the ABSENCE of
+   that attribute, so anyone who never opens the selector sees byte-identical
+   CSS to before — backward compatibility by construction rather than by
+   mirroring every Classic rule and hoping the copy stays in step.
 
-/* The accent tokens each coloured card sets for itself, flattened to one
-   architectural grey. The class stays on the element so nothing else that
-   keys off it breaks; only what it resolves to changes. */
-.unified-app[data-theme="executive"] .module-bubble.green,
-.unified-app[data-theme="executive"] .module-bubble.blue,
-.unified-app[data-theme="executive"] .module-bubble.amber,
-.unified-app[data-theme="executive"] .module-bubble.violet,
-.unified-app[data-theme="executive"] .module-bubble.rose,
-.unified-app[data-theme="executive"] .module-bubble.slate {
-  --bubble-soft: #eceef1;
-  --bubble-ink: #2f3236;
+   Two things this theme is NOT: it is not flat, and it is not faded. Those are
+   the failure modes of a grayscale system, and both come from using one grey
+   for everything. So the palette below is a full ramp — nine steps from white
+   to black — and the theme spends them: three distinct surface levels, real
+   borders, near-black headings, and black primary actions. Grey is the palette,
+   not the contrast level.
+
+   It changes appearance only. Nothing here sets a grid property, so a saved
+   card layout, card order and cards-per-row all survive a theme switch
+   untouched. */
+.unified-app[data-theme="larsa"] {
+  /* The ramp. Enough steps to build hierarchy from, rather than one grey. */
+  --l-0:  #ffffff;   /* primary card surface           */
+  --l-25: #fafbfc;   /* page canvas                    */
+  --l-50: #f2f4f6;   /* secondary surface, hover       */
+  --l-100:#e6e9ed;   /* dividers                       */
+  --l-200:#d4d8de;   /* borders                        */
+  --l-400:#8b929c;   /* muted text                     */
+  --l-600:#565c66;   /* secondary text                 */
+  --l-800:#2c2e31;   /* charcoal                       */
+  --l-900:#17181a;   /* near-black: headings, actions  */
+
+  --larsa-accent: var(--l-900);
 }
-.unified-app[data-theme="executive"].dark .module-bubble.green,
-.unified-app[data-theme="executive"].dark .module-bubble.blue,
-.unified-app[data-theme="executive"].dark .module-bubble.amber,
-.unified-app[data-theme="executive"].dark .module-bubble.violet,
-.unified-app[data-theme="executive"].dark .module-bubble.rose,
-.unified-app[data-theme="executive"].dark .module-bubble.slate {
-  --bubble-soft: #26282b;
-  --bubble-ink: #e7e9ec;
+.unified-app[data-theme="larsa"].dark {
+  --l-0:  #17181a;
+  --l-25: #111214;
+  --l-50: #1d1f21;
+  --l-100:#272a2d;
+  --l-200:#353840;
+  --l-400:#858b95;
+  --l-600:#aeb4bd;
+  --l-800:#dfe3e8;
+  --l-900:#f4f6f8;
+  --larsa-accent: var(--l-900);
 }
 
-/* Card surfaces: one quiet vertical gradient instead of a tinted wash, a
-   thin border to do the work the colour used to do, and a restrained shadow. */
-.unified-app[data-theme="executive"] .module-bubble {
-  background: linear-gradient(180deg, var(--exec-surface) 0%, var(--exec-canvas) 100%);
-  border: 1px solid var(--exec-line);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
-  color: var(--exec-ink);
-}
-.unified-app[data-theme="executive"] .module-bubble:hover {
-  border-color: #c8ccd3;
-  box-shadow: 0 10px 26px rgba(16, 24, 40, .10);
-}
-.unified-app[data-theme="executive"].dark .module-bubble:hover { border-color: #3b3e44; }
-
-/* The decorative circles are the "colourful print" the brief rules out. They
-   are kept — removing them would change the card's shape language — but
-   dropped to a whisper so they read as paper texture, not pattern. */
-.unified-app[data-theme="executive"] .module-bubble::after,
-.unified-app[data-theme="executive"] .module-bubble .module-blob {
-  background: currentColor;
-  opacity: .035;
-}
-.unified-app[data-theme="executive"].dark .module-bubble::after,
-.unified-app[data-theme="executive"].dark .module-bubble .module-blob { opacity: .06; }
-
-/* The icon medallion carries the one remaining tonal step, so a card still has
-   a focal point without a hue. */
-.unified-app[data-theme="executive"] .module-orb {
-  background: var(--bubble-soft);
-  color: var(--bubble-ink);
-  border: 1px solid var(--exec-line);
-}
-.unified-app[data-theme="executive"] .module-copy b { color: var(--exec-ink); }
-.unified-app[data-theme="executive"] .module-copy small { color: var(--exec-ink-soft); }
-.unified-app[data-theme="executive"] .module-open {
-  background: var(--exec-ink); color: var(--exec-surface); border-color: var(--exec-ink);
+/* ---------------------------------------------------------------- 1. cards */
+/* The six accent classes stay on the elements — plenty of other rules key off
+   them — but resolve to one architectural pair. */
+.unified-app[data-theme="larsa"] .module-bubble.green,
+.unified-app[data-theme="larsa"] .module-bubble.blue,
+.unified-app[data-theme="larsa"] .module-bubble.amber,
+.unified-app[data-theme="larsa"] .module-bubble.violet,
+.unified-app[data-theme="larsa"] .module-bubble.rose,
+.unified-app[data-theme="larsa"] .module-bubble.slate {
+  --bubble-soft: var(--l-50);
+  --bubble-ink:  var(--l-900);
 }
 
-/* Panels and the shell follow the same restraint. */
-.unified-app[data-theme="executive"] .report-panel,
-.unified-app[data-theme="executive"] .home-stat,
-.unified-app[data-theme="executive"] .overview-hero {
-  background: var(--exec-surface);
-  border: 1px solid var(--exec-line);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+.unified-app[data-theme="larsa"] .module-bubble {
+  background: var(--l-0);
+  border: 1px solid var(--l-200);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+  color: var(--l-900);
+}
+.unified-app[data-theme="larsa"] .module-bubble:hover {
+  border-color: var(--l-400);
+  box-shadow: 0 12px 28px rgba(16, 24, 40, .12);
 }
 
-/* Status colour is information, not decoration, so it survives the theme
-   intact. Anything that tells you a thing was approved, returned, overdue or
-   failed keeps its hue — desaturating these would cost meaning. */
-.unified-app[data-theme="executive"] .record-status,
-.unified-app[data-theme="executive"] .auth-error,
-.unified-app[data-theme="executive"] .coverage-day span,
-.unified-app[data-theme="executive"] .black-badge.due,
-.unified-app[data-theme="executive"] .notify-hint.bad,
-.unified-app[data-theme="executive"] .notify-hint.good,
-.unified-app[data-theme="executive"] .notify-switch input:checked + i,
-.unified-app[data-theme="executive"] .reminder-row.due i,
-.unified-app[data-theme="executive"] .status-badge.off {
-  filter: none;
+/* The decorative circles are removed outright, not faded. They are the
+   "corner bubble" this correction names: two large tinted discs behind every
+   card that carry no information. display:none rather than opacity so they
+   also stop costing layout and paint. Note the tight scoping — `.module-blob`
+   only ever exists as decoration, but `::after` is used elsewhere for real
+   things, so this touches the card's own pseudo-element and nothing else. */
+.unified-app[data-theme="larsa"] .module-bubble::after,
+.unified-app[data-theme="larsa"] .module-bubble .module-blob { display: none; }
+
+/* With the disc gone the icon has to carry the card, so it becomes a
+   controlled rounded square rather than a large decorative circle. */
+.unified-app[data-theme="larsa"] .module-orb {
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  background: var(--l-900);
+  color: var(--l-0);
+  border: none;
+  box-shadow: none;
+}
+.unified-app[data-theme="larsa"] .module-copy b {
+  color: var(--l-900); letter-spacing: -.01em;
+}
+.unified-app[data-theme="larsa"] .module-copy small { color: var(--l-600); }
+.unified-app[data-theme="larsa"] .module-open {
+  background: var(--l-900); color: var(--l-0); border-color: var(--l-900);
 }
 
-/* The theme selector sits in the top bar beside the light/dark toggle, styled
-   as one of the bar's quiet controls rather than a form field. */
-.theme-picker { display: inline-flex; align-items: center; }
-.theme-picker select {
-  min-height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px;
-  background: none; color: var(--ink); font-size: 12.5px; font-weight: 700; cursor: pointer;
+/* ------------------------------------------------------------- 2. surfaces */
+/* Three levels — canvas, card, secondary — so sections separate by depth
+   instead of by hue. This is what stops grayscale reading as flat. */
+.unified-app[data-theme="larsa"] .native-scroll { background: var(--l-25); }
+.unified-app[data-theme="larsa"] .report-panel,
+.unified-app[data-theme="larsa"] .home-stat,
+.unified-app[data-theme="larsa"] .overview-hero,
+.unified-app[data-theme="larsa"] .access-directory,
+.unified-app[data-theme="larsa"] .access-editor {
+  background: var(--l-0);
+  border: 1px solid var(--l-200);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
 }
-.theme-picker select:hover { border-color: #b9bcc2; }
-.visually-hidden {
-  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+.unified-app[data-theme="larsa"] .filter-toolbar,
+.unified-app[data-theme="larsa"] .build-rules { background: var(--l-50); border-color: var(--l-200); }
+.unified-app[data-theme="larsa"] .data-table thead th {
+  background: var(--l-50); color: var(--l-600); border-bottom: 1px solid var(--l-200);
 }
-@media (max-width: 860px) {
-  /* The bar is tight on a phone; the selector keeps its label through
-     aria-label and shrinks rather than wrapping the row. */
-  .theme-picker select { max-width: 104px; }
+.unified-app[data-theme="larsa"] .data-table tbody tr + tr td { border-top: 1px solid var(--l-100); }
+
+/* ------------------------------------------------------------- 3. typography */
+.unified-app[data-theme="larsa"] h1,
+.unified-app[data-theme="larsa"] h2,
+.unified-app[data-theme="larsa"] h3,
+.unified-app[data-theme="larsa"] h4 { color: var(--l-900); }
+.unified-app[data-theme="larsa"] .eyebrow { color: var(--l-400); }
+/* Deliberately --l-600, not --l-400: secondary text that fades into the card
+   is the single most common way a grey theme becomes unreadable. */
+.unified-app[data-theme="larsa"] .overview-hero p,
+.unified-app[data-theme="larsa"] small { color: var(--l-600); }
+
+/* --------------------------------------------------------------- 4. buttons */
+.unified-app[data-theme="larsa"] button.primary,
+.unified-app[data-theme="larsa"] .btn.primary,
+.unified-app[data-theme="larsa"] .auth-submit {
+  background: var(--l-900) !important;
+  border: 1px solid var(--l-900) !important;
+  color: var(--l-0) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .12);
+}
+.unified-app[data-theme="larsa"] button.primary:hover,
+.unified-app[data-theme="larsa"] .btn.primary:hover,
+.unified-app[data-theme="larsa"] .auth-submit:hover { background: var(--l-800) !important; }
+
+.unified-app[data-theme="larsa"] button:not(.primary):not(.theme):not(.top-signout) {
+  background: var(--l-0); border: 1px solid var(--l-200); color: var(--l-900);
+}
+.unified-app[data-theme="larsa"] button:not(.primary):not(.theme):not(.top-signout):hover {
+  background: var(--l-50); border-color: var(--l-400);
+}
+.unified-app[data-theme="larsa"] button:focus-visible {
+  outline: 2px solid var(--l-900); outline-offset: 2px;
+}
+.unified-app[data-theme="larsa"] button:disabled { opacity: .45; }
+/* Destructive stays red. Turning "delete" grey to match a palette would cost
+   the one signal that stops somebody clicking it by accident. */
+.unified-app[data-theme="larsa"] .delete-user-button,
+.unified-app[data-theme="larsa"] button.danger,
+.unified-app[data-theme="larsa"] .danger { color: #b4341f; border-color: #e7c4bd; }
+
+/* --------------------------------------------------------------- 5. sidebar */
+.unified-app[data-theme="larsa"] aside.sidebar {
+  background: var(--l-0); border-inline-end: 1px solid var(--l-200);
+}
+.unified-app[data-theme="larsa"] .nav-item { color: var(--l-600); }
+.unified-app[data-theme="larsa"] .nav-item:hover { background: var(--l-50); color: var(--l-900); }
+/* A solid near-black selected row: strong, calm, and unmistakable without
+   a colour. */
+.unified-app[data-theme="larsa"] .nav-item.active,
+.unified-app[data-theme="larsa"] .nav-item[aria-current="page"] {
+  background: var(--l-900); color: var(--l-0);
+}
+.unified-app[data-theme="larsa"] .nav-item.active b,
+.unified-app[data-theme="larsa"] .nav-item[aria-current="page"] b { color: var(--l-0); }
+.unified-app[data-theme="larsa"] .nav-group-label { color: var(--l-400); }
+.unified-app[data-theme="larsa"] header.topbar {
+  background: var(--l-0); border-bottom: 1px solid var(--l-200);
+}
+
+/* ------------------------------------------------------- 6. semantic colour */
+/* Everything below carries meaning rather than decoration, so it keeps its
+   hue. A grayscale theme that also greys out "overdue" has removed
+   information. Progress rings and status dots are data, not ornament, and are
+   deliberately absent from the decoration rules above. */
+.unified-app[data-theme="larsa"] .record-status.approved { color: #14804a; border-color: #b7e2ca; }
+.unified-app[data-theme="larsa"] .record-status.returned,
+.unified-app[data-theme="larsa"] .record-status.rejected { color: #b4341f; border-color: #e7c4bd; }
+.unified-app[data-theme="larsa"] .record-status.pending  { color: #9a6206; border-color: #f0dcae; }
+.unified-app[data-theme="larsa"] .auth-error { color: #b4341f; }
+.unified-app[data-theme="larsa"] .black-badge.due { background: #b4341f; color: #fff; }
+.unified-app[data-theme="larsa"] .notify-hint.bad { color: #b4341f; }
+.unified-app[data-theme="larsa"] .notify-hint.good { color: #14804a; }
+.unified-app[data-theme="larsa"] .notify-switch input:checked + i { background: #14804a; }
+
+@media (max-width: 720px) {
+  /* The decorations stay gone on a phone — they were removed for being
+     decoration, not for being expensive. */
+  .unified-app[data-theme="larsa"] .module-bubble::after,
+  .unified-app[data-theme="larsa"] .module-bubble .module-blob { display: none; }
+  .unified-app[data-theme="larsa"] .module-orb { width: 40px; height: 40px; border-radius: 11px; }
 }

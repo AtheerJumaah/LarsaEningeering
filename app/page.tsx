@@ -3937,10 +3937,10 @@ export default function Home() {
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
   /* Appearance is a separate axis from light/dark: a person can be on
-     LARSA Executive in either. "classic" writes no attribute at all, which is
+     Larsa in either. "classic" writes no attribute at all, which is
      what makes the existing look the guaranteed-unchanged default rather than
      a theme that has to be kept in sync with it. */
-  const [appearance, setAppearance] = useState<"classic" | "executive">("classic");
+  const [appearance, setAppearance] = useState<"classic" | "larsa">("classic");
   const [message, setMessage] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallEvent | null>(null);
   const [installHelp, setInstallHelp] = useState(false);
@@ -4127,8 +4127,14 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       try {
         const saved = localStorage.getItem("larsa-control-theme");
+        /* "executive" is what the first version of this selector wrote. It is
+           migrated rather than ignored, so somebody who already chose the
+           theme keeps it instead of being quietly put back on Classic.
+           Anything unrecognised falls through to Classic, which is the safe
+           default because it is also the do-nothing one. */
         const look = localStorage.getItem("larsa-control-appearance");
-        if (look === "executive" || look === "classic") setAppearance(look);
+        if (look === "larsa" || look === "executive") setAppearance("larsa");
+        else if (look === "classic") setAppearance("classic");
         if (saved === "dark" || saved === "light") setDark(saved === "dark");
         else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) setDark(true);
       } catch { /* private mode */ }
@@ -4154,7 +4160,7 @@ export default function Home() {
 
   /* Appearance persists on its own rather than riding along with the light/dark
      effect above. Sharing that effect meant it never fired when only the theme
-     changed — the deps list is [dark], so picking LARSA Executive saved
+     changed — the deps list is [dark], so picking Larsa saved
      nothing and the choice was lost on reload. It also has no business
      re-running the iframe theme sync, which is all that effect is really for. */
   useEffect(() => {
@@ -7770,7 +7776,7 @@ export default function Home() {
   return (
     <div
       className={[dark ? "unified-app dark" : "unified-app", navCollapsed ? "nav-collapsed" : ""].filter(Boolean).join(" ")}
-      {...(appearance === "executive" ? { "data-theme": "executive" } : {})}
+      {...(appearance === "larsa" ? { "data-theme": "larsa" } : {})}
     >
       <div
         className={menuOpen ? "scrim open" : "scrim"}
@@ -7998,16 +8004,16 @@ export default function Home() {
             {!installed && <button type="button" className="primary" onClick={install}>Install App</button>}
             {/* Two independent controls, deliberately: light/dark and the
                 visual system are different questions, and a person on
-                LARSA Executive should still be able to work at night. */}
+                Larsa should still be able to work at night. */}
             <label className="theme-picker">
               <span className="visually-hidden">Theme</span>
               <select
                 value={appearance}
                 aria-label="Theme"
-                onChange={(event) => setAppearance(event.target.value as "classic" | "executive")}
+                onChange={(event) => setAppearance(event.target.value as "classic" | "larsa")}
               >
                 <option value="classic">Classic</option>
-                <option value="executive">LARSA Executive</option>
+                <option value="larsa">Larsa</option>
               </select>
             </label>
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
