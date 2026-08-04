@@ -809,6 +809,13 @@ const ROLE_PRESETS = [
  * their own projects (including the financial summary); trainees and interns
  * get the self-service staff basics with no money screens. */
 const USERNAME_ONLY_PRESETS = ["Client", "Trainee", "Intern"];
+/* The two names a read-only client account used to be given while it still
+   lived in the staff directory. Those accounts belong to the Viewer Accounts
+   tab now, where they get a real auth identity and database-enforced project
+   scoping, so neither name may be assigned to a staff record any more. Kept as
+   a list rather than deleted from ROLE_PRESETS because accounts created before
+   the split still carry one, and their role has to keep displaying correctly. */
+const LEGACY_CLIENT_PRESETS = ["Client", "Viewer"];
 const VIEW_ONLY: PermissionAction[] = ["view"];
 const VIEW_EXPORT: PermissionAction[] = ["view", "export"];
 const BASIC_EDIT: PermissionAction[] = ["view", "add", "edit"];
@@ -12901,9 +12908,16 @@ function AccessCenter({
                 <label>
                   Role Preset
                   <select value={draft.access || "Engineer"} onChange={(event) => applyPreset(event.target.value)} disabled={protectedAccount}>
-                    {/* "Client" is reserved for the Viewer Accounts tab's real-auth,
-                        RLS-scoped implementation — never selectable here. */}
-                    {ROLE_PRESETS.filter((role) => role !== "Client").map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount}>{role}</option>)}
+                    {/* Read-only client accounts belong to the Viewer Accounts tab,
+                        where they get a real auth identity and RLS scoping, so
+                        neither name is offered here — a staff record can never be
+                        turned into one. An account created before the split keeps
+                        its own name listed, or this select would quietly show the
+                        wrong role for it. */}
+                    {[
+                      ...ROLE_PRESETS.filter((role) => !LEGACY_CLIENT_PRESETS.includes(role)),
+                      ...(draft.access && LEGACY_CLIENT_PRESETS.includes(draft.access) ? [draft.access] : []),
+                    ].map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount}>{role}</option>)}
                   </select>
                 </label>
                 <label>
