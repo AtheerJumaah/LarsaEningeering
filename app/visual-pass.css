@@ -1853,6 +1853,39 @@ i.is-due { background: #d97706; }
 .notify-switch.inline { gap: 10px; }
 .notify-switch.inline span { font-size: 12.5px; font-weight: 700; color: var(--ink); }
 
+/* Push and Email, as two of the same switch rather than one switch and one
+   checkbox. Side by side while there is room; stacked once there is not,
+   which on a phone is most of the time. The caption sits under its own
+   switch so it is never ambiguous which channel a toggle belongs to. */
+.notify-channels { display: flex; align-items: flex-start; gap: 18px; flex: none; }
+.notify-switch.stacked {
+  flex-direction: column; align-items: center; gap: 5px;
+}
+.notify-switch.stacked span {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-2, var(--muted)); white-space: nowrap;
+}
+/* The label follows the switch: on when it is on, quiet when it is not. */
+.notify-switch.stacked input:checked ~ span { color: #1f9d76; }
+.notify-switch.stacked span svg { flex: none; }
+
+.notify-hint {
+  margin: 10px 2px 0; font-size: 11.5px; font-weight: 650; line-height: 1.5;
+  color: var(--text-2, var(--muted));
+}
+.notify-hint.bad { color: #c0392b; font-weight: 750; }
+.notify-hint.good { color: #1f9d76; font-weight: 750; }
+
+@media (max-width: 620px) {
+  /* A phone cannot hold the description and two switches on one line without
+     squeezing all three, so the row becomes two lines and the switches keep
+     their full size rather than shrinking to fit. */
+  .notify-cat { flex-wrap: wrap; }
+  .notify-cat > span { flex: 1 1 100%; }
+  .notify-channels { gap: 22px; }
+}
+
 .notify-quiet { display: grid; gap: 12px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 15px; }
 .notify-quiet-range { display: flex; gap: 12px; flex-wrap: wrap; }
 .notify-quiet-range label {

@@ -75,6 +75,7 @@ import {
   Search,
   Send,
   Settings,
+  Mail,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -572,15 +573,44 @@ const DEVELOPMENT_ITEM: Item = {
 };
 const PERFORMANCE_HISTORY_ITEM: Item = {
   id: "performance-history",
-  /* The one page where time and output legitimately meet. Everywhere else
-     hours belong to attendance and points belong to performance; here they sit
-     together because the question being asked is productivity. The id is kept
-     so existing links and saved views still resolve. */
-  label: "Productivity History",
-  description: "Hours worked against points and jobs delivered, for any period",
+  /* An employee's formal record: evaluations, feedback, recognition, warnings,
+     promotions, training, certifications. Deliberately NOT hours and points.
+     Those have their own homes — attendance owns hours, Points & Weekly
+     Targets owns points — and repeating them here made this page a third copy
+     of figures that already existed twice, which is what made it useless as
+     the place you look up somebody's actual history. The id is kept so
+     existing links and saved views still resolve. */
+  label: "Performance History",
+  description: "Evaluations, recognition, warnings, promotions, training, and certifications",
   code: "PH",
   native: "performanceHistory",
 };
+
+/* The kinds of thing an employee file actually holds. Ordered roughly from
+   routine to serious, which is also the order the filter offers them. */
+const FORMAL_RECORD_KINDS = [
+  "Evaluation", "Feedback", "Achievement", "Recognition", "Training",
+  "Certification", "Skill change", "Promotion", "Role change",
+  "Department change", "Improvement plan", "Corrective action", "Warning",
+] as const;
+type FormalRecordKind = (typeof FORMAL_RECORD_KINDS)[number];
+/* Which kinds read as a concern rather than a credit. Only used for the
+   colour of a chip — nothing behaves differently because of it. */
+const FORMAL_CONCERN_KINDS: string[] = ["Warning", "Corrective action", "Improvement plan"];
+type FormalRecord = {
+  id: string;
+  uid: string;
+  kind: FormalRecordKind | string;
+  title: string;
+  detail?: string;
+  date: string;
+  outcome?: string;
+  recordedBy?: string;
+  recordedAt?: string;
+};
+function formalRecords(store: Record<string, unknown> | null): FormalRecord[] {
+  return Array.isArray(store?.formalRecords) ? store.formalRecords as FormalRecord[] : [];
+}
 const SALES_ITEM: Item = {
   id: "sales-commissions",
   label: "Sales & Commissions",
@@ -830,7 +860,11 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
   "staff-performance-review": ["view", "edit", "approve", "export", "manage"],
   "staff-performance-targets": ["view", "add", "edit", "delete", "manage"],
   "staff-development": ["view", "add", "edit", "delete", "approve", "export", "manage"],
-  "performance-history": ["view", "export"],
+  /* It used to be a read-only report over other modules' figures, so viewing
+     and exporting was all it could offer. Now that it holds records of its
+     own, somebody has to be able to write one — and deleting is deliberately
+     absent: an employee file is appended to, not edited away. */
+  "performance-history": ["view", "add", "edit", "export"],
   "staff-timesheet": VIEW_EXPORT,
   "staff-approvals": ["view", "add", "edit", "delete", "approve", "manage"],
   "staff-reports": VIEW_EXPORT,
@@ -6177,6 +6211,29 @@ export default function Home() {
     return true;
   }, [notify, refreshStaffEngine]);
 
+  /* Appending to somebody's formal record. Deliberately append-only: there is
+     no edit or delete path, because a personnel file that can be quietly
+     rewritten is not a record of anything. It lives in the same synced blob as
+     the rest of the staff data, so it reaches every device the same way. */
+  const saveFormalRecord = useCallback((record: FormalRecord) => {
+    const actor = sessionUserRef.current;
+    if (!actor || !hasItemPermission(actor, PERFORMANCE_HISTORY_ITEM, "add")) {
+      notify("Your account cannot add to an employee record.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Staff records are still loading."); return false; }
+    const existing = Array.isArray(store.formalRecords) ? store.formalRecords as FormalRecord[] : [];
+    store.formalRecords = [record, ...existing];
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    logAccountEvent(actor, "performance.record_added", record.uid,
+      `${record.kind}: ${record.title}`, { kind: String(record.kind), date: record.date });
+    notify("Record added.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
   const saveSchedule = useCallback((userId: string, day: string, entries: { start?: string; end?: string; code?: string; name?: string }[]) => {
     const actor = sessionUserRef.current;
     const scheduleItem = ITEMS.find((item) => item.id === "staff-schedule");
@@ -7350,6 +7407,7 @@ export default function Home() {
     [hydrated, storageTick],
   );
   const pointsRows = useMemo(() => performanceRows(staffStore), [staffStore]);
+  const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
   const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers]);
   const accountingSnapshot = useMemo(
     () => (hydrated
@@ -8065,12 +8123,8 @@ export default function Home() {
             <PerformanceHistory
               viewer={sessionUser}
               users={accessUsers}
-              rows={pointsRows}
-              sessions={clockSessions}
-              targets={growthStore.pointTargets}
-              openAdvanced={() => choose(ITEMS.find((item) => item.id === "staff-reports")!, "performance")}
-              trimSession={trimSession}
-              resetSession={resetSession}
+              records={staffFormalRecords}
+              saveRecord={saveFormalRecord}
             />
           </div>
           <div className={active.native === "salesCommissions" ? "native active" : "native"}>
@@ -9826,291 +9880,266 @@ function DevelopmentPortal({
   );
 }
 
+/* An employee's formal record.
+ *
+ * This page used to be two dashboards in a trench coat: a Timesheets tab
+ * totalling hours out of store.logs, and a Performance tab totalling points
+ * out of store.performance. Both sets of figures already had a home —
+ * attendance and the timesheet own hours, Points & Weekly Targets owns points
+ * — so this was a third rendering of numbers that existed twice already, and
+ * the one thing an employee file is actually for, the formal record, had
+ * nowhere to live at all.
+ *
+ * Now it holds only that: evaluations, feedback, recognition, warnings,
+ * corrective actions, promotions, role and department changes, training and
+ * certifications. Nothing here reads store.logs or store.performance. Those
+ * arrays are untouched and every module that legitimately consumes them —
+ * Points & Weekly Targets, Quick Clock, Live Presence, the Overview cards,
+ * Engineering Management and the timesheet/reports pages in the engine —
+ * keeps working exactly as before. */
 function PerformanceHistory({
   viewer,
   users,
-  rows,
-  sessions,
-  targets,
-  openAdvanced,
-  trimSession,
-  resetSession,
+  records,
+  saveRecord,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
-  rows: PerformanceRow[];
-  sessions: ClockSession[];
-  targets: Record<string, number>;
-  openAdvanced: () => void;
-  trimSession: (uid: string, clockIn: string, newClockOut: string) => boolean;
-  resetSession: (uid: string, clockIn: string) => boolean;
+  records: FormalRecord[];
+  saveRecord: (record: FormalRecord) => boolean;
 }) {
-  const [editing, setEditing] = useState<{ uid: string; clockIn: string } | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const [reportKind, setReportKind] = useState<"time" | "performance">("time");
-  const mayAdjust = Boolean(viewer && (() => {
-    const item = ITEMS.find((row) => row.id === "staff-clock");
-    return item ? hasItemPermission(viewer, item, "manage") : false;
-  })());
-  /* datetime-local wants local wall time with no zone, so the ISO stamp has to
-     be shifted by the offset first or the field shows the wrong hour. */
-  const toLocalInput = (iso: string) => {
-    const at = new Date(iso);
-    return new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  };
   const today = dateInputValue(new Date());
-  const prior = new Date();
-  prior.setDate(prior.getDate() - 29);
-  const [from, setFrom] = useState(dateInputValue(prior));
+  const yearAgo = new Date();
+  yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+  const [from, setFrom] = useState(dateInputValue(yearAgo));
   const [to, setTo] = useState(today);
   const [employeeId, setEmployeeId] = useState("all");
-  const [department, setDepartment] = useState("all");
-  // The scope switch answers "whose figures am I looking at". The employee and
-  // department pickers below are drill-downs, so they only appear once the
-  // chosen scope actually holds more than one person or more than one team.
+  const [kind, setKind] = useState("all");
+  const [query, setQuery] = useState("");
+  const [draft, setDraft] = useState<FormalRecord | null>(null);
+  const [formError, setFormError] = useState("");
+
+  const canAdd = Boolean(viewer && hasItemPermission(viewer, PERFORMANCE_HISTORY_ITEM, "add"));
+  const canExport = Boolean(viewer && hasItemPermission(viewer, PERFORMANCE_HISTORY_ITEM, "export"));
+
+  /* Same scope rule as everywhere else: what you may read about other people
+     is decided by your data scope, not by this page. Somebody with "own"
+     scope sees their own file and nobody else's — which is the sensitive
+     case here, because a warning is not a figure, it is a personnel matter. */
   const availableScopes = useMemo(() => scopesAvailableTo(viewer, users), [viewer, users]);
-  /* Opens at the widest scope the viewer has, which is what "all visible
-     employees" used to mean — so managers land on the same population as
-     before and nobody has to hunt for people who appear to have vanished. */
-  /* Left empty until the person actually picks one. Writing a default into
-     state on mount froze the choice made before the staff list had loaded,
-     which pinned managers to "Mine" for the rest of the session. */
   const [scope, setScope] = useState<DataScope | "">("");
   useEffect(() => {
-    if (scope && !availableScopes.includes(scope as DataScope)) setScope("");
+    if (scope || !availableScopes.length) return;
+    const timer = window.setTimeout(() => setScope(availableScopes[availableScopes.length - 1]), 0);
+    return () => clearTimeout(timer);
   }, [availableScopes, scope]);
-  const activeScope: DataScope = (scope || availableScopes[availableScopes.length - 1] || "own") as DataScope;
-  const visibleUsers = useMemo(() => usersInScope(viewer, users, activeScope), [viewer, users, activeScope]);
-  const departments = [...new Set(visibleUsers.map((user) => user.department || "").filter(Boolean))].sort();
-  const selectedUsers = visibleUsers.filter((user) =>
-    (employeeId === "all" || user.id === employeeId)
-    && (department === "all" || user.department === department));
-  const selectedIds = new Set(selectedUsers.map((user) => user.id));
-  const filteredSessions = sessions.filter((session) =>
-    selectedIds.has(session.uid) && withinDates(session.date, from, to));
-  const filteredRows = rows.filter((row) =>
-    selectedIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
-  const startMs = new Date(`${from || today}T00:00:00`).getTime();
-  const endMs = new Date(`${to || today}T23:59:59`).getTime();
-  // Whole-week rounding inflated the period target (a 15-day range billed 3 full
-  // weeks). Use the real fraction so completion percentages stay honest.
-  const weeksInPeriod = Math.max(
-    1,
-    Math.round(((Math.max(startMs, endMs) - Math.min(startMs, endMs) + 1) / (7 * 86400000)) * 100) / 100,
+  const visibleUsers = useMemo(
+    () => (scope ? usersInScope(viewer, users, scope) : users.filter((user) => user.id === viewer?.id)),
+    [scope, users, viewer],
   );
-  /* Jobs delivered comes from the same performance records as the points, so
-     the two belong side by side. A job is counted once however many entries
-     were logged against it. */
-  const jobsIn = (entries: PerformanceRow[]) => new Set(
-    entries.map((row) => String(row["Job Number"] || row.Project || "").trim().toLowerCase())
-      .filter(Boolean),
-  ).size;
-  const summaries = selectedUsers.map((user) => {
-    const employeeSessions = filteredSessions.filter((session) => session.uid === user.id);
-    const employeeRows = filteredRows.filter((row) => rowUserId(row, users) === user.id);
-    const hours = employeeSessions.reduce((sum, session) => sum + session.hours, 0);
-    const submitted = employeeRows.reduce((sum, row) => sum + finiteNumber(row["Submitted Points"]), 0);
-    const approved = employeeRows.reduce((sum, row) => sum + finiteNumber(row["Approved Points"]), 0);
-    const target = Math.round((finiteNumber(targets[user.id]) || 50) * weeksInPeriod);
-    return { user, hours, submitted, approved, target, jobs: jobsIn(employeeRows) };
-  });
-  const totalJobs = jobsIn(filteredRows);
-  const totalHours = summaries.reduce((sum, row) => sum + row.hours, 0);
-  const totalSubmitted = summaries.reduce((sum, row) => sum + row.submitted, 0);
-  const totalApproved = summaries.reduce((sum, row) => sum + row.approved, 0);
-  const totalTarget = summaries.reduce((sum, row) => sum + row.target, 0);
-  const canExport = Boolean(viewer && hasItemPermission(viewer, PERFORMANCE_HISTORY_ITEM, "export"));
-  const canOpenAdvanced = Boolean(
-    viewer && canOpen(viewer, ITEMS.find((item) => item.id === "staff-reports")!),
-  );
-  const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
-    const end = new Date();
-    const start = new Date(end);
-    if (period === "week") start.setDate(start.getDate() - 6);
-    if (period === "month") start.setDate(start.getDate() - 29);
-    if (period === "sixMonths") start.setMonth(start.getMonth() - 6);
-    if (period === "year") start.setFullYear(start.getFullYear() - 1);
-    setFrom(dateInputValue(start));
-    setTo(dateInputValue(end));
+  const visibleIds = useMemo(() => new Set(visibleUsers.map((user) => user.id)), [visibleUsers]);
+  const nameFor = (uid: string) => users.find((user) => user.id === uid)?.name || "Unknown";
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return records
+      .filter((row) => visibleIds.has(row.uid))
+      .filter((row) => (employeeId === "all" ? true : row.uid === employeeId))
+      .filter((row) => (kind === "all" ? true : row.kind === kind))
+      .filter((row) => {
+        const at = String(row.date || "").slice(0, 10);
+        return (!from || at >= from) && (!to || at <= to);
+      })
+      .filter((row) => !needle || [row.title, row.detail, row.outcome, nameFor(row.uid)]
+        .some((value) => String(value || "").toLowerCase().includes(needle)))
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    // nameFor reads `users`, which is already a dependency through visibleIds.
+  }, [records, visibleIds, employeeId, kind, from, to, query, users]);
+
+  const counts = useMemo(() => {
+    const concerns = filtered.filter((row) => FORMAL_CONCERN_KINDS.includes(String(row.kind))).length;
+    const people = new Set(filtered.map((row) => row.uid)).size;
+    return { total: filtered.length, concerns, people };
+  }, [filtered]);
+
+  const startNew = () => {
+    if (!canAdd) return;
+    setFormError("");
+    setDraft({
+      id: `fr${Date.now()}`,
+      uid: employeeId !== "all" ? employeeId : (visibleUsers[0]?.id || viewer?.id || ""),
+      kind: "Evaluation",
+      title: "",
+      detail: "",
+      date: today,
+      outcome: "",
+    });
   };
-  const exportHistory = () => {
-    if (reportKind === "time") {
-      downloadRows(`larsa-timesheets-${from}-to-${to}.csv`, [
-        ["Date", "Employee", "Department", "Hours", "Presence Hours", "Break Hours", "Mode", "Status"],
-        ...filteredSessions.map((session) => [
-        session.date,
-        session.employee,
-        users.find((user) => user.id === session.uid)?.department || "",
-        session.hours.toFixed(2),
-        session.presenceHours.toFixed(2),
-        session.breakHours.toFixed(2),
-        session.mode,
-        session.open ? "Open" : "Closed",
-        ]),
-      ]);
-      return;
-    }
-    downloadRows(`larsa-performance-${from}-to-${to}.csv`, [
-      ["Date", "Employee", "Department", "Job Number", "Assigned Points", "Total Points", "Approved Points", "Status"],
-      ...filteredRows.map((row) => [
-        rowDate(row),
-        row.Engineer || "",
-        row.Department || "",
-        row["Job Number"] || row.Project || "",
-        finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]),
-        finiteNumber(row["Submitted Points"]),
-        finiteNumber(row["Approved Points"]),
-        row.Status || "",
-      ]),
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft) return;
+    if (!draft.uid) { setFormError("Choose the employee this record is about."); return; }
+    if (!draft.title.trim()) { setFormError("Give the record a short title."); return; }
+    if (!draft.date) { setFormError("Give the record a date."); return; }
+    const saved = saveRecord({
+      ...draft,
+      title: draft.title.trim(),
+      detail: (draft.detail || "").trim(),
+      outcome: (draft.outcome || "").trim(),
+      recordedBy: viewer?.name || "",
+      recordedAt: new Date().toISOString(),
+    });
+    if (!saved) { setFormError("Your account cannot add to an employee record."); return; }
+    setDraft(null);
+    setFormError("");
+  };
+
+  const exportCsv = () => {
+    const header = ["Date", "Employee", "Kind", "Title", "Outcome", "Detail", "Recorded by"];
+    const body = filtered.map((row) => [
+      String(row.date || "").slice(0, 10), nameFor(row.uid), String(row.kind || ""),
+      row.title || "", row.outcome || "", (row.detail || "").replace(/\s+/g, " "), row.recordedBy || "",
     ]);
+    downloadRows("larsa-performance-history.csv", [header, ...body]);
   };
 
   return (
-    <div className="native-scroll history-scroll">
-      <section className="overview-hero history-hero">
+    <div className="native-scroll">
+      <section className="overview-hero">
         <div>
-          <span className="eyebrow">Reports</span>
-          <h2>Time & Performance</h2>
-          <p>Choose one report, a team, and a period.</p>
+          <span className="eyebrow">People</span>
+          <h2>Performance History</h2>
+          <p>The formal record: evaluations, recognition, warnings, promotions, training, and certifications.</p>
         </div>
         <div className="hero-actions">
-          {canExport && <button type="button" onClick={exportHistory}><FileSpreadsheet size={16} /> Export Records</button>}
-          {canOpenAdvanced && <button type="button" className="primary" onClick={openAdvanced}>Advanced Reports <ArrowRight size={16} /></button>}
+          {canExport && <button type="button" onClick={exportCsv} disabled={!filtered.length}>Export Records</button>}
+          {canAdd && <button type="button" className="primary" onClick={startNew}><Plus size={16} /> Add Record</button>}
         </div>
       </section>
 
-      <ScopeSwitch scopes={availableScopes} value={activeScope} onChange={(next) => {
-        setScope(next);
-        // Drill-downs belong to the scope that was open; carrying them across
-        // silently empties the page.
-        setEmployeeId("all");
-        setDepartment("all");
-      }} />
+      {/* Hours and points are deliberately absent, and saying where they went
+          is kinder than leaving somebody to hunt for figures that used to be
+          on this page. */}
+      <p className="builder-note">
+        Working hours live in Attendance and the Timesheet. Points live in Points &amp; Weekly Targets.
+        This page is only the formal record.
+      </p>
 
-      <div className="settings-tabs history-kind" role="tablist" aria-label="Report type">
-        <button type="button" role="tab" aria-selected={reportKind === "time"} className={reportKind === "time" ? "active" : ""} onClick={() => setReportKind("time")}><Timer size={16} /> Timesheets</button>
-        <button type="button" role="tab" aria-selected={reportKind === "performance"} className={reportKind === "performance" ? "active" : ""} onClick={() => setReportKind("performance")}><TrendingUp size={16} /> Performance</button>
-      </div>
+      {availableScopes.length > 1 && (
+        <ScopeSwitch scopes={availableScopes} value={(scope || availableScopes[availableScopes.length - 1]) as DataScope}
+          onChange={(next) => setScope(next)} />
+      )}
 
-      <div className="period-presets" aria-label="Report period">
-        <button type="button" onClick={() => setPeriod("today")}>Today</button>
-        <button type="button" onClick={() => setPeriod("week")}>7 days</button>
-        <button type="button" onClick={() => setPeriod("month")}>30 days</button>
-        <button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button>
-        <button type="button" onClick={() => setPeriod("year")}>Year</button>
-        <span>Custom</span>
-      </div>
-
-      <section className="filter-toolbar history-filters">
-        <label><span>From</span><input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label>
-        <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
-        {visibleUsers.length > 1 && (
-          <label><span>Employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><option value="all">Everyone in this view</option>{visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
-        )}
-        {departments.length > 1 && (
-          <label><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="all">All departments</option>{departments.map((value) => <option key={value}>{value}</option>)}</select></label>
-        )}
+      <section className="filter-toolbar">
+        <label><span>Employee</span>
+          <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
+            <option value="all">All visible</option>
+            {visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+          </select>
+        </label>
+        <label><span>Record type</span>
+          <select value={kind} onChange={(event) => setKind(event.target.value)}>
+            <option value="all">All types</option>
+            {FORMAL_RECORD_KINDS.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label><span>From</span>
+          <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label><span>To</span>
+          <input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <label><span>Search</span>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, outcome, person" /></label>
+        <span className="filter-summary">{counts.total} record{counts.total === 1 ? "" : "s"} · {counts.people} people</span>
       </section>
 
-      {reportKind === "time" ? (
-        <>
-        <section className="metric-grid">
-          <article><span><Timer size={19} /></span><small>Total hours</small><b>{totalHours.toFixed(1)}</b><p>{filteredSessions.length} sessions</p></article>
-          <article><span><FileClock size={19} /></span><small>Sessions</small><b>{filteredSessions.length}</b><p>{filteredSessions.filter((row) => row.open).length} open now</p></article>
-          <article><span><UsersRound size={19} /></span><small>Employees</small><b>{selectedUsers.length}</b><p>{from} to {to}</p></article>
-        </section>
-        {(() => {
-          const flagged = filteredSessions.filter((session) => session.stale || session.unclosed);
-          if (!flagged.length) return null;
-          /* Sessions in this state are listed but excluded from every total
-             above — a clock-in left open for days is a correction to make,
-             not seventy hours of work. */
-          return (
-            <div className="notice flagged-sessions" role="status">
-              <b>{flagged.length} session{flagged.length === 1 ? "" : "s"} need{flagged.length === 1 ? "s" : ""} correction</b>
-              {" — "}
-              {flagged.slice(0, 3).map((session) =>
-                `${session.employee}: open ${Math.round(session.openHours || 0)} h since ${session.date}`).join("; ")}
-              {flagged.length > 3 ? "…" : ""}. Stale sessions are excluded from all totals until they are trimmed or reset.
-            </div>
-          );
-        })()}
-        </>
-      ) : (
-        <section className="metric-grid">
-          <article><span><TrendingUp size={19} /></span><small>Submitted points</small><b>{totalSubmitted.toLocaleString()}</b><p>{filteredRows.length} entries</p></article>
-          <article><span><Award size={19} /></span><small>Approved points</small><b>{totalApproved.toLocaleString()}</b><p>{totalTarget ? Math.round((totalApproved / totalTarget) * 100) : 0}% of target</p></article>
-          <article><span><ClipboardCheck size={19} /></span><small>Jobs delivered</small><b>{totalJobs.toLocaleString()}</b><p>{selectedUsers.length} employees</p></article>
-        </section>
+      <section className="home-board-grid home-board-grid-lean">
+        <article className="home-stat">
+          <span><History size={18} /></span>
+          <div><small>Records in this period</small><b>{counts.total}</b><p>{counts.people} people</p></div>
+        </article>
+        <article className="home-stat">
+          <span><ShieldCheck size={18} /></span>
+          <div><small>Recognition and growth</small><b>{counts.total - counts.concerns}</b>
+            <p>Evaluations, achievements, training</p></div>
+        </article>
+        <article className="home-stat">
+          <span><Target size={18} /></span>
+          <div><small>Concerns raised</small><b>{counts.concerns}</b>
+            <p>Warnings and corrective actions</p></div>
+        </article>
+      </section>
+
+      {draft && (
+        <form className="report-panel" onSubmit={submit}>
+          <div className="section-head">
+            <div><span className="eyebrow">New entry</span><h3>Add to an employee record</h3></div>
+          </div>
+          <div className="access-fields">
+            <label>Employee
+              <select value={draft.uid} onChange={(event) => setDraft({ ...draft, uid: event.target.value })}>
+                {visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+              </select>
+            </label>
+            <label>Record type
+              <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
+                {FORMAL_RECORD_KINDS.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label>Date
+              <input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
+            <label>Title
+              <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                placeholder="Annual review 2026, Site safety certification…" /></label>
+            <label>Outcome (optional)
+              <input value={draft.outcome || ""} onChange={(event) => setDraft({ ...draft, outcome: event.target.value })}
+                placeholder="Exceeds expectations, Promoted to Team Leader…" /></label>
+            <label className="full">Detail (optional)
+              <textarea rows={3} value={draft.detail || ""}
+                onChange={(event) => setDraft({ ...draft, detail: event.target.value })} /></label>
+          </div>
+          <div className="form-actions">
+            <span className="auth-error">{formError}</span>
+            <button type="button" onClick={() => { setDraft(null); setFormError(""); }}>Cancel</button>
+            <button type="submit" className="primary"><Save size={15} /> Save record</button>
+          </div>
+        </form>
       )}
 
       <section className="report-panel">
-        <div className="section-head"><div><span className="eyebrow">Period summary</span><h3>All selected employees together</h3></div><span className="black-badge">{from} to {to}</span></div>
+        <div className="section-head">
+          <div><span className="eyebrow">Record</span><h3>Employee history</h3></div>
+        </div>
         <div className="data-table-wrap">
-          <table className="data-table">
-            <thead>{reportKind === "time"
-              ? <tr><th>Employee</th><th>Department</th><th>Hours</th><th>Sessions</th></tr>
-              : <tr><th>Employee</th><th>Department</th><th>Jobs</th><th>Total</th><th>Approved</th><th>Period Target</th><th>Completion</th></tr>}
-            </thead>
+          <table className="data-table compact-table">
+            <thead><tr>
+              <th>Date</th><th>Employee</th><th>Type</th><th>Title</th><th>Outcome</th><th>Recorded by</th>
+            </tr></thead>
             <tbody>
-              {summaries.map((row) => {
-                const completion = row.target ? Math.round((row.approved / row.target) * 100) : 0;
-                const sessionCount = filteredSessions.filter((session) => session.uid === row.user.id).length;
-                return reportKind === "time"
-                  ? <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td><b>{row.hours.toFixed(2)}</b></td><td>{sessionCount}</td></tr>
-                  : <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.jobs}</td><td>{row.submitted}</td><td><b>{row.approved}</b></td><td>{row.target}</td><td><div className="progress-cell"><div role="progressbar" aria-valuenow={completion} aria-valuemin={0} aria-valuemax={100} aria-label={`${row.user.name} period completion`}><span style={{ width: `${Math.min(100, completion)}%` }} /></div><b>{completion}%</b></div></td></tr>;
-              })}
-              {!summaries.length && <tr><td colSpan={reportKind === "time" ? 4 : 7}><div className="empty compact">No employees match these filters.</div></td></tr>}
+              {filtered.slice(0, 250).map((row) => (
+                <tr key={row.id}>
+                  <td>{String(row.date || "").slice(0, 10)}</td>
+                  <td><b>{nameFor(row.uid)}</b></td>
+                  <td>
+                    <span className={FORMAL_CONCERN_KINDS.includes(String(row.kind))
+                      ? "record-status returned" : "record-status approved"}>{row.kind}</span>
+                  </td>
+                  <td>{row.title}{row.detail ? <small style={{ display: "block", opacity: .7 }}>{row.detail}</small> : null}</td>
+                  <td>{row.outcome || "—"}</td>
+                  <td>{row.recordedBy || "—"}</td>
+                </tr>
+              ))}
+              {!filtered.length && (
+                <tr><td colSpan={6}>
+                  <div className="empty compact">
+                    No formal records in this period. Evaluations, recognition, training and
+                    certifications added here build up an employee&apos;s history over time.
+                  </div>
+                </td></tr>
+              )}
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="history-detail-grid">
-        {reportKind === "time" && <article className="report-panel">
-          <div className="section-head"><div><span className="eyebrow">Attendance detail</span><h3>Clock sessions</h3></div><span className="black-badge">{filteredSessions.length}</span></div>
-          <div className="data-table-wrap">
-            <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Mode</th><th>Clock In</th><th>Clock Out</th><th>Presence</th><th>Break</th><th>Worked</th>{mayAdjust && <th>Adjust</th>}</tr></thead>
-              <tbody>
-                {filteredSessions.slice(0, 250).map((session, index) => <tr key={`${session.uid}-${session.clockIn}-${index}`}><td>{session.date}</td><td><b>{session.employee}</b></td><td>{session.mode}</td><td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>{session.presenceHours.toFixed(2)}</td><td>{session.breakHours ? session.breakHours.toFixed(2) : "—"}</td><td><b>{session.hours.toFixed(2)}</b></td>{mayAdjust && <td>
-                  {editing && editing.uid === session.uid && editing.clockIn === session.clockIn ? (
-                    <div className="session-edit">
-                      <input type="datetime-local" value={editValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setEditValue(event.target.value)} aria-label="New clock-out time" />
-                      <button type="button" className="primary" onClick={() => {
-                        if (trimSession(session.uid, session.clockIn, new Date(editValue).toISOString())) setEditing(null);
-                      }}>Save</button>
-                      <button type="button" onClick={() => setEditing(null)}>Cancel</button>
-                    </div>
-                  ) : (
-                    <div className="session-edit">
-                      <button type="button" onClick={() => {
-                        setEditing({ uid: session.uid, clockIn: session.clockIn });
-                        setEditValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
-                      }}>Trim</button>
-                      <button type="button" className="danger" onClick={() => {
-                        if (window.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
-                      }}>Reset</button>
-                    </div>
-                  )}
-                </td>}</tr>)}
-                {!filteredSessions.length && <tr><td colSpan={mayAdjust ? 9 : 8}><div className="empty compact">No clock sessions in this period.</div></td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </article>}
-        {reportKind === "performance" && <article className="report-panel">
-          <div className="section-head"><div><span className="eyebrow">Performance detail</span><h3>Point records</h3></div><span className="black-badge">{filteredRows.length}</span></div>
-          <div className="data-table-wrap">
-            <table className="data-table compact-table">
-              <thead><tr><th>Date</th><th>Employee</th><th>Job</th><th>Total</th><th>Approved</th><th>Status</th></tr></thead>
-              <tbody>
-                {filteredRows.slice(0, 250).map((row) => <tr key={row.id}><td>{rowDate(row)}</td><td><b>{row.Engineer || "—"}</b></td><td>{String(row["Job Number"] || row.Project || "General")}</td><td>{finiteNumber(row["Submitted Points"])}</td><td>{finiteNumber(row["Approved Points"])}</td><td><span className={`record-status ${String(row.Status || "Draft").toLowerCase().replace(/\s+/g, "-")}`}>{row.Status || "Draft"}</span></td></tr>)}
-                {!filteredRows.length && <tr><td colSpan={6}><div className="empty compact">No point records in this period.</div></td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </article>}
       </section>
     </div>
   );
@@ -13733,9 +13762,15 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
+  const [channelError, setChannelError] = useState("");
+  const [channelSaved, setChannelSaved] = useState("");
   const configured = notifyConfigured();
   const supported = pushSupported();
   const needsHomeScreen = pushNeedsHomeScreen();
+  /* Email alerts are queued only for people with an address on file, and most
+     of the directory signs in by username. Saying so up front beats leaving
+     somebody to wonder why a switch they turned on changed nothing. */
+  const viewerHasEmail = Boolean(user?.email && user.email.includes("@"));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -13794,13 +13829,29 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
       : "Sent to your bell — but this device discarded it without showing anything. That is your operating system, not Larsa Control: check Do Not Disturb, and that your browser is allowed to show notifications in your system notification settings.");
   };
 
+  /* Optimistic, because a switch that waits for a round trip before it moves
+     feels broken. But a save that does not land has to put the switch back
+     where it was and say so — otherwise the screen quietly disagrees with the
+     server, and the person believes they turned email on when they did not. */
   const setPref = async (category: string, push: boolean, mail: boolean) => {
     if (!user?.id || !setup) return;
+    const previous = setup.categories.find((row) => row.id === category);
+    setChannelError("");
     setSetup({
       ...setup,
       categories: setup.categories.map((row) => (row.id === category ? { ...row, push, mail } : row)),
     });
-    await setCategoryPref({ id: user.id, name: user.name }, category, push, mail);
+    const saved = await setCategoryPref({ id: user.id, name: user.name }, category, push, mail);
+    if (!saved) {
+      setSetup((current) => (current ? {
+        ...current,
+        categories: current.categories.map((row) => (row.id === category && previous ? previous : row)),
+      } : current));
+      setChannelError("That change could not be saved. Your previous setting has been put back — check your connection and try again.");
+      return;
+    }
+    setChannelSaved(`${previous?.label || "Notification"} updated.`);
+    window.setTimeout(() => setChannelSaved(""), 2600);
   };
 
   const saveSettings = async (patch: Partial<NonNullable<NotifySetup>["settings"]>) => {
@@ -13888,7 +13939,7 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
       {configured && setup && (
         <>
           <div className="section-head sub">
-            <div><h4>What to be alerted about</h4>
+            <div><h4>Notification channels</h4>
               <small>Turned off here, it still arrives in the bell — it just will not interrupt you.</small></div>
           </div>
           <div className="notify-cats">
@@ -13903,18 +13954,42 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
                     </em>
                   )}
                 </span>
-                <label className="notify-switch">
-                  <input
-                    type="checkbox"
-                    checked={category.push}
-                    aria-label={`Device alerts for ${category.label}`}
-                    onChange={(event) => setPref(category.id, event.target.checked, category.mail)}
-                  />
-                  <i aria-hidden="true" />
-                </label>
+                {/* Two channels, side by side on a wide screen and stacked on a
+                    narrow one. They are genuinely independent: each sends only
+                    its own value, and passes the other through untouched, so
+                    switching one can never move the other. */}
+                <div className="notify-channels">
+                  <label className="notify-switch stacked">
+                    <input
+                      type="checkbox"
+                      checked={category.push}
+                      aria-label={`Push notifications for ${category.label}`}
+                      onChange={(event) => setPref(category.id, event.target.checked, category.mail)}
+                    />
+                    <i aria-hidden="true" />
+                    <span><Smartphone size={13} aria-hidden="true" /> Push</span>
+                  </label>
+                  <label className="notify-switch stacked">
+                    <input
+                      type="checkbox"
+                      checked={category.mail}
+                      aria-label={`Email notifications for ${category.label}`}
+                      onChange={(event) => setPref(category.id, category.push, event.target.checked)}
+                    />
+                    <i aria-hidden="true" />
+                    <span><Mail size={13} aria-hidden="true" /> Email</span>
+                  </label>
+                </div>
               </div>
             ))}
           </div>
+          {!viewerHasEmail && (
+            <p className="notify-hint">
+              Email alerts need an address on your account. Add one under Profile and they will start arriving.
+            </p>
+          )}
+          {channelError && <p className="notify-hint bad" role="alert">{channelError}</p>}
+          {channelSaved && <p className="notify-hint good" role="status">{channelSaved}</p>}
 
           <div className="section-head sub">
             <div><h4>Quiet hours</h4>
