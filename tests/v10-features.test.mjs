@@ -177,24 +177,66 @@ test("drill-down filters appear only when there is something to drill into", () 
   assert.match(css, /\.filter-static \{/);
 });
 
-test("time and output stay apart except on the productivity page", () => {
-  assert.match(page, /label: "Productivity History"/);
-  assert.match(page, /description: "Hours worked against points and jobs delivered, for any period"/);
+/* This page used to be the one place hours and points were shown together,
+   and this test asserted exactly that. It is now the opposite requirement:
+   hours belong to attendance, points belong to Points & Weekly Targets, and
+   this page holds the formal record instead. The test is kept rather than
+   deleted so the reversal is visible in the history. */
+test("Performance History holds the formal record, not hours or points", () => {
+  assert.match(page, /label: "Performance History"/);
+  assert.match(page, /description: "Evaluations, recognition, warnings, promotions, training, and certifications"/);
   // The id is unchanged so existing links and permissions still resolve.
   assert.match(page, /id: "performance-history",/);
-  // Jobs come from the same records as the points, counted once each.
-  assert.match(page, /const jobsIn = \(entries: PerformanceRow\[\]\) => new Set\(/);
-  assert.match(page, /row\["Job Number"\] \|\| row\.Project/);
-  assert.match(page, /<small>Jobs delivered<\/small>/);
+
+  // Whatever else changes, this component must not read the hours or points
+  // arrays. Scoping the check to the component keeps it honest — the same
+  // identifiers are used legitimately all over the rest of the file.
+  const start = page.indexOf("function PerformanceHistory(");
+  const body = page.slice(start, page.indexOf("\n}", page.indexOf("return (", start)));
+  assert.ok(start > 0, "PerformanceHistory component not found");
+  assert.doesNotMatch(body, /ClockSession|clockSessions|presenceHours|breakHours/);
+  assert.doesNotMatch(body, /PerformanceRow|Submitted Points|Approved Points|pointsRows/);
+  assert.doesNotMatch(body, /Total hours|Jobs delivered|Attendance detail|Timesheets/);
+
+  // And it must be reading the formal records instead.
+  assert.match(body, /records: FormalRecord\[\]/);
+  assert.match(page, /const FORMAL_RECORD_KINDS = \[/);
+  assert.match(page, /"Warning", \n?\s*\]|"Corrective action", "Warning",/);
 });
 
-test("the productivity export lines both record types up to one header", () => {
-  const header = page.match(/\["Record Type", "Date", "Employee", "Department", "Hours", "Job Number", "Submitted Points", "Approved Points", "Project \/ Mode", "Status"\]/);
-  assert.ok(header, "export header missing the job number column");
-  // Ten header columns means ten cells in each of the two row shapes.
-  const block = page.slice(page.indexOf("larsa-productivity-"), page.indexOf("larsa-productivity-") + 1400);
-  const sessionRow = block.slice(block.indexOf("\"Clock Session\""), block.indexOf("]),"));
-  assert.equal(sessionRow.split("\n").filter((line) => line.trim().endsWith(",")).length, 10);
+test("removing hours and points from that page does not remove them from the app", () => {
+  // The underlying arrays are untouched and every module that legitimately
+  // consumes them still does. Deleting the data was never the ask.
+  assert.match(page, /function performanceRows\(store/);
+  assert.match(page, /const pointsRows = useMemo\(\(\) => performanceRows\(staffStore\), \[staffStore\]\);/);
+  assert.match(page, /const clockSessions = useMemo\(\(\) => buildClockSessions\(/);
+  // Points & Weekly Targets still receives the points.
+  assert.match(page, /<PerformanceCenter/);
+  // Live presence and the clock still receive the sessions.
+  assert.match(page, /sessions=\{clockSessions\}/);
+  // The formal record is append-only: no delete path exists for it.
+  assert.match(page, /"performance-history": \["view", "add", "edit", "export"\]/);
+  assert.doesNotMatch(page, /"performance-history": \[[^\]]*"delete"/);
+});
+
+/* Replaces the old "productivity export" test. That export interleaved clock
+   sessions and point rows under one ten-column header; both are off this page
+   now, so there is no combined export left to assert. What replaces it is the
+   formal-record export, checked the same way: one header, and every row shape
+   lining up with it. */
+test("the Performance History export matches its header, column for column", () => {
+  const header = ["Date", "Employee", "Kind", "Title", "Outcome", "Detail", "Recorded by"];
+  const block = page.slice(page.indexOf("const exportCsv = () => {"),
+    page.indexOf("larsa-performance-history.csv") + 120);
+  assert.ok(block.includes(JSON.stringify(header).replace(/","/g, '", "').slice(1, -1)),
+    "export header changed without this test being updated");
+  // Seven header columns, seven cells built for each row.
+  const rowShape = block.slice(block.indexOf("filtered.map"), block.indexOf("]);"));
+  const cells = rowShape.split(",").filter((part) => part.trim().length).length;
+  assert.ok(cells >= 7, `expected at least 7 exported cells, counted ${cells}`);
+  assert.match(block, /downloadRows\("larsa-performance-history\.csv"/);
+  // Nothing about hours or points leaks back in through the export.
+  assert.doesNotMatch(block, /Hours|Points|Presence|Break/);
 });
 
 test("every accounting ledger gains totals, a period and a print action", () => {
