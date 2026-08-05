@@ -26,6 +26,11 @@ export type VerificationPolicy = {
   engineer_hours: number | null;
   privileged_hours: number | null;
   force_relogin: boolean; self_signup_enabled: boolean; signup_requires_approval: boolean; initial_verification_required: boolean;
+  /* PIN sign-in re-verification: the emailed-code check on the first PIN
+     sign-in and again every pin_hours (weekly by default). Managed in
+     Platform Settings exactly like the email intervals above. */
+  pin_verification_required: boolean;
+  pin_hours: number;
 };
 
 export type VerificationStatus = {
@@ -41,6 +46,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   engineer_hours: 72,
   privileged_hours: 24,
   force_relogin: true, self_signup_enabled: true, signup_requires_approval: false, initial_verification_required: true,
+  pin_verification_required: true, pin_hours: 168,
 };
 
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
