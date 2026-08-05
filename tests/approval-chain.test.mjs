@@ -123,3 +123,31 @@ test("late points and attendance corrections skip the chain: one authorized revi
   // Leave and schedule requests still read the configured chain.
   assert.match(page, /const configured = flowConfig\[actor\.id\]\?\.\[draft\.type\];/);
 });
+
+test("a request is only announced to the approver it is actually with", () => {
+  /* Naming somebody in a chain is not the same as it being their turn. Every
+     approver used to be notified the moment a request was raised, and asked to
+     act on something decideRequest would refuse them — only the current holder
+     may decide. The later steps are told when the request reaches them, which
+     decideRequest already does when it advances. */
+  const submit = page.slice(page.indexOf("const submitRequest = useCallback"), page.indexOf("Attendance corrections: a forgotten clock"));
+  assert.match(submit, /const approvers = \(store\.users as StaffUser\[\]\)\.filter\(\(row\) => row\.id === flow\[0\]\);/);
+  assert.doesNotMatch(submit, /filter\(\(row\) => flow\.includes\(row\.id\)\)/);
+  // The hand-off to the next approver still happens inside the decision.
+  assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[step \+ 1\]\);/);
+});
+
+test('"need attention" counts only what is genuinely waiting on this person', () => {
+  /* The home badge counted anyone named anywhere in a chain, so approvers two
+     and three were told a request needed them while it sat with approver one.
+     It now mirrors the rule the decision handler enforces, and requires the
+     approve grant — a chainless points or clock correction belongs to whoever
+     holds it, nobody else. */
+  const summary = page.slice(page.indexOf("const queue = !mayApprove"), page.indexOf("const queue = !mayApprove") + 700);
+  assert.match(summary, /if \(request\.status !== "Pending" \|\| request\.uid === viewer\.id\) return false;/);
+  assert.match(summary, /if \(!chain\.length\) return true;/);
+  assert.match(summary, /return chain\[at\] === viewer\.id;/);
+  assert.match(page, /const mayApprove = Boolean\(approvalsGate && hasItemPermission\(viewer, approvalsGate, "approve"\)\);/);
+  // The old "anywhere in the chain" test is gone for good.
+  assert.doesNotMatch(page, /&& request\.flow\.includes\(viewer\.id\)\)\.length;/);
+});

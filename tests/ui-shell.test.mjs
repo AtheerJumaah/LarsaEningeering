@@ -154,13 +154,32 @@ test("Install uses the browser's real install when there is one", () => {
   // The page adopts what the head parked instead of only listening from mount.
   assert.match(page, /__larsaInstall\?\.event/);
   assert.match(page, /"larsa:installable"/);
-  // prompt() is reached from the click, with no await before it.
-  assert.match(page, /const prompt = installPrompt \|\| \(window as WindowWithInstall\)\.__larsaInstall\?\.event \|\| null;/);
-  // Exactly one beforeinstallprompt registration is left in the page.
-  assert.equal((page.match(/window\.addEventListener\("beforeinstallprompt"/g) || []).length, 1,
+  // The parked event is still what the click reaches for first.
+  assert.match(page, /let prompt = installPrompt \|\| bridge\?\.event \|\| null;/);
+  /* Chromium settles on "this can be installed" a moment AFTER load, so a
+     click landing in that gap found nothing and jumped to the written steps —
+     the "sometimes it shows options instead of installing" report. It now
+     waits briefly for the real dialog, and only falls back when the browser
+     has no such API at all (Safari, Firefox), where waiting would add a pause
+     before the only way in. Two seconds sits inside Chrome's five-second user
+     activation window, so the prompt() still counts as coming from the click. */
+  assert.match(page, /prompt = await waitForInstallEvent\(2000\);/);
+  assert.match(page, /if \(!prompt && installApiExists\(\)\) \{/);
+  assert.match(page, /"onbeforeinstallprompt" in window/);
+  // Waiting listens for both shapes: the head script's announcement and a raw late event.
+  assert.match(page, /window\.addEventListener\("larsa:installable", onArrival\);/);
+  assert.match(page, /window\.addEventListener\("beforeinstallprompt", onArrival\);/);
+  // An install that already happened is answered, not met with instructions.
+  assert.match(page, /if \(installed \|\| bridge\?\.installed\) \{/);
+  assert.match(page, /already installed — open it from your home screen/);
+  // Exactly one persistent beforeinstallprompt registration in the effect
+  // (the waiter adds its own only while a click is waiting, and removes it).
+  assert.equal((page.match(/window\.addEventListener\("beforeinstallprompt", onPrompt\)/g) || []).length, 1,
     "the duplicate listener is gone");
-  assert.equal((page.match(/window\.removeEventListener\("beforeinstallprompt"/g) || []).length, 1,
+  assert.equal((page.match(/window\.removeEventListener\("beforeinstallprompt", onPrompt\)/g) || []).length, 1,
     "and it is still cleaned up");
+  assert.match(page, /window\.removeEventListener\("beforeinstallprompt", onArrival\);/,
+    "the waiter must not leave a listener behind");
   /* An install that already happened is the commonest reason the browser stays
      silent. getInstalledRelatedApps can only answer that if the manifest lists
      the app as its own related application, so the button knows to stand down
