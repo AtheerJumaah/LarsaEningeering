@@ -1964,6 +1964,36 @@ function requestStage(record: LeaveRequest): { holder: string | null; step: numb
   return { holder: flow[step] || null, step, total: flow.length };
 }
 
+/* The full decision trail a person can follow: every approver in their chain,
+   in order, and where each one stands — approved, rejected, with-them-now, or
+   still waiting. Derived from the request's own flow/step/status (the same
+   fields the enforced decision writes), enriched with the actual actor and time
+   from history where a step has already been decided. Read-only: this reports
+   what happened, it never changes who may act. Legacy requests with no chain
+   return nothing, so the display simply falls back to the plain status. */
+type ChainStep = { id: string; name: string; state: "approved" | "rejected" | "pending" | "waiting" | "skipped"; at?: string; note?: string };
+function approvalSteps(record: LeaveRequest, nameOf: (id: string) => string): ChainStep[] {
+  const flow = Array.isArray(record.flow) ? record.flow.filter(Boolean) : [];
+  if (!flow.length) return [];
+  const step = Math.max(0, Math.min(Number(record.step) || 0, flow.length - 1));
+  const status = String(record.status || "Pending");
+  const decisions = (Array.isArray(record.history) ? record.history : [])
+    .filter((h) => /approv|reject|declin/i.test(String(h?.action || "")));
+  let d = 0;
+  return flow.map((id, i) => {
+    let state: ChainStep["state"];
+    if (i < step) state = "approved";
+    else if (i === step) state = status === "Approved" ? "approved" : status === "Rejected" ? "rejected" : "pending";
+    else state = status === "Rejected" ? "skipped" : "waiting";
+    const out: ChainStep = { id, name: nameOf(id), state };
+    if (state === "approved" || state === "rejected") {
+      const h = decisions[d++];
+      if (h) { out.at = h.at; out.note = h.note; }
+    }
+    return out;
+  });
+}
+
 // Whole days a request covers, inclusive of both ends.
 function requestDays(request: { from?: string; to?: string; date?: string }) {
   const from = request.from || request.date;
@@ -14002,6 +14032,30 @@ function RequestsCentre({
   const statusChip = (status: string) => (
     <span className={`record-status ${status.toLowerCase()}`}>{status}</span>
   );
+  const nameOfUser = (id: string) => users.find((user) => user.id === id)?.name || id;
+  const stateLabel: Record<ChainStep["state"], string> = {
+    approved: "Approved", rejected: "Rejected", pending: "With them now", waiting: "Waiting", skipped: "—",
+  };
+  const stateMark: Record<ChainStep["state"], string> = {
+    approved: "✓", rejected: "✗", pending: "•", waiting: "·", skipped: "·",
+  };
+  /* The decision trail for one request: each approver and where they stand, so
+     a person can see exactly who has acted and who is still to come. */
+  const chainStrip = (row: LeaveRequest) => {
+    const steps = approvalSteps(row, nameOfUser);
+    if (!steps.length) return null;
+    return (
+      <div className="chain-strip">
+        {steps.map((s, i) => (
+          <div key={`${s.id}-${i}`} className={`chain-step is-${s.state}`} title={s.note || undefined}>
+            <span className="chain-badge" aria-hidden="true">{stateMark[s.state]}</span>
+            <span className="chain-name">{s.name}</span>
+            <span className="chain-state">{stateLabel[s.state]}{s.at ? ` · ${new Date(s.at).toLocaleDateString()}` : ""}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
   /* A late points entry is decided on its contents, so the contents have to be
      on screen. Every other request type is fully described by its dates and
      reason, and renders as before. */
@@ -14088,7 +14142,7 @@ function RequestsCentre({
               <span className="black-badge">{mine.length}</span></div>
             <div className="data-table-wrap">
               <table className="data-table"><thead><tr>
-                <th>Submitted</th><th>Type</th><th>Date</th><th>Days / points</th><th>Detail</th><th>Status</th><th>Decided by</th>
+                <th>Submitted</th><th>Type</th><th>Date</th><th>Days / points</th><th>Detail</th><th>Status</th><th>Approval progress</th>
               </tr></thead><tbody>
                 {mine.map((row) => (
                   <tr key={row.id}>
@@ -14098,7 +14152,7 @@ function RequestsCentre({
                     <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestQuantity(row)}</td>
                     <td>{detailCell(row)}</td>
                     <td>{statusChip(row.status)}</td>
-                    <td>{row.decidedBy || "—"}</td>
+                    <td>{chainStrip(row) || <span className="chain-none">{row.decidedBy || "—"}</span>}</td>
                   </tr>
                 ))}
                 {!mine.length && <tr><td colSpan={7}><div className="empty compact">You have not submitted a request yet.</div></td></tr>}
@@ -14148,7 +14202,7 @@ function RequestsCentre({
                           </>
                         );
                       })()}
-                    </div></td>
+                    </div>{chainStrip(row)}</td>
                   </tr>
                 );
               })}
