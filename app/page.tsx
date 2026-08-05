@@ -6327,11 +6327,16 @@ export default function Home() {
         return false;
       }
       if (!Array.isArray(store.approvals)) store.approvals = [];
-      const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
-      const configured = flowConfig[user.id]?.Performance || flowConfig[user.id]?.Leave;
-      const managerId = (store.users as StaffUser[])
-        .find((entry) => entry.name && user.manager && entry.name.toLowerCase() === user.manager.toLowerCase())?.id;
-      const flow = configured?.length ? configured : [managerId || "u1"];
+      /* Late points do NOT walk an approval chain. A points figure is a
+         records question, not a leave question: it goes straight to the
+         reviewers — anyone GRANTED approve access on Leave & Requests — and a
+         single decision settles it. An empty flow is exactly the single-step
+         path decideRequest has always enforced: whoever may approve, may
+         approve, and the first decision is final. */
+      const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+      const reviewers = (store.users as StaffUser[]).filter((entry) =>
+        entry.enabled !== false && entry.id !== user.id && approvalsGate && hasItemPermission(entry, approvalsGate, "approve"));
+      const flow: string[] = [];
       const bounds = weekBounds(week);
       const record: LeaveRequest = {
         id: `r${Date.now()}`,
@@ -6358,10 +6363,10 @@ export default function Home() {
         title: `${user.name} wants to add points to closed week ${week}`,
         body: `${row["Job Number"] || "Entry"} · ${row["Work Category"]} · ${row["Submitted Points"]} points · ${draft.lateReason.trim()}`,
         itemId: "my-requests", fromName: user.name,
-        recipients: (store.users as StaffUser[]).filter((entry) => flow.includes(entry.id)),
+        recipients: reviewers,
       });
       setStorageTick((value) => value + 1);
-      notify(`Week ${week} is closed, so this entry went to your approver with all of its details.`);
+      notify(`Week ${week} is closed, so this entry went for review — any authorized reviewer can approve it.`);
       return true;
     }
 
@@ -7020,11 +7025,13 @@ export default function Home() {
     if (draft.to <= draft.from) { notify("The end time has to be after the start time."); return false; }
     if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
-    const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
-    const configured = flowConfig[actor.id]?.Leave;
-    const managerId = (store.users as StaffUser[])
-      .find((row) => row.name && actor.manager && row.name.toLowerCase() === actor.manager.toLowerCase())?.id;
-    const flow = configured?.length ? configured : [managerId || "u1"];
+    /* Attendance corrections do NOT walk an approval chain either. A wrong
+       clock-in is a records question: it goes straight to the reviewers —
+       anyone GRANTED approve access on Leave & Requests — and one decision
+       settles and materialises it. Same single-step path as late points. */
+    const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+    const approvers = (store.users as StaffUser[]).filter((row) =>
+      row.enabled !== false && row.id !== actor.id && approvalsGate && hasItemPermission(row, approvalsGate, "approve"));
     const record: LeaveRequest = {
       id: `r${Date.now()}`,
       type: draft.kind,
@@ -7035,14 +7042,13 @@ export default function Home() {
       to: draft.to,
       reason: draft.reason.trim(),
       status: "Pending",
-      flow,
+      flow: [],
       step: 0,
       history: [],
       createdAt: new Date().toISOString(),
     };
     store.approvals.unshift(record);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    const approvers = (store.users as StaffUser[]).filter((row) => flow.includes(row.id));
     raiseNotification({
       event: "clock.correction",
       title: `${draft.kind} correction from ${actor.name}`,
