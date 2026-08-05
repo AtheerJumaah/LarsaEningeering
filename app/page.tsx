@@ -2227,7 +2227,7 @@ function buildHomeSummary(
 
   // --- leave and schedule requests -------------------------------------
   const approvals = Array.isArray(store?.approvals)
-    ? store.approvals as { id?: string; uid?: string; type?: string; status?: string; from?: string; to?: string; date?: string; reason?: string; flow?: string[] }[]
+    ? store.approvals as { id?: string; uid?: string; type?: string; status?: string; from?: string; to?: string; date?: string; reason?: string; flow?: string[]; step?: number }[]
     : [];
   approvals
     .filter((request) => request.uid === viewer.id && request.status === "Pending")
@@ -2243,11 +2243,22 @@ function buildHomeSummary(
         itemId: "staff-approvals",
       });
     });
-  const queue = approvals.filter((request) =>
-    request.status === "Pending"
-    && request.uid !== viewer.id
-    && Array.isArray(request.flow)
-    && request.flow.includes(viewer.id)).length;
+  /* What is genuinely waiting on THIS person, counted the same way the
+     decision handler decides who may act. Being named somewhere in a chain is
+     not the same as it being your turn: approvers two and three used to be
+     told a request needed them while it still sat with approver one, who was
+     the only person the handler would accept. And a chainless request — late
+     points, a clock correction — belongs to whoever holds the approve grant,
+     so it is only counted for them. */
+  const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+  const mayApprove = Boolean(approvalsGate && hasItemPermission(viewer, approvalsGate, "approve"));
+  const queue = !mayApprove ? 0 : approvals.filter((request) => {
+    if (request.status !== "Pending" || request.uid === viewer.id) return false;
+    const chain = Array.isArray(request.flow) ? request.flow.filter(Boolean) : [];
+    if (!chain.length) return true;
+    const at = Math.max(0, Math.min(Number(request.step) || 0, chain.length - 1));
+    return chain[at] === viewer.id;
+  }).length;
   if (queue) {
     reminders.push({
       id: "req-queue",
@@ -4175,6 +4186,9 @@ export default function Home() {
   const dialog = useDialog();
   const [installPrompt, setInstallPrompt] = useState<InstallEvent | null>(null);
   const [installHelp, setInstallHelp] = useState(false);
+  /* True only while waiting for the browser to offer its install dialog, so
+     the button can say it is working instead of looking like a dead click. */
+  const [installBusy, setInstallBusy] = useState(false);
   const [installed, setInstalled] = useState(false);
   const [clock, setClock] = useState({ baghdad: "", texas: "" });
   const [storageTick, setStorageTick] = useState(0);
@@ -6247,12 +6261,56 @@ export default function Home() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  /* Whether this browser has a real install API at all. Chromium fires
+     beforeinstallprompt; Safari and Firefox never will, and no amount of
+     waiting changes that — there the written steps ARE the way in. */
+  const installApiExists = () => typeof window !== "undefined" && "onbeforeinstallprompt" in window;
+
+  /* The browser decides when a site may be installed, and on Chromium it
+     reaches that decision a moment AFTER the page loads — it needs the
+     manifest, the service worker and its own engagement check first. Clicking
+     Install inside that gap found nothing parked and went straight to the
+     manual steps, which is the "sometimes it shows options instead of just
+     installing" people hit. So when the event has not arrived yet, wait a
+     short while for it rather than giving up on the first look.
+
+     Two seconds is deliberate: Chrome keeps a user gesture "active" for five,
+     so the prompt() that follows still counts as coming from the click. */
+  const waitForInstallEvent = (ms: number) => new Promise<InstallEvent | null>((resolve) => {
+    const parked = () => (window as WindowWithInstall).__larsaInstall?.event || null;
+    const already = parked();
+    if (already) { resolve(already); return; }
+    let settled = false;
+    const finish = (value: InstallEvent | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("larsa:installable", onArrival);
+      window.removeEventListener("beforeinstallprompt", onArrival);
+      resolve(value);
+    };
+    /* Both are listened for because the head script parks the event and
+       announces it, while a late one arrives as the raw browser event. */
+    const onArrival = (event: Event) => finish(parked() || (event as InstallEvent));
+    const timer = window.setTimeout(() => finish(null), ms);
+    window.addEventListener("larsa:installable", onArrival);
+    window.addEventListener("beforeinstallprompt", onArrival);
+  });
+
   const install = async () => {
-    /* Prefer the real thing. prompt() must be reached from the click without an
-       await in front of it, or the browser treats the gesture as spent and
-       refuses — so the event is read straight out of state here, never waited
-       for. */
-    const prompt = installPrompt || (window as WindowWithInstall).__larsaInstall?.event || null;
+    const bridge = (window as WindowWithInstall).__larsaInstall;
+    /* Already installed. Offering somebody instructions for something they
+       have already done reads as the app being broken. */
+    if (installed || bridge?.installed) {
+      notify("Larsa Control is already installed — open it from your home screen, Dock, or Start menu.");
+      return;
+    }
+    let prompt = installPrompt || bridge?.event || null;
+    if (!prompt && installApiExists()) {
+      setInstallBusy(true);
+      prompt = await waitForInstallEvent(2000);
+      setInstallBusy(false);
+    }
     if (!prompt) {
       setInstallHelp(true);
       return;
@@ -6267,8 +6325,10 @@ export default function Home() {
       // Single-use and already spent, or refused; the steps still work.
       setInstallHelp(true);
     }
+    /* The event is single-use, so it goes either way. The listeners stay up,
+       so if the browser offers another one it is adopted and the next click
+       installs directly again. */
     setInstallPrompt(null);
-    const bridge = (window as WindowWithInstall).__larsaInstall;
     if (bridge) bridge.event = null;
   };
 
@@ -7028,7 +7088,13 @@ export default function Home() {
     };
     store.approvals.unshift(record);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    const approvers = (store.users as StaffUser[]).filter((row) => flow.includes(row.id));
+    /* Only the approver it is actually WITH is told — the first step of the
+       chain. Telling everybody in the chain at once meant the second and third
+       approvers were asked to act on something that was not theirs yet, and
+       they cannot act on it: decideRequest refuses anyone but the current
+       holder. Each later approver is notified by decideRequest at the moment
+       the request reaches them. */
+    const approvers = (store.users as StaffUser[]).filter((row) => row.id === flow[0]);
     raiseNotification({
       event: "leave.requested",
       title: `${draft.type} request from ${actor.name}`,
@@ -8687,7 +8753,11 @@ export default function Home() {
                 )}
               </div>
             )}
-            {!installed && <button type="button" className="primary" onClick={install}>Install App</button>}
+            {!installed && (
+              <button type="button" className="primary" onClick={install} disabled={installBusy}>
+                {installBusy ? "Opening installer…" : "Install App"}
+              </button>
+            )}
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
