@@ -39,6 +39,8 @@ type Policy = {
   self_signup_enabled: boolean;
   signup_requires_approval: boolean;
   initial_verification_required: boolean;
+  pin_verification_required: boolean;
+  pin_hours: number;
 };
 
 const FALLBACK: Policy = {
@@ -49,12 +51,14 @@ const FALLBACK: Policy = {
   self_signup_enabled: true,
   signup_requires_approval: false,
   initial_verification_required: true,
+  pin_verification_required: true,
+  pin_hours: 168,
 };
 
 async function readPolicy(): Promise<Policy> {
   const { data } = await db
     .from("auth_policy")
-    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required")
+    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours")
     .eq("id", 1)
     .maybeSingle();
   return (data as Policy) || FALLBACK;
@@ -212,6 +216,8 @@ Deno.serve(async (req: Request) => {
     if (typeof policy.initial_verification_required === "boolean") next.initial_verification_required = policy.initial_verification_required;
     next.engineer_hours = policy.engineer_hours === null ? null : Number(policy.engineer_hours) || 72;
     next.privileged_hours = policy.privileged_hours === null ? null : Number(policy.privileged_hours) || 24;
+    if (typeof policy.pin_verification_required === "boolean") next.pin_verification_required = policy.pin_verification_required;
+    if (policy.pin_hours !== undefined) next.pin_hours = Math.max(1, Number(policy.pin_hours) || 168);
 
     const { error } = await db.from("auth_policy").upsert(next, { onConflict: "id" });
     if (error) return json({ ok: false, error: "Could not save the policy." });
