@@ -433,6 +433,24 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .dialog-confirm { background: var(--larsa-accent, #17181b); color: var(--larsa-on-accent, #fff); border-color: transparent; }
 .dialog-confirm.is-danger { background: #be123c; color: #fff; }
 
+/* Point-in-time snapshot viewer (see app/PlatformSettings.tsx). A read-only
+   historical window over one backup; shares the app's theme variables so it
+   reads as part of the app in light and dark. */
+.pit-overlay { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(0,0,0,.56); }
+.pit-card { width: min(940px, 100%); max-height: 88dvh; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 70px rgba(0,0,0,.34); overflow: hidden; }
+.pit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.pit-sub { color: var(--muted); font-weight: 650; }
+.pit-body { padding: 16px 20px; overflow: auto; }
+.pit-section { padding-top: 6px; }
+.pit-section + .pit-section { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+.pit-section h4 { margin: 0 0 6px; font-size: 15px; font-weight: 900; }
+.pit-section h4 small { color: var(--muted); font-weight: 700; margin-left: 6px; }
+.pit-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.pit-actions { display: inline-flex; gap: 8px; }
+.pit-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pit-table th, .pit-table td { text-align: left; padding: 6px 9px; border: 1px solid var(--line); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.pit-table th { background: var(--soft); font-weight: 800; }
+
 .auth-layer {
   position: fixed;
   z-index: 2000;

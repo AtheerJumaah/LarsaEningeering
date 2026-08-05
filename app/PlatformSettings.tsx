@@ -56,6 +56,144 @@ function stripBackupSecrets(data: unknown): unknown {
   }
 }
 
+/* A captured snapshot is one JSON object: every backed-up table becomes an
+   array of its rows under `tables`. The point-in-time viewer reads it directly
+   — nothing is written, and the copy it reads is already secret-stripped by the
+   server (platform_backup_admin_get runs platform_backup_export_data). */
+type SnapshotRow = Record<string, unknown>;
+type SnapshotData = { format?: string; version?: number; captured_at?: string; tables?: Record<string, SnapshotRow[]> };
+
+/* The staff directory lives inside one app_state blob, not its own table. */
+function snapshotStaff(data: SnapshotData): SnapshotRow[] {
+  const appState = data?.tables?.app_state;
+  if (!Array.isArray(appState)) return [];
+  const row = appState.find((r) => (r as { store_key?: string }).store_key === "larsaStaffV8");
+  const users = (row as { data?: { users?: SnapshotRow[] } } | undefined)?.data?.users;
+  return Array.isArray(users) ? users : [];
+}
+
+/* Render any cell — a scalar as text, an object/array as compact JSON — without
+   ever letting one runaway value blow out the row height. */
+function cellText(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    try { const s = JSON.stringify(v); return s.length > 90 ? s.slice(0, 90) + "…" : s; }
+    catch { return "[object]"; }
+  }
+  const s = String(v);
+  return s.length > 140 ? s.slice(0, 140) + "…" : s;
+}
+
+/* A generic, read-only grid for an array of table rows. Columns are the union
+   of keys seen across the rows (capped), rows are capped too, and both caps are
+   surfaced rather than hidden so a big table never reads as if it were small. */
+function DataGrid({ rows }: { rows: SnapshotRow[] }) {
+  if (!rows.length) return <p className="org-none">No rows.</p>;
+  const MAX_COLS = 9, MAX_ROWS = 150;
+  const keySet: string[] = [];
+  for (const r of rows.slice(0, 60)) {
+    for (const k of Object.keys(r || {})) if (!keySet.includes(k)) keySet.push(k);
+  }
+  const cols = keySet.slice(0, MAX_COLS);
+  const extraCols = keySet.length - cols.length;
+  const shown = rows.slice(0, MAX_ROWS);
+  return (
+    <div style={{ overflowX: "auto", marginTop: 6 }}>
+      <table className="pit-table">
+        <thead>
+          <tr>{cols.map((c) => <th key={c}>{c}</th>)}{extraCols > 0 ? <th>+{extraCols}</th> : null}</tr>
+        </thead>
+        <tbody>
+          {shown.map((r, i) => (
+            <tr key={i}>{cols.map((c) => <td key={c} title={cellText(r?.[c])}>{cellText(r?.[c])}</td>)}{extraCols > 0 ? <td>…</td> : null}</tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > MAX_ROWS ? <p className="ps-note">Showing first {MAX_ROWS} of {rows.length} rows. Download the snapshot for the complete data.</p> : null}
+    </div>
+  );
+}
+
+/* The point-in-time window: the platform as it stood when this snapshot was
+   taken. Staff first (the app's heart), then every other table as a collapsible
+   grid. Strictly read-only — a historical view, never an editor. */
+function PointInTimeModal({ row, data, busy, onClose, onDownload }: { row: BackupRow; data: SnapshotData | null; busy: boolean; onClose: () => void; onDownload: () => void }) {
+  const [openTable, setOpenTable] = useState<string | null>(null);
+  const staff = data ? snapshotStaff(data) : [];
+  const tables = data?.tables || {};
+  const tableNames = Object.keys(tables).filter((t) => t !== "app_state").sort();
+  const otherStoreKeys = Array.isArray(tables.app_state)
+    ? (tables.app_state as Array<{ store_key?: string }>).map((r) => r.store_key).filter((k): k is string => Boolean(k) && k !== "larsaStaffV8")
+    : [];
+  const totalRecords = Object.values(tables).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
+  return (
+    <div className="pit-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="pit-card" onClick={(e) => e.stopPropagation()}>
+        <div className="pit-head">
+          <div>
+            <span className="org-eyebrow"><Database size={14} /> Point in time</span>
+            <h3 style={{ margin: "4px 0 0" }}>Platform as of {new Date(row.created_at).toLocaleString()}</h3>
+            <small className="pit-sub">{row.kind === "manual" ? "manual" : "scheduled"} snapshot · {totalRecords} records across {Object.keys(tables).length} tables · read-only</small>
+          </div>
+          <button type="button" className="btn small" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        {!data ? <p className="org-none" style={{ padding: 16 }}>Loading this day&apos;s data…</p> : (
+          <div className="pit-body">
+            <div className="pit-section">
+              <h4>Staff directory <small>({staff.length})</small></h4>
+              {staff.length === 0 ? <p className="org-none">No staff in this snapshot.</p> : (
+                <div style={{ overflowX: "auto" }}>
+                  <table className="pit-table">
+                    <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Department</th><th>Enabled</th></tr></thead>
+                    <tbody>
+                      {staff.map((u, i) => (
+                        <tr key={i}>
+                          <td>{cellText(u.name)}</td>
+                          <td>{cellText(u.email)}</td>
+                          <td>{cellText(u.access)}</td>
+                          <td>{cellText(u.department)}</td>
+                          <td>{u.enabled === false ? "no" : "yes"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="pit-section">
+              <h4>Accounting, payroll &amp; operations</h4>
+              <p className="ps-note" style={{ marginTop: 2 }}>Every backed-up table as it was that day. Open one to read its records.</p>
+              <ul className="org-people" style={{ marginTop: 6 }}>
+                {tableNames.map((t) => {
+                  const arr = Array.isArray(tables[t]) ? tables[t] : [];
+                  const isOpen = openTable === t;
+                  return (
+                    <li key={t} style={{ flexDirection: "column", alignItems: "stretch" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                        <span><b>{t}</b><small>{arr.length} record{arr.length === 1 ? "" : "s"}</small></span>
+                        <button type="button" className="btn small" disabled={arr.length === 0} onClick={() => setOpenTable(isOpen ? null : t)}>{isOpen ? "Hide" : "Open"}</button>
+                      </div>
+                      {isOpen ? <DataGrid rows={arr} /> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+              {otherStoreKeys.length ? <p className="ps-note">Also captured in app settings: {otherStoreKeys.join(", ")}.</p> : null}
+            </div>
+          </div>
+        )}
+
+        <div className="pit-foot">
+          <button type="button" className="btn small" disabled={busy || !data} onClick={onDownload}><DownloadCloud size={13} /> Download this snapshot</button>
+          <button type="button" className="org-add" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   if (!supabaseConfigured()) return null;
   const client = getSupabaseClient();
@@ -102,6 +240,11 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupMsg, setBackupMsg] = useState("");
   const [backupEmail, setBackupEmail] = useState("");
+
+  /* Point-in-time viewing: which snapshot is open, and its loaded data. */
+  const [pitRow, setPitRow] = useState<BackupRow | null>(null);
+  const [pitData, setPitData] = useState<SnapshotData | null>(null);
+  const [pitBusy, setPitBusy] = useState(false);
 
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
@@ -180,6 +323,20 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }
+
+  /* Open a snapshot for reading. The server returns it already stripped of
+     password and PIN hashes, so the historical view can never expose them. */
+  async function openPointInTime(row: BackupRow) {
+    const who = viewer?.email || "";
+    const client = getSupabaseClient();
+    if (!who || !client) return;
+    setPitRow(row); setPitData(null); setPitBusy(true);
+    const r = await client.rpc("platform_backup_admin_get", { p_actor_email: who, p_id: row.id });
+    setPitBusy(false);
+    if (r.error || !r.data) { setBackupMsg("Could not open that snapshot."); setPitRow(null); return; }
+    setPitData(r.data as SnapshotData);
+  }
+  function closePointInTime() { setPitRow(null); setPitData(null); }
 
   useEffect(() => { refresh(); loadBackups(); }, []);
 
@@ -413,7 +570,10 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
                   <b>{new Date(b.created_at).toLocaleString()}</b>
                   <small>{b.kind === "manual" ? "manual" : "scheduled"} · {Math.max(1, Math.round(b.byte_size / 1024))} KB · {Object.values(b.table_counts || {}).reduce((sum, c) => sum + Number(c || 0), 0)} records</small>
                 </span>
-                <button type="button" className="btn small" disabled={backupBusy} onClick={() => downloadBackup(b)}><DownloadCloud size={13} /> Download</button>
+                <span className="pit-actions">
+                  <button type="button" className="btn small" disabled={backupBusy || pitBusy} onClick={() => openPointInTime(b)}><Database size={13} /> View</button>
+                  <button type="button" className="btn small" disabled={backupBusy} onClick={() => downloadBackup(b)}><DownloadCloud size={13} /> Download</button>
+                </span>
               </li>
             ))}
           </ul>
@@ -455,6 +615,16 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           <button type="button" className="org-add" disabled={busy || !code.trim()} onClick={confirm}>Confirm</button>
           <button type="button" className="btn small" disabled={busy} onClick={() => { setPending(null); setCode(""); setMessage(""); }}>Cancel</button>
         </div>
+      ) : null}
+
+      {pitRow ? (
+        <PointInTimeModal
+          row={pitRow}
+          data={pitData}
+          busy={pitBusy}
+          onClose={closePointInTime}
+          onDownload={() => pitRow && downloadBackup(pitRow)}
+        />
       ) : null}
     </div>
   );
