@@ -161,10 +161,52 @@ export async function subscribeToPush(staffUid: string, staffName?: string): Pro
   }
 }
 
-/* Used both by "turn alerts off on this device" and by signing out. Both halves
- * matter: unsubscribing without deleting the row leaves the sender pushing at a
- * dead endpoint forever, and deleting without unsubscribing leaves the browser
- * holding a subscription nothing will ever use. */
+/* Hands this browser's EXISTING subscription to whoever just signed in.
+ *
+ * Alerts belong to the person, and a person who switched them on expects them
+ * to stay on — signing out used to cancel them, so everybody had to turn them
+ * back on after every routine sign-out, which is not something anybody asked
+ * for. They stay on now, and this is what keeps that safe on a shared machine:
+ * the endpoint identifies the BROWSER, so when a different person signs in it
+ * is re-registered to them and push_subscriptions moves the row (it conflicts
+ * on endpoint and takes the new staff_uid). The previous account stops
+ * receiving on hardware it no longer sits in front of, without anybody losing
+ * their alerts.
+ *
+ * Silent by design: it never asks for permission and never creates a
+ * subscription. If this browser has none, or permission was never granted,
+ * there is nothing to hand over and it does nothing. */
+export async function adoptPushSubscription(staffUid: string, staffName?: string): Promise<void> {
+  if (!pushSupported() || !staffUid) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    const json = subscription.toJSON();
+    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) return;
+    const client = getSupabaseClient();
+    if (!client) return;
+    const device = describeThisDevice();
+    await client.rpc("notify_register_device", {
+      actor: { id: staffUid, name: staffName || "" },
+      p_endpoint: json.endpoint,
+      p_p256dh: json.keys.p256dh,
+      p_auth: json.keys.auth,
+      p_label: device.label,
+      p_ua: navigator.userAgent || "",
+      p_platform: device.platform,
+    });
+  } catch {
+    /* Alerts simply stay with whoever held them; sign-in must not fail here. */
+  }
+}
+
+/* Used by "turn alerts off on this device" — the one place that is a real
+ * decision by the person. Both halves matter: unsubscribing without deleting
+ * the row leaves the sender pushing at a dead endpoint forever, and deleting
+ * without unsubscribing leaves the browser holding a subscription nothing will
+ * ever use. */
 export async function unsubscribeFromPush(staffUid?: string): Promise<void> {
   if (!pushSupported()) return;
   try {
