@@ -34,6 +34,25 @@ test("a company-domain signup auto-approves; anything else is created disabled a
   assert.match(access, /notifyAdminsOfPendingAccount\(created, list\);/);
 });
 
+test("signup asks for an Employee PIN, refuses duplicates, and stores it hashed", async () => {
+  const access = await read("app/AccountAccess.tsx");
+  // The field: required, digits only, 4 to 8 of them, never autofilled.
+  assert.match(access, /Employee PIN/);
+  assert.match(access, /pattern="\\d\{4,8\}"/);
+  assert.match(access, /setPin\(event\.target\.value\.replace\(\/\\D\/g, ""\)\)/);
+  // Format is validated before any code is emailed.
+  assert.match(access, /if \(!\/\^\\d\{4,8\}\$\/\.test\(pin\)\) \{\s*setError\("Choose an Employee PIN of 4 to 8 digits\."\);/);
+  // Uniqueness is checked twice — on the details screen, and again against a
+  // freshly read list at the moment the account is written, because PIN
+  // sign-in takes the first match and a duplicate signs one person in as
+  // another.
+  assert.match(access, /await pinTakenByOther\(users, pin, undefined\)/);
+  assert.match(access, /if \(await pinTakenByOther\(list, pin, undefined\)\) \{/);
+  // Stored only as a hash, exactly like the password beside it.
+  assert.match(access, /pin: await hashPin\(pin\),/);
+  assert.doesNotMatch(access, /pin: pin[,}]/);
+});
+
 test("the domain check is exact-match, not a suffix match (anti-spoofing)", async () => {
   const access = await read("app/AccountAccess.tsx");
   assert.match(access, /function domainOf\(email: string\) \{\s*return normalise\(email\)\.split\("@"\)\[1\] \|\| "";\s*\}/);
