@@ -86,11 +86,15 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
       setPolicy(p.policy as Policy);
       setDraft(p.policy as Policy);
     }
-    const a = await call({ op: "platformAdmins" });
+    /* These three are admin-only on the server now, so they carry the actor.
+       The policy read above stays open — sign-in needs it before anyone has
+       an identity to assert. */
+    const who = viewer?.email || "";
+    const a = await call({ op: "platformAdmins", actorEmail: who });
     if (a && a.ok) setAdmins((a.rows as AdminRow[]) || []);
-    const e = await call({ op: "exemptions" });
+    const e = await call({ op: "exemptions", actorEmail: who });
     if (e && e.ok) setExemptions((e.rows as ExemptionRow[]) || []);
-    const l = await call({ op: "audit" });
+    const l = await call({ op: "audit", actorEmail: who });
     if (l && l.ok) setAuditRows((l.rows as AuditRow[]) || []);
   }
 

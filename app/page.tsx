@@ -4127,6 +4127,9 @@ export default function Home() {
     development: [],
   });
   const uploadRef = useRef<HTMLInputElement>(null);
+  // Guards saveMyPoints against a double-click producing two performance rows —
+  // the same 1.2s window punchClock uses for the same reason.
+  const lastPointsSaveRef = useRef(0);
   const staffRef = useRef<HTMLIFrameElement>(null);
   const hrRef = useRef<HTMLIFrameElement>(null);
   const accountingRef = useRef<HTMLIFrameElement>(null);
@@ -6089,6 +6092,12 @@ export default function Home() {
       notify("The performance area is still loading. Please try again.");
       return false;
     }
+    /* Same double-tap guard punchClock uses, and for the same reason: a row
+       written here has no save timestamp of its own to check on the way back
+       out of storage, so the window has to be held on the way in instead. */
+    const saveNow = Date.now();
+    if (saveNow - lastPointsSaveRef.current < 1200) return false;
+    lastPointsSaveRef.current = saveNow;
     /* Points belong to the week the work was completed in, not the week it
        happens to be typed in -- otherwise a Monday morning catch-up lands in
        the wrong week and the lock means nothing. */
