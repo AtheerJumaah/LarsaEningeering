@@ -81,8 +81,11 @@ test("a brand-new email-based account cannot be created directly by an admin", a
 
 test("deleting an account always asks for confirmation first — employee or Viewer", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /window\.confirm\(`Delete the sign-in account for \$\{target\.name\}\? Historical work records will be kept\.`\)/);
-  assert.match(page, /window\.confirm\(`Delete the Viewer account for \$\{draft\.displayName \|\| draft\.username\}\? They will immediately lose access, and this cannot be undone\.`\)/);
+  /* The confirmation moved from window.confirm to the app's own dialog (see
+     app/Dialog.tsx) so it renders inside the app — the await keeps the same
+     ask-first contract this test exists to protect. */
+  assert.match(page, /await dialog\.confirm\(`Delete the sign-in account for \$\{target\.name\}\? Historical work records will be kept\.`\)/);
+  assert.match(page, /await dialog\.confirm\(`Delete the Viewer account for \$\{draft\.displayName \|\| draft\.username\}\? They will immediately lose access, and this cannot be undone\.`\)/);
 });
 
 test("every account-lifecycle action is logged, and the log never carries a secret", async () => {
