@@ -21,6 +21,7 @@
  * only, one browser at a time. Nothing about the app breaks either way. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
+import { mergeStoreText } from "./merge";
 
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
    itself reads and writes (see STORE_KEY in public/engines/accounting.html).
@@ -95,10 +96,45 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 
   async function pushKey(key: SyncedKey) {
     const raw = localStorage.getItem(key);
-    if (raw === lastKnown.get(key)) return; // nothing new since our last push
-    lastKnown.set(key, raw ?? "");    /* Refuse to publish work computed from a stale copy. If the shared row has       moved since this device last saw it, take the newer copy instead of       flattening it. The local edit is dropped, which is the right way round:       it was derived from data that is no longer true, and a lost keystroke is       recoverable in a way that a reverted staff table is not. */    const seenAt = lastSeenAt.get(key);    const { data: current } = await supabase      .from("app_state")      .select("data, updated_at")      .eq("store_key", key)      .maybeSingle();    if (current && current.updated_at && seenAt && String(current.updated_at) > seenAt) {      console.warn("[larsa-sync] " + key + " changed elsewhere; taking the newer copy instead of overwriting it");      try {        originalSetItem(key, JSON.stringify(current.data));        lastKnown.set(key, JSON.stringify(current.data));        lastSeenAt.set(key, String(current.updated_at));        options.onRemoteChange?.(key);      } catch {        /* Leaving local as it is only means this device stays behind. */      }      return;    }
+    /* The copy this device and the server last agreed on — captured before
+       lastKnown moves on, because it is the base any merge below needs. */
+    const base = lastKnown.get(key) ?? null;
+    if (raw === base) return; // nothing new since our last push
+    lastKnown.set(key, raw ?? "");    /* Refuse to publish work computed from a stale copy. If the shared row has       moved since this device last saw it, take the newer copy instead of       flattening it. The local edit is dropped, which is the right way round:       it was derived from data that is no longer true, and a lost keystroke is       recoverable in a way that a reverted staff table is not. */    /* The shared row may have moved since this device last saw it — somebody
+       else saved something in the meantime. Publishing our copy as-is would
+       flatten their work; discarding ours (what this used to do) threw away a
+       just-created account or a freshly verified device, which is exactly the
+       "no account found" and "asks for a code every time" people reported.
+       Neither is acceptable, so the two versions are MERGED against the copy
+       they both came from and the merge is what gets published. */
+    const seenAt = lastSeenAt.get(key);
+    const { data: current } = await supabase
+      .from("app_state")
+      .select("data, updated_at")
+      .eq("store_key", key)
+      .maybeSingle();
+    let outgoingText = raw;
+    if (current && current.updated_at && seenAt && String(current.updated_at) > seenAt) {
+      console.warn("[larsa-sync] " + key + " changed elsewhere; merging both copies");
+      try {
+        const merged = mergeStoreText(base, raw, current.data);
+        outgoingText = JSON.stringify(merged);
+        originalSetItem(key, outgoingText);
+        lastKnown.set(key, outgoingText);
+        options.onRemoteChange?.(key);
+      } catch {
+        /* A merge that cannot be computed must not publish a half-state: keep
+           the copy everyone else already has and let this device catch up. */
+        const remoteText = JSON.stringify(current.data);
+        originalSetItem(key, remoteText);
+        lastKnown.set(key, remoteText);
+        lastSeenAt.set(key, String(current.updated_at));
+        options.onRemoteChange?.(key);
+        return;
+      }
+    }
     const stamp = new Date().toISOString();    let parsed: unknown = {};
-    try { parsed = raw ? JSON.parse(raw) : {}; } catch { return; }
+    try { parsed = outgoingText ? JSON.parse(outgoingText) : {}; } catch { return; }
     await supabase
       .from("app_state")
       .upsert({ store_key: key, data: parsed, updated_at: stamp }, { onConflict: "store_key" });    lastSeenAt.set(key, stamp);
@@ -176,10 +212,27 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           if (!row?.store_key || !(SYNCED_KEYS as readonly string[]).includes(row.store_key)) return;
           const text = JSON.stringify(row.data ?? {});
           if (lastKnown.get(row.store_key) === text) return; // our own write, echoed back
+          /* An edit made here in the last moment may not have been pushed yet
+             (writes are debounced), so this arrival is merged in rather than
+             pasted over the top — the same reason pushKey merges. */
+          const base = lastKnown.get(row.store_key) ?? null;
+          const localText = localStorage.getItem(row.store_key);
+          let nextText = text;
+          if (localText && localText !== base) {
+            try { nextText = JSON.stringify(mergeStoreText(base, localText, row.data ?? {})); }
+            catch { nextText = text; }
+          }
+          /* lastKnown tracks what the SERVER holds, not what we now hold: it
+             is the base for the next merge and the echo check. Setting it to
+             the merged text instead would make the push below look like a
+             no-op and the merge would never leave this device. */
           lastKnown.set(row.store_key, text);
-          originalSetItem(row.store_key, text);
+          originalSetItem(row.store_key, nextText);
           console.log(`[larsa-sync] realtime change received for "${row.store_key}"`);
           options.onRemoteChange?.(row.store_key as SyncedKey);
+          /* If the merge produced something the server has not got, publish it
+             so the other devices converge instead of quietly diverging. */
+          if (nextText !== text) schedulePush(row.store_key as SyncedKey);
         },
       )
       .subscribe((status, err) => {
