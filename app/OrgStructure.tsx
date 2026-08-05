@@ -14,6 +14,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useDialog } from "./Dialog";
 import { GripVertical, Plus, X } from "lucide-react";
 import {
   assignableTo,
@@ -44,6 +45,7 @@ export function OrgStructure({
   onSaved?: () => void;
 }) {
   const [tick, setTick] = useState(0);
+  const dialog = useDialog();
   const [note, setNote] = useState("");
   const [dragDep, setDragDep] = useState("");
   const [overDep, setOverDep] = useState("");
@@ -118,13 +120,13 @@ export function OrgStructure({
     setOverTeam("");
   }
 
-  function addDepartment() {
-    const name = window.prompt("Department name");
+  async function addDepartment() {
+    const name = await dialog.prompt("Department name");
     if (!name || !name.trim()) return;
     save({ ...chart, departments: [...chart.departments, { id: newId("dep"), name: name.trim(), headIds: [] }] }, "Department added.");
   }
-  function addTeam(departmentId: string) {
-    const name = window.prompt("Team name");
+  async function addTeam(departmentId: string) {
+    const name = await dialog.prompt("Team name");
     if (!name || !name.trim()) return;
     save({ ...chart, teams: [...chart.teams, { id: newId("team"), departmentId, name: name.trim(), leadIds: [], memberIds: [] }] }, "Team added.");
   }
@@ -134,12 +136,12 @@ export function OrgStructure({
   function setTeamField(team: Team, field: "leadIds" | "memberIds", ids: string[]) {
     save({ ...chart, teams: chart.teams.map((row) => (row.id === team.id ? { ...row, [field]: ids } : row)) }, "Saved.");
   }
-  function removeTeam(team: Team) {
-    if (!window.confirm("Remove " + team.name + "?")) return;
+  async function removeTeam(team: Team) {
+    if (!(await dialog.confirm("Remove " + team.name + "?"))) return;
     save({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id) }, "Team removed.");
   }
-  function removeDepartment(department: Department) {
-    if (!window.confirm("Remove " + department.name + " and its teams?")) return;
+  async function removeDepartment(department: Department) {
+    if (!(await dialog.confirm("Remove " + department.name + " and its teams?"))) return;
     save({ departments: chart.departments.filter((row) => row.id !== department.id), teams: chart.teams.filter((row) => row.departmentId !== department.id) }, "Department removed.");
   }
 

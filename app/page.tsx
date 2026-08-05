@@ -13,7 +13,7 @@ import {
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog";
 import {
   ArrowLeft,
   ArrowRight,
@@ -4099,6 +4099,7 @@ export default function Home() {
   const [openAccountingGroup, setOpenAccountingGroup] = useState("");
   const [dark, setDark] = useState(false);
   const [message, setMessage] = useState("");
+  const dialog = useDialog();
   const [installPrompt, setInstallPrompt] = useState<InstallEvent | null>(null);
   const [installHelp, setInstallHelp] = useState(false);
   const [installed, setInstalled] = useState(false);
@@ -6429,7 +6430,7 @@ export default function Home() {
     return true;
   }, [notify]);
 
-  const autoBuildWeek = useCallback((settings: BuildSettings = DEFAULT_BUILD) => {
+  const autoBuildWeek = useCallback(async (settings: BuildSettings = DEFAULT_BUILD) => {
     const actor = sessionUserRef.current;
     const scheduleItem = ITEMS.find((item) => item.id === "staff-schedule");
     const mayManage = Boolean(actor && scheduleItem && hasItemPermission(actor, scheduleItem, "manage"));
@@ -6442,7 +6443,7 @@ export default function Home() {
       notify("The staff directory is still loading.");
       return false;
     }
-    if (!window.confirm("Rebuild this week's schedule using the current build rules? Days you have already set will be replaced.")) return false;
+    if (!(await dialog.confirm("Rebuild this week's schedule using the current build rules? Days you have already set will be replaced."))) return false;
     const staff = (store.users as StaffUser[]).filter((user) => user.enabled !== false);
     const previous = (store.schedule || {}) as Record<string, Record<string, { code?: string }[]>>;
     store.schedule ||= {};
@@ -7105,7 +7106,7 @@ export default function Home() {
     return true;
   };
 
-  const deleteDevelopment = (recordId: string) => {
+  const deleteDevelopment = async (recordId: string) => {
     const actor = sessionUserRef.current;
     const current = growthStore.development.find((record) => record.id === recordId);
     if (!actor || !current || !hasItemPermission(actor, DEVELOPMENT_ITEM, "delete")) {
@@ -7116,7 +7117,7 @@ export default function Home() {
       notify("That employee is outside your data scope.");
       return false;
     }
-    if (!window.confirm(`Delete "${current.title}" for ${current.employeeName}?`)) return false;
+    if (!(await dialog.confirm(`Delete "${current.title}" for ${current.employeeName}?`))) return false;
     saveGrowthStore({
       ...growthStore,
       development: growthStore.development.filter((record) => record.id !== recordId),
@@ -7296,7 +7297,7 @@ export default function Home() {
     return true;
   };
 
-  const deleteAccessUser = (target: StaffUser) => {
+  const deleteAccessUser = async (target: StaffUser) => {
     const actor = sessionUserRef.current;
     if (!actor || !hasItemPermission(actor, ACCESS_ITEM, "delete")) {
       notify("Your account cannot delete user accounts.");
@@ -7306,7 +7307,7 @@ export default function Home() {
       notify("The protected owner account cannot be deleted.");
       return false;
     }
-    if (!window.confirm(`Delete the sign-in account for ${target.name}? Historical work records will be kept.`)) {
+    if (!(await dialog.confirm(`Delete the sign-in account for ${target.name}? Historical work records will be kept.`))) {
       return false;
     }
     const store = parseStore("larsaStaffV8");
@@ -9949,8 +9950,9 @@ function DevelopmentPortal({
     note?: string,
   ) => boolean;
   reviewRecord: (recordId: string, status: "Approved" | "Returned", note?: string) => boolean;
-  deleteRecord: (recordId: string) => boolean;
+  deleteRecord: (recordId: string) => boolean | Promise<boolean>;
 }) {
+  const dialog = useDialog();
   const availableScopes = useMemo(() => scopesAvailableTo(viewer, users), [viewer, users]);
   /* Opens at the widest scope the viewer has, which is what "all visible
      employees" used to mean — so managers land on the same population as
@@ -10176,7 +10178,7 @@ function DevelopmentPortal({
               <div className="development-actions">
                 {canEdit && record.status !== "Approved" && !editing && <button type="button" onClick={() => beginProgress(record)}><Pencil size={15} /> Update Progress</button>}
                 {canApprove && record.status !== "Approved" && <button type="button" className="approve" onClick={() => reviewRecord(record.id, "Approved")}><CheckCircle2 size={15} /> Approve</button>}
-                {canApprove && record.status !== "Approved" && <button type="button" onClick={() => reviewRecord(record.id, "Returned", window.prompt("Feedback for the employee (optional):") || "")}><RotateCcw size={15} /> Return</button>}
+                {canApprove && record.status !== "Approved" && <button type="button" onClick={async () => reviewRecord(record.id, "Returned", (await dialog.prompt("Feedback for the employee (optional):")) || "")}><RotateCcw size={15} /> Return</button>}
                 {canDelete && <button type="button" className="danger" onClick={() => deleteRecord(record.id)}><Trash2 size={15} /> Delete</button>}
               </div>
               <details className="record-history">
@@ -11054,6 +11056,7 @@ const PAY_ITEM_TYPES = [
 ];
 
 function PayrollPortal({ viewer, active }: { viewer: StaffUser | null; active: boolean }) {
+  const dialog = useDialog();
   const [tab, setTab] = useState<"runs" | "people" | "commissions">("runs");
   const [data, setData] = useState<PortalData | null>(null);
   const [detail, setDetail] = useState<PortalDetail | null>(null);
@@ -11294,8 +11297,8 @@ function PayrollPortal({ viewer, active }: { viewer: StaffUser | null; active: b
                                       : <span className="pay-status is-paid"><CheckCircle2 size={12} />Paid</span>}
                                       {row.status === "paid" && (
                                         <button type="button" className="btn small" style={{ marginInlineStart: 8 }} disabled={busy}
-                                          onClick={() => {
-                                            const why = window.prompt("Why is this payment being reversed?");
+                                          onClick={async () => {
+                                            const why = await dialog.prompt("Why is this payment being reversed?");
                                             if (why) run("pay_reverse_payment", { p_payment_id: row.id, p_reason: why }, "Payment reversed — the original stays in history.");
                                           }}>Reverse</button>
                                       )}
@@ -11322,8 +11325,8 @@ function PayrollPortal({ viewer, active }: { viewer: StaffUser | null; active: b
                                   onClick={() => run("pay_decide_period", { p_period_id: p.id, p_decision: "approve", p_reason: null },
                                     "Approved — each costed line posted one accounting expense.")}>Approve</button>
                                 <button type="button" className="btn" disabled={busy}
-                                  onClick={() => {
-                                    const why = window.prompt("Why is this run being rejected?");
+                                  onClick={async () => {
+                                    const why = await dialog.prompt("Why is this run being rejected?");
                                     if (why) run("pay_decide_period", { p_period_id: p.id, p_decision: "reject", p_reason: why }, "Rejected.");
                                   }}>Reject</button>
                               </>
@@ -11447,8 +11450,8 @@ function PayrollPortal({ viewer, active }: { viewer: StaffUser | null; active: b
                             <button type="button" className="btn small" disabled={busy}
                               onClick={() => run("pay_decide_commission", { p_commission_id: c.id, p_decision: "approve", p_reason: null }, "Commission approved.")}>Approve</button>
                             <button type="button" className="btn small" style={{ marginInlineStart: 6 }} disabled={busy}
-                              onClick={() => {
-                                const why = window.prompt("Why is this commission being rejected?");
+                              onClick={async () => {
+                                const why = await dialog.prompt("Why is this commission being rejected?");
                                 if (why) run("pay_decide_commission", { p_commission_id: c.id, p_decision: "reject", p_reason: why }, "Commission rejected.");
                               }}>Reject</button>
                           </>
@@ -12117,6 +12120,7 @@ function ProjectRoom({
   onBack: () => void;
   notify: (text: string) => void;
 }) {
+  const dialog = useDialog();
   const [store, setStore] = useState<ChatStore>({ version: 1, rooms: [], messages: [], audit: [] });
   const [tab, setTab] = useState<"chat" | "files" | "members" | "audit">("chat");
   const [query, setQuery] = useState("");
@@ -12214,10 +12218,10 @@ function ProjectRoom({
     }
   };
 
-  const remove = (row: ChatMessage) => {
+  const remove = async (row: ChatMessage) => {
     if (!viewer || !moderator) return;
     if (row.locked) { notify("This message is locked as a permanent record. Unlock it first."); return; }
-    if (!window.confirm("Remove this message for everyone? The record of the removal is kept.")) return;
+    if (!(await dialog.confirm("Remove this message for everyone? The record of the removal is kept."))) return;
     const next = chatAudit({
       ...store,
       // A redaction must actually remove the content, not just hide it — the
@@ -12797,13 +12801,14 @@ function AccessCenter({
   projects: AccountingProject[];
   currentUser: StaffUser | null;
   saveUser: (user: StaffUser, isNew: boolean) => boolean;
-  deleteUser: (user: StaffUser) => boolean;
+  deleteUser: (user: StaffUser) => boolean | Promise<boolean>;
   previewUser: (user: StaffUser) => void;
   canCreate: boolean;
   canEdit: boolean;
   canDelete: boolean;
   openEmployeeDetails: () => void;
 }) {
+  const dialog = useDialog();
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<StaffUser | null>(null);
   const [isNew, setIsNew] = useState(false); const [skipInitialVerify, setSkipInitialVerify] = useState(false);
@@ -13103,7 +13108,7 @@ function AccessCenter({
     const previousUser = users.find((user) => user.id === draft.id);
     const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
       logAccountChanges(currentUser, previousUser, securedUser, isNew);
-      if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = window.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
+      if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = await dialog.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
       setIsNew(false);
       setFormError("");
@@ -13163,9 +13168,9 @@ function AccessCenter({
         .filter(Boolean).length
     : 0;
   const canChangeDraft = isNew ? canCreate : canEdit;
-  const removeDraft = () => {
+  const removeDraft = async () => {
     if (!draft || isNew || !canDelete || protectedAccount) return;
-    if (deleteUser(draft)) {
+    if (await deleteUser(draft)) {
       setSelectedId("");
       setDraft(null);
       setIsNew(false);
@@ -13553,6 +13558,7 @@ function ViewerAccountsPanel({
   newPasswordConfirm: string; setNewPasswordConfirm: (value: string) => void;
   projectQuery: string; setProjectQuery: (value: string) => void;
 }) {
+  const dialog = useDialog();
   const [query, setQuery] = useState("");
   const canChangeDraft = isNew ? canCreate : canEdit;
   const actor = { email: currentUser?.email || "", access: currentUser?.access || "" };
@@ -13655,7 +13661,7 @@ function ViewerAccountsPanel({
 
   const removeDraft = async () => {
     if (!draft || isNew || !canDelete) return;
-    if (!window.confirm(`Delete the Viewer account for ${draft.displayName || draft.username}? They will immediately lose access, and this cannot be undone.`)) return;
+    if (!(await dialog.confirm(`Delete the Viewer account for ${draft.displayName || draft.username}? They will immediately lose access, and this cannot be undone.`))) return;
     setBusy(true);
     const result = await callViewerAdmin({ op: "delete", actor, id: draft.id });
     setBusy(false);
@@ -13958,6 +13964,7 @@ function RequestsCentre({
   submit: (draft: { type: string; requestType: string; from: string; to: string; reason: string }) => boolean;
   decide: (id: string, status: "Approved" | "Rejected", note?: string) => boolean;
 }) {
+  const dialog = useDialog();
   const today = dateInputValue(new Date());
   const monthStart = new Date(); monthStart.setDate(1);
   const [tab, setTab] = useState<"mine" | "queue" | "report">("mine");
@@ -14137,7 +14144,7 @@ function RequestsCentre({
                             <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>
                               {total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
                             </button>
-                            <button type="button" onClick={() => decide(row.id, "Rejected", window.prompt("Reason for rejecting (optional):") || "")}>Reject</button>
+                            <button type="button" onClick={async () => decide(row.id, "Rejected", (await dialog.prompt("Reason for rejecting (optional):")) || "")}>Reject</button>
                           </>
                         );
                       })()}
@@ -14814,7 +14821,7 @@ function WeekSchedule({
   saveColours: (colours: Record<string, string>) => boolean;
   saveShiftType: (draft: ShiftType, replacing?: string) => boolean;
   removeShiftType: (code: string) => boolean;
-  autoBuild: (settings: BuildSettings) => boolean;
+  autoBuild: (settings: BuildSettings) => boolean | Promise<boolean>;
   canManageAll: boolean;
   canEditOwn: boolean;
 }) {
@@ -15301,6 +15308,7 @@ function QuickClock({
   development: DevelopmentRecord[];
   store: Record<string, unknown> | null;
 }) {
+  const dialog = useDialog();
   // Shares the schedule's catalogue so an edited shift reads the same here.
   const catalogue = useMemo(() => shiftCatalogue(store), [store]);
   // Same hand-picked shift colours the schedule grid honours.
@@ -15534,8 +15542,8 @@ function QuickClock({
                         setTrimming({ uid: session.uid, clockIn: session.clockIn });
                         setTrimValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
                       }}>Trim</button>
-                      <button type="button" className="danger" onClick={() => {
-                        if (window.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                      <button type="button" className="danger" onClick={async () => {
+                        if (await dialog.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
                       }}>Reset</button>
                     </div>
                   )}

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import "./globals.css"; import "./visual-pass.css"; import { CardTools } from "./CardTools";
+import "./globals.css"; import "./visual-pass.css"; import { CardTools } from "./CardTools"; import { DialogProvider } from "./Dialog";
 
 export const metadata: Metadata = {
   title: "Larsa Control",
@@ -76,7 +76,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>{children}<CardTools /></body>
+      <body><DialogProvider>{children}</DialogProvider><CardTools /></body>
     </html>
   );
 }
