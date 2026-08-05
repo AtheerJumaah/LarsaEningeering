@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { sendMail } from "../lib/supabase/mail"; import { hashPassword } from "../lib/password"; import { loadPolicy, DEFAULT_POLICY } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { hashPassword, hashPin, pinTakenByOther } from "../lib/password"; import { loadPolicy, DEFAULT_POLICY } from "../lib/verification";
 
 /* Only the fields these flows actually touch. page.tsx owns the full StaffUser
    shape; duplicating all of it here would just be a second copy to keep in
@@ -201,6 +201,10 @@ export function AccountAccess({
   const [email, setEmail] = useState(mode === "reset" || mode === "confirm" ? String(currentUser?.email || "") : "");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  /* The quick-access PIN, chosen at sign-up like the password. PIN sign-in
+     identifies the person BY the pin alone, so it must be unique across every
+     account — validated below with the same check the admin editor uses. */
+  const [pin, setPin] = useState("");
   const [code, setCode] = useState("");
 
   /* Read once per mount rather than per keystroke. The duplicate check runs
@@ -250,6 +254,19 @@ export function AccountAccess({
       const problem = passwordProblem();
       if (problem) {
         setError(problem);
+        return;
+      }
+      if (!/^\d{4,8}$/.test(pin)) {
+        setError("Choose an Employee PIN of 4 to 8 digits.");
+        return;
+      }
+      /* A duplicate PIN would sign one person in as another, since PIN sign-in
+         takes the first match — so it is refused here, before any code is sent. */
+      setBusy(true);
+      const taken = await pinTakenByOther(users, pin, undefined);
+      setBusy(false);
+      if (taken) {
+        setError("That PIN is already in use by another account. Choose a different one.");
         return;
       }
     }
@@ -308,6 +325,15 @@ export function AccountAccess({
     const list = store.users;
 
     if (mode === "signup") {
+      /* Re-checked against the freshly read list: somebody else can have signed
+         up with the same PIN between the details screen and this code screen,
+         and this is the moment the account is actually written. */
+      if (await pinTakenByOther(list, pin, undefined)) {
+        setBusy(false);
+        setStage("details");
+        setError("That PIN was just taken by another account. Choose a different one and try again.");
+        return;
+      }
       const company = isCompanyEmail(address);
       const created: AccessUser = {
         id: nextUserId(list),
@@ -316,6 +342,7 @@ export function AccountAccess({
         email: address,
         phone: phone.trim(),
         password: await hashPassword(password),
+        pin: await hashPin(pin),
         access: NEW_ACCOUNT_ACCESS,
         role: "Staff",
         department: "Unassigned",
@@ -486,9 +513,28 @@ export function AccountAccess({
           )}
 
           {mode === "signup" && (
+            <label>
+              Employee PIN
+              <input
+                type={showPass ? "text" : "password"}
+                required
+                inputMode="numeric"
+                minLength={4}
+                maxLength={8}
+                pattern="\d{4,8}"
+                value={pin}
+                onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
+                autoComplete="off"
+                placeholder="4 to 8 digits"
+              />
+            </label>
+          )}
+
+          {mode === "signup" && (
             <p className="auth-hint">
-              A larsaeng.com address activates straight away. Anything else needs an
-              administrator to approve it.
+              Your PIN is your quick sign-in for the clock and your own points — it must
+              be different from everyone else&apos;s. A larsaeng.com address activates
+              straight away. Anything else needs an administrator to approve it.
             </p>
           )}
 
