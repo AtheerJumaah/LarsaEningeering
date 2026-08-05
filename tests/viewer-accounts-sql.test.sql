@@ -192,6 +192,44 @@ begin
   reset role;
 
   -- ----------------------------------------------------------
+  -- Section 3b: viewer_accounts is itself readable under RLS.
+  -- Regression test for the infinite-recursion policy fixed in audit_023.
+  -- The read policy used to ask "is the caller a viewer?" with an INLINE
+  -- subquery against viewer_accounts, so any direct SELECT on the table
+  -- re-entered the policy forever — Postgres 42P17 "infinite recursion
+  -- detected in policy for relation viewer_accounts". Every check above
+  -- reads viewer_accounts only INDIRECTLY, through the SECURITY DEFINER
+  -- is_any_viewer() (which bypasses RLS), so none of them ever tripped it.
+  -- The admin "Users & Access -> Viewer Accounts" panel loads the table
+  -- with a direct `from("viewer_accounts").select("*")`, which is exactly
+  -- the read that recursed — the panel was dead in production until the fix.
+  -- These two checks fail with 42P17 against the old policy and pass now.
+  set local role authenticated;
+  -- A non-viewer employee session (auth.uid() matches no viewer row) must
+  -- list the whole directory for the admin UI — and must not recurse.
+  perform set_config('request.jwt.claim.sub', '', true);
+  select count(*) into n from public.viewer_accounts;
+  perform pg_temp.chk('a non-viewer session lists every viewer account without recursion (the admin directory read)', n = 6);
+
+  -- A viewer session sees only its own row, never another client's — the
+  -- isolation half of the same policy, preserved exactly by the fix.
+  perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
+  select count(*) into n from public.viewer_accounts;
+  perform pg_temp.chk('a viewer session reads exactly one viewer_accounts row (its own), not the whole directory', n = 1);
+  select count(*) into n from public.viewer_accounts where auth_user_id <> viewer_a_uid;
+  perform pg_temp.chk('a viewer session can never see another client''s viewer_accounts row', n = 0);
+  perform set_config('request.jwt.claim.sub', '', true);
+  reset role;
+
+  -- Grants that back the read policy: authenticated may read the directory,
+  -- anon (no session, public key only) may not — so removing the recursion
+  -- does not hand the client list to an unauthenticated caller.
+  select has_table_privilege('authenticated', 'public.viewer_accounts', 'select') into ok;
+  perform pg_temp.chk('authenticated holds SELECT on viewer_accounts (the admin directory read reaches RLS)', ok = true);
+  select has_table_privilege('anon', 'public.viewer_accounts', 'select') into ok;
+  perform pg_temp.chk('anon has NO SELECT on viewer_accounts (fixing the recursion does not expose the client list)', ok = false);
+
+  -- ----------------------------------------------------------
   -- Section 4: viewer_project_summary — the one RPC a Viewer needs that
   -- table-level RLS alone cannot police (it wraps acct_project_summary,
   -- which trusts any caller for any project id).
@@ -223,6 +261,100 @@ begin
   perform pg_temp.chk('a non-viewer authenticated session gets null from viewer_project_summary (it is not the function they should use)',
     public.viewer_project_summary('zz-qa-viewer-prj-a') is null);
   reset role;
+
+  -- ----------------------------------------------------------
+  -- Section 4b: the gap Section 4's own comment named but never tested —
+  -- "acct_project_summary... trusts any caller for any project id". A
+  -- Viewer calling it directly, instead of through viewer_project_summary
+  -- (which strips Larsa's own figures before returning), used to get the
+  -- unstripped object back: gross funding, consultancy fees, company
+  -- profit, for any project by id, or company-wide. Audit fix
+  -- (20260804_audit_022_viewer_rpc_isolation): all five below now refuse a
+  -- genuine Viewer identity; the legitimate viewer_project_summary path,
+  -- just proven working above, has to keep working too, because it now
+  -- marks its own call as an authorized internal one before reaching them.
+  --
+  -- acct.internal_op was set for the whole file at the top of this
+  -- transaction (line 9), which would silently defeat every assertion
+  -- below (the new check is a no-op whenever it is set). Cleared here to
+  -- match what a real RPC call actually sees — PostgREST gives each one
+  -- its own fresh transaction — and restored after, so section 6 and 7
+  -- get back the ambient state they were written against.
+  -- ----------------------------------------------------------
+  perform set_config('acct.internal_op', '', true);
+
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
+
+  begin
+    perform public.acct_project_summary('zz-qa-viewer-prj-a');
+    raise exception 'FAIL: a Viewer called acct_project_summary directly and it did not refuse';
+  exception when others then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+    perform pg_temp.chk('a Viewer calling acct_project_summary directly is refused, even for its own assigned project', sqlerrm like 'ACCT_FORBIDDEN:%');
+  end;
+
+  begin
+    perform public.acct_project_financials('zz-qa-viewer-prj-a');
+    raise exception 'FAIL: a Viewer called acct_project_financials directly and it did not refuse';
+  exception when others then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+    perform pg_temp.chk('...and acct_project_financials refuses it too, not just the summary wrapper', sqlerrm like 'ACCT_FORBIDDEN:%');
+  end;
+
+  begin
+    perform public.acct_company_financials(null, null);
+    raise exception 'FAIL: a Viewer called acct_company_financials directly and it did not refuse';
+  exception when others then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+    perform pg_temp.chk('...and company-wide financials refuse a Viewer too, not just a single project', sqlerrm like 'ACCT_FORBIDDEN:%');
+  end;
+
+  begin
+    perform public.acct_funding_statement('zz-qa-viewer-prj-a', null, null);
+    raise exception 'FAIL: a Viewer called acct_funding_statement directly and it did not refuse';
+  exception when others then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+    perform pg_temp.chk('...and the funding statement, which does not route through acct_project_financials at all', sqlerrm like 'ACCT_FORBIDDEN:%');
+  end;
+
+  begin
+    perform public.acct_compute_refund('zz-qa-viewer-prj-a', null, null);
+    raise exception 'FAIL: a Viewer called acct_compute_refund directly and it did not refuse';
+  exception when others then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+    perform pg_temp.chk('...and the refund calculator, independently reachable on its own', sqlerrm like 'ACCT_FORBIDDEN:%');
+  end;
+  reset role;
+
+  -- The other side of the same guarantee: an ordinary employee session —
+  -- authenticated, but auth.uid() matches no viewer_accounts row, exactly
+  -- like every real employee session today (Section 3 already proved this
+  -- identity reads every project through RLS unfiltered) — must see zero
+  -- change from this fix.
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', '', true);
+  r := public.acct_project_summary('zz-qa-viewer-prj-a');
+  perform pg_temp.chk('an ordinary employee session still gets the full summary directly, unblocked',
+    r is not null and r->>'project_id' = 'zz-qa-viewer-prj-a');
+  select string_agg(k, ',') into keys from jsonb_object_keys(r) k;
+  perform pg_temp.chk('...including the Larsa-only figures a Viewer must never see — the block is Viewer-specific, not a general lockdown',
+    position('larsa_revenue' in keys) > 0);
+  r := public.acct_company_financials(null, null);
+  perform pg_temp.chk('an ordinary employee session still gets company-wide financials directly', r is not null and (r->>'projects')::int >= 2);
+  reset role;
+
+  -- And the legitimate path survives the fix: the same call Section 4
+  -- already proved returns data now has to route through the newly-added
+  -- internal-call marker to reach the same, now-guarded functions.
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', viewer_a_uid::text, true);
+  r := public.viewer_project_summary('zz-qa-viewer-prj-a');
+  perform pg_temp.chk('viewer_project_summary itself still returns data after the fix — the internal-op marker actually bridges the block',
+    r is not null and r->>'project_id' = 'zz-qa-viewer-prj-a');
+  reset role;
+
+  perform set_config('acct.internal_op', '1', true);
 
   -- ----------------------------------------------------------
   -- Section 5: grants — anon (no session at all) is shut out of every

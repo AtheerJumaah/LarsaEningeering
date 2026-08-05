@@ -19,8 +19,14 @@ test("the weekly-points donut can no longer be stretched into a rectangle", () =
 
 test("sign-in tolerates the ways people actually type credentials", () => {
   assert.match(page, /const enteredPass = loginPass\.trim\(\)/);
-  assert.match(page, /String\(row\.password\)\.trim\(\) === enteredPass/);
-  assert.match(page, /String\(row\.pin\)\.trim\(\) === enteredPin/);
+  assert.match(page, /const enteredEmail = loginEmail\.trim\(\)\.toLowerCase\(\)/);
+  /* This used to assert plaintext comparison (String(row.password).trim() ===
+     enteredPass). Passwords are hashed now — the trimmed entry goes through
+     verifyPassword, and PINs through findByPin. The tolerance survives; the
+     insecure comparison it was pinned to does not, and must not return. */
+  assert.match(page, /verifyPassword\(enteredPass, user\.password\)/);
+  assert.match(page, /findByPin\(users, enteredPin\)/);
+  assert.doesNotMatch(page, /String\(row\.password\)\.trim\(\) === enteredPass/);
   // Local part alone must resolve to the account.
   assert.match(page, /account === enteredLocal/);
   // A blank secret must still never sign anybody in.
@@ -171,9 +177,11 @@ test("the switch defaults to the widest scope, matching the old behaviour", () =
 
 test("drill-down filters appear only when there is something to drill into", () => {
   assert.match(page, /\{visibleUsers\.length > 1 && \(\s*\n\s*<label><span>Employee<\/span>/);
-  assert.match(page, /\{departments\.length > 1 && \(\s*\n\s*<label><span>Department<\/span>/);
+  // The department drill-down moved with the dashboard into HierarchyDashboard.
+  assert.match(readFileSync(new URL("../app/HierarchyDashboard.tsx", import.meta.url), "utf8"),
+    /\{departments\.length > 1 \? \(/);
   // A single possible week is stated, not offered.
-  assert.match(page, /\{weeks\.length > 1 \? \(/);
+  assert.match(page, /\{weeks\.length > 1 && \(/);  // became a plain conditional when the single-week caption moved
   assert.match(css, /\.filter-static \{/);
 });
 
@@ -397,7 +405,9 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
   // With no env vars set, the client factory returns null rather than throwing,
   // so every caller can treat "not configured" as one falsy check.
   assert.match(client, /cached = url && anonKey \? createClient\(url, anonKey\) : null;/);
-  assert.match(sync, /if \(typeof window === "undefined" \|\| !supabaseConfigured\(\)\) return \(\) => \{\};/);
+  // The guard split into two lines when the unconfigured branch gained a log.
+  assert.match(sync, /if \(typeof window === "undefined"\) return \(\) => \{\};/);
+  assert.match(sync, /if \(!supabaseConfigured\(\)\) \{/);
   // The parent app only calls in after hydration, and always keeps the cleanup.
   assert.match(page, /const cleanup = initLarsaSync\(\{/);
   assert.match(page, /return cleanup;\s*\n\s*\}, \[hydrated, refs\]\);/);
@@ -456,7 +466,9 @@ test("the Supabase schema matches the app's three real storage keys", () => {
 test("Vercel gets its own build target that leaves next.config.ts untouched", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const config = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
-  assert.equal(pkg.scripts["build:vercel"], "next build");
+  /* The engine-integrity check was added in front deliberately: a build that
+     would ship a broken engine file should fail before Next runs. */
+  assert.equal(pkg.scripts["build:vercel"], "node scripts/check-engines.mjs && next build");
   assert.ok(pkg.dependencies["@supabase/supabase-js"], "missing the Supabase client dependency");
   // Vercel wants the same unmodified output as the Cloudflare default (no
   // `output` override) — this documents that so the two targets don't drift.

@@ -106,7 +106,7 @@ do $$ begin
 end $$;
 EOF
 
-for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql 2>/dev/null | sort); do
+for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql 2>/dev/null | sort); do
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
 done

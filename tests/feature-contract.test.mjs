@@ -37,7 +37,7 @@ test("keeps responsive and installable app contracts", async () => {
   assert.ok(manifest.shortcuts.some((shortcut) => shortcut.url === "/?view=project-portal"));
   assert.ok(manifest.shortcuts.some((shortcut) => shortcut.url === "/?view=quick-clock"));
   assert.ok(manifest.shortcuts.some((shortcut) => shortcut.url === "/?view=my-settings"));
-  assert.match(serviceWorker, /larsa-control-v9/);
+  assert.match(serviceWorker, /const CACHE_NAME = "larsa-control-v\d+";/); // bumped every release, so the format is the contract
 });
 
 test("keeps the embedded staff launcher null-safe before sign-in", async () => {
