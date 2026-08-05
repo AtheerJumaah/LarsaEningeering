@@ -13,6 +13,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { registerBackCloser } from "./backstack";
 
 type DialogKind = "confirm" | "prompt";
 
@@ -100,7 +101,10 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       if (event.key === "Escape") settle(pending?.kind === "confirm" ? false : null);
     }
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    /* The phone's Back button closes an open dialog exactly like Escape does,
+       instead of navigating (or leaving the app) underneath it. */
+    const unregister = registerBackCloser(() => settle(pending?.kind === "confirm" ? false : null));
+    return () => { document.removeEventListener("keydown", onKey); unregister(); };
   }, [pending, settle]);
 
   useEffect(() => {

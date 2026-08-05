@@ -20,6 +20,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, Palette, RotateCcw } from "lucide-react";
+import { registerBackCloser } from "./backstack";
 
 const GRIDS = [
   { selector: ".module-grid:not(.quick-grid)", key: "areas" },
@@ -241,9 +242,12 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
     }
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    /* The phone's Back button dismisses the popover too, before it navigates. */
+    const unregister = registerBackCloser(() => setOpen(false));
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      unregister();
     };
   }, [open]);
 

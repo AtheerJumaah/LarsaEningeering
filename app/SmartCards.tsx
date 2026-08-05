@@ -21,6 +21,7 @@
  * sixth-card gap" against a function than against a rendered page. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { registerBackCloser } from "./backstack";
 
 // ---------------------------------------------------------------- presets
 export const CARD_SIZES = ["standard", "wide", "tall", "large", "full"] as const;
@@ -434,7 +435,10 @@ export function SmartCardGrid({
       finishOnOutside();
     }
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    /* The phone's Back button ends layout editing the same way clicking
+       outside does — keeping a valid arrangement, never navigating mid-edit. */
+    const unregister = registerBackCloser(finishOnOutside);
+    return () => { document.removeEventListener("mousedown", onDown); unregister(); };
   }, [editing, finishOnOutside]);
 
   if (!cards.length) return null;

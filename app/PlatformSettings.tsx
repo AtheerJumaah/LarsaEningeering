@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Database, DownloadCloud, KeyRound, ShieldCheck, UserCog } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
+import { registerBackCloser } from "./backstack";
 
 type Policy = {
   enabled: boolean;
@@ -337,6 +338,13 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     setPitData(r.data as SnapshotData);
   }
   function closePointInTime() { setPitRow(null); setPitData(null); }
+
+  /* The phone's Back button closes the open snapshot window rather than
+     navigating away underneath it. */
+  useEffect(() => {
+    if (!pitRow) return;
+    return registerBackCloser(() => { setPitRow(null); setPitData(null); });
+  }, [pitRow]);
 
   useEffect(() => { refresh(); loadBackups(); }, []);
 

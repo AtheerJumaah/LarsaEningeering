@@ -13,7 +13,7 @@ import {
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
 import {
   ArrowLeft,
   ArrowRight,
@@ -702,6 +702,13 @@ const GROUPS: Group[] = [
       engineItem("hr", "hr-people", "People & Skills", "Employee classifications and skill files", "PS", "people"),
       engineItem("hr", "hr-matrix", "Skills Matrix", "Editable categories and yes/no coverage", "SM", "matrix"),
       DEVELOPMENT_ITEM,
+      /* The approval-chain editor itself lives on the Timeclock engine's Leave
+         & Requests page, where it always has — this entry is the same screen
+         reachable from the people side of the app, because "who approves my
+         requests" is an HR question and nobody could find it before. Same id
+         rules as staff-development: a staff-engine screen listed under HR,
+         with its channel pinned to "hr" in channelForItem. */
+      engineItem("staff", "hr-approval-flow", "Approval Flow", "Who approves each person's leave, schedule, and performance requests", "AF", "approvals"),
       engineItem("hr", "hr-reports", "HR Reports", "Compact HR report and exports", "HR", "reports"),
     ],
   },
@@ -912,6 +919,9 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
   "performance-history": ["view", "add", "edit", "export"],
   "staff-timesheet": VIEW_EXPORT,
   "staff-approvals": ["view", "add", "edit", "delete", "approve", "manage"],
+  /* Same screen as staff-approvals, reached from HR & Skills; its own row here
+     so access to it can be customised independently. */
+  "hr-approval-flow": ["view", "add", "edit", "delete", "approve", "manage"],
   "staff-reports": VIEW_EXPORT,
   "staff-people": FULL_EDIT,
   "staff-rules": FULL_EDIT,
@@ -1090,6 +1100,7 @@ const ICONS: Record<string, LucideIcon> = {
   "org-team-points": TrendingUp,
   "staff-timesheet": FileClock,
   "staff-approvals": CheckCircle2,
+  "hr-approval-flow": CheckCircle2,
   "staff-people": UsersRound,
   "staff-rules": SlidersHorizontal,
   "staff-reports": FileBarChart,
@@ -1736,6 +1747,11 @@ function enginePermissionSnapshot(user: StaffUser, engine: Engine) {
   GROUPS.flatMap((group) => group.items)
     .filter((item) => item.engine === engine && item.section)
     .forEach((item) => {
+      /* Two sidebar entries can point at the same engine page (staff-approvals
+         and hr-approval-flow both open "approvals"). The FIRST one listed is
+         the canonical permission source; a later alias must not overwrite what
+         the engine is told this person may do. */
+      if (result[item.section!]) return;
       result[item.section!] = {};
       permissionActionsFor(item).forEach((action) => {
         result[item.section!]![action] = hasItemPermission(user, item, action);
@@ -1769,6 +1785,7 @@ function channelForItem(item: Item): NavChannel {
   /* Learning and growth belong with skills, not with points. The portal keeps
      its own permissions; this only decides which sidebar it opens beside. */
   if (item.id === "staff-development") return "hr";
+  if (item.id === "hr-approval-flow") return "hr";
   if (
     item.id === "my-points"
     || item.id === "performance-center"
@@ -6065,6 +6082,91 @@ export default function Home() {
     choose(previous, channelForItem(previous), false);
   };
 
+  /* ---- The phone's system Back button. ----------------------------------
+     This is a single-URL app: every screen is React state, so the browser
+     held exactly one history entry and the first system Back closed the app
+     from anywhere. The fix keeps one sentinel entry on top of the stack; a
+     system Back (or an iOS edge-swipe) consumes it, lands here, and the app
+     decides what "back" means before re-arming the sentinel:
+
+       1. an open layer closes first — dialog, snapshot viewer, popover
+          (registered in app/backstack.ts), then the notification bell, the
+          navigation drawer, the install sheet, the accounting gate, or the
+          sign-in sub-screens;
+       2. otherwise the same in-app history the visible Back button uses
+          (goBack) steps to the previous logical screen;
+       3. otherwise, anywhere but Home, it returns to Home;
+       4. on Home (or the sign-in screen) it shows "Press back again to
+          exit" and does NOT re-arm — so a second press within two seconds
+          reaches the browser with nothing left to pop, and the system
+          itself minimizes or leaves the app. If the two seconds lapse, the
+          sentinel is re-armed and the person stays put.
+
+     No screen navigation is duplicated and no second router is created: the
+     sentinel only decides whether a press is handled by the app or released
+     to the system. */
+  const [exitHint, setExitHint] = useState(false);
+  const systemBackRef = useRef<{ armed: boolean; timer: number | null; leaving: number | null }>({ armed: false, timer: null, leaving: null });
+  const armSentinel = () => {
+    try { window.history.pushState({ larsa: "sentinel" }, ""); } catch { /* history unavailable */ }
+  };
+  const handleSystemBack = () => {
+    const flags = systemBackRef.current;
+    /* Mid-departure: keep stepping out through any stale same-document
+       entries a refresh left behind, then hand control to the system. If the
+       app is still visible shortly after, the departure is over — restore
+       normal handling so nobody is ever trapped. */
+    if (flags.leaving !== null) {
+      window.clearTimeout(flags.leaving);
+      flags.leaving = window.setTimeout(() => { flags.leaving = null; armSentinel(); }, 400);
+      try { window.history.back(); } catch { /* nothing to leave through */ }
+      return;
+    }
+    if (popBackCloser()) { armSentinel(); return; }
+    if (bellOpen) { setBellOpen(false); armSentinel(); return; }
+    if (menuOpen) { setMenuOpen(false); armSentinel(); return; }
+    if (installHelp) { setInstallHelp(false); armSentinel(); return; }
+    if (accountingGate) { setAccountingGate(null); armSentinel(); return; }
+    if (!sessionUser && accessMode) { setAccessMode(null); armSentinel(); return; }
+    if (sessionUser && navHistory.length) { goBack(); armSentinel(); return; }
+    if (sessionUser && active.id !== "overview") {
+      choose(ITEMS.find((item) => item.id === "overview") || DEFAULT_ITEM, "home", false);
+      armSentinel();
+      return;
+    }
+    if (flags.timer) { window.clearTimeout(flags.timer); flags.timer = null; }
+    if (flags.armed) {
+      flags.armed = false;
+      setExitHint(false);
+      flags.leaving = window.setTimeout(() => { flags.leaving = null; armSentinel(); }, 400);
+      try { window.history.back(); } catch { /* the system takes it from here */ }
+      return;
+    }
+    flags.armed = true;
+    setExitHint(true);
+    flags.timer = window.setTimeout(() => {
+      flags.armed = false;
+      flags.timer = null;
+      setExitHint(false);
+      armSentinel();
+    }, 2000);
+  };
+  /* The popstate listener is registered once, but the handler reads live
+     state — so the listener calls through a ref that an every-render effect
+     keeps pointing at the freshest closure. */
+  const systemBackHandlerRef = useRef(handleSystemBack);
+  useEffect(() => { systemBackHandlerRef.current = handleSystemBack; });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.history.replaceState({ larsa: "base" }, "");
+      window.history.pushState({ larsa: "sentinel" }, "");
+    } catch { /* private mode or an embedded context without history */ }
+    const onPop = () => systemBackHandlerRef.current();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   const install = async () => {
     /* Prefer the real thing. prompt() must be reached from the click without an
        await in front of it, or the browser treats the gesture as spent and
@@ -8629,6 +8731,7 @@ export default function Home() {
           </section>
         </div>
       )}
+      {exitHint && <div className="exit-hint" role="status" aria-live="polite">Press back again to exit</div>}
     </div>
   );
 }
