@@ -107,11 +107,12 @@ test("the domain check is exact-match, not a suffix match (anti-spoofing)", asyn
   assert.doesNotMatch(access, /domainOf\(email\)\.endsWith\(|domainOf\(email\)\.includes\(/);
 });
 
-test("Users & Access is split into Pending Requests, Active Users, and Viewer Accounts tabs", async () => {
+test("Users & Access is split into Pending, Active, Viewer, and Offboarded tabs", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /const \[tab, setTab\] = useState<"pending" \| "active" \| "viewers">\("active"\);/);
-  assert.match(page, /const pendingUsers = users\.filter\(\(user\) => user\.pendingApproval === true\);/);
-  assert.match(page, /const activeUsers = users\.filter\(\(user\) => user\.pendingApproval !== true && user\.access !== "Client"\);/);
+  assert.match(page, /const \[tab, setTab\] = useState<"pending" \| "active" \| "viewers" \| "offboarded">\("active"\);/);
+  assert.match(page, /const pendingUsers = users\.filter\(\(user\) => user\.pendingApproval === true && user\.offboarded !== true\);/);
+  assert.match(page, /const activeUsers = users\.filter\(\(user\) => user\.pendingApproval !== true && user\.access !== "Client" && user\.offboarded !== true\);/);
+  assert.match(page, /const offboardedUsers = users\.filter\(\(user\) => user\.offboarded === true\);/);
   assert.match(page, /const decidePending = async \(approve: boolean\) => \{/);
   assert.match(page, /<ViewerAccountsPanel/);
 });
@@ -144,13 +145,46 @@ test("a brand-new email-based account cannot be created directly by an admin", a
   assert.match(page, /New email-based accounts are created by the person themselves via Create Account\./);
 });
 
-test("deleting an account always asks for confirmation first — employee or Viewer", async () => {
+test("removing an account always asks for confirmation first — employee or Viewer", async () => {
   const page = await read("app/page.tsx");
-  /* The confirmation moved from window.confirm to the app's own dialog (see
-     app/Dialog.tsx) so it renders inside the app — the await keeps the same
-     ask-first contract this test exists to protect. */
-  assert.match(page, /await dialog\.confirm\(`Delete the sign-in account for \$\{target\.name\}\? Historical work records will be kept\.`\)/);
+  /* Employees are OFFBOARDED, never deleted: the confirmation says so, in the
+     app's own dialog. Viewers remain a真 deletion (a separate Supabase Auth
+     identity with no work history), and their warning still says so. */
+  assert.match(page, /await dialog\.confirm\(`Offboard \$\{target\.name\}\? They lose access immediately, all their history stays viewable, and the account can be restored any time from the Offboarded tab\.`\)/);
   assert.match(page, /await dialog\.confirm\(`Delete the Viewer account for \$\{draft\.displayName \|\| draft\.username\}\? They will immediately lose access, and this cannot be undone\.`\)/);
+});
+
+test("offboarding keeps everything and can be undone; the Offboarded tab shows the history", async () => {
+  const page = await read("app/page.tsx");
+  // Nothing is spliced out of the directory any more — the record is flagged.
+  assert.match(page, /offboarded: true,\s*\n\s*enabled: false,\s*\n\s*pendingApproval: false,\s*\n\s*offboardedAt: new Date\(\)\.toISOString\(\),\s*\n\s*offboardedBy: actor\.name,/);
+  assert.doesNotMatch(page, /store\.users\.splice\(existingIndex, 1\);/);
+  // Schedule and approval-flow config are no longer thrown away on removal.
+  assert.doesNotMatch(page, /if \(store\.schedule\) delete store\.schedule\[target\.id\];/);
+  // The way back, gated and audited like the way out.
+  assert.match(page, /const restoreAccessUser = async \(target: StaffUser\)/);
+  assert.match(page, /logAccountEvent\(actor, "account\.offboarded", target\.id, target\.name/);
+  assert.match(page, /logAccountEvent\(actor, "account\.restored", target\.id, target\.name/);
+  // The tab, its restore button, and the viewable history.
+  assert.match(page, /setTab\("offboarded"\)/);
+  assert.match(page, /Restore account/);
+  assert.match(page, /View history/);
+  // Offboarded people never appear in the active or pending lists.
+  assert.match(page, /user\.pendingApproval !== true && user\.access !== "Client" && user\.offboarded !== true/);
+});
+
+test("a forgotten PIN is reset exactly like a forgotten password: emailed code, then a new unique PIN", async () => {
+  const page = await read("app/page.tsx");
+  const access = await read("app/AccountAccess.tsx");
+  // The entry point on the PIN sign-in tab.
+  assert.match(page, /setAccessMode\("forgotPin"\)/);
+  assert.match(page, /Forgot PIN\?/);
+  // The flow: email first, the new PIN only after the code proves the inbox.
+  assert.match(access, /"signup" \| "forgot" \| "forgotPin" \| "reset" \| "confirm"/);
+  assert.match(access, /\(mode === "forgot" \|\| mode === "forgotPin"\) && !users\.some/);
+  assert.match(access, /if \(mode === "forgotPin"\) \{\s*\n\s*list\[index\] = \{ \.\.\.list\[index\], pin: await hashPin\(pin\), emailVerified: true \};/);
+  // Uniqueness holds on this path too, excluding the account being reset.
+  assert.match(access, /await pinTakenByOther\(users, pin, owner\?\.id\)/);
 });
 
 test("every account-lifecycle action is logged, and the log never carries a secret", async () => {
