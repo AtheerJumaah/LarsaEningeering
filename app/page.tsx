@@ -13,7 +13,7 @@ import {
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen, findDevice } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
 import {
   ArrowLeft,
   ArrowRight,
@@ -115,6 +115,7 @@ type NativeView =
   | "overview"
   | "admin"
   | "access"
+  | "corrections"
   | "data"
   | "myPoints"
   | "quickClock"
@@ -565,6 +566,18 @@ const NOTIFICATIONS_ITEM: Item = {
   code: "NT",
   native: "notifications",
 };
+/* Records go wrong in three ways an ordinary screen cannot fix: a request is
+   routed to the wrong approvers, a points entry carries a wrong figure, or a
+   clock session has the wrong times. This screen is where somebody GRANTED the
+   access puts them right — admins always can; anyone else needs the row ticked
+   in Users & Access, which this item's presence in GROUPS provides. */
+const CORRECTIONS_ITEM: Item = {
+  id: "admin-corrections",
+  label: "Corrections",
+  description: "Fix request approval flows, points entries, and clock records",
+  code: "CX",
+  native: "corrections",
+};
 const PERFORMANCE_CENTER_ITEM: Item = {
   id: "performance-center",
   label: "Points & Weekly Targets",
@@ -753,6 +766,7 @@ const GROUPS: Group[] = [
         code: "AM",
         native: "admin",
       },
+      CORRECTIONS_ITEM,
       {
         id: "platform-settings", label: "Platform Settings", description: "Signup, verification policy, and platform owners", code: "PS", native: "platformSettings" },
       { id: "data", label: "Data Center",
@@ -922,6 +936,10 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
   /* Same screen as staff-approvals, reached from HR & Skills; its own row here
      so access to it can be customised independently. */
   "hr-approval-flow": ["view", "add", "edit", "delete", "approve", "manage"],
+  /* view = see everything; edit = change flows, points, and clock times;
+     delete = remove a clock session outright. Closed to everyone but admins
+     until the row is explicitly ticked in Users & Access. */
+  "admin-corrections": ["view", "edit", "delete"],
   "staff-reports": VIEW_EXPORT,
   "staff-people": FULL_EDIT,
   "staff-rules": FULL_EDIT,
@@ -1103,6 +1121,7 @@ const ICONS: Record<string, LucideIcon> = {
   "hr-approval-flow": CheckCircle2,
   "staff-people": UsersRound,
   "staff-rules": SlidersHorizontal,
+  "admin-corrections": SlidersHorizontal,
   "staff-reports": FileBarChart,
   "staff-backup": Import,
   "hr-dashboard": Gauge,
@@ -1775,6 +1794,7 @@ function channelForItem(item: Item): NavChannel {
     item.id === "admin"
     || item.id === "access"
     || item.id === "data"
+    || item.id === "admin-corrections"
     || ["staff-people", "staff-rules", "staff-backup"].includes(item.id)
   ) return "admin";
   // Sits with payroll, because that is the permission it follows.
@@ -4107,7 +4127,7 @@ export default function Home() {
   // Email verification gate: only engaged when Supabase is configured (it's
   // what actually sends the code) and the account hasn't verified its email
   // yet. Without Supabase this stays entirely out of the way, same as sync.
-  const [verifyStage, setVerifyStage] = useState<{ user: StaffUser; email: string } | null>(null);
+  const [verifyStage, setVerifyStage] = useState<{ user: StaffUser; email: string; method?: SignInMethod } | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [verifyError, setVerifyError] = useState("");
   const [verifyBusy, setVerifyBusy] = useState(false);
@@ -5629,16 +5649,19 @@ export default function Home() {
     } catch { /* Remembering the device is a convenience; sign-in must not fail on it. */ }
     const verifiedUser = { ...verifyStage.user, emailVerified: true, devices: nextDevices };
     const rememberedEmail = verifyStage.email;
+    /* A PIN sign-in that needed a code is still a PIN sign-in: it must finish
+       with the PIN session's own reduced surface, never a full email session. */
+    const rememberedMethod: SignInMethod = verifyStage.method || "email";
     setVerifyStage(null);
     setVerifyCode("");
     setVerifyInfo("");
     try {
-      if (rememberMe) localStorage.setItem(REMEMBER_EMAIL_KEY, rememberedEmail);
-      else localStorage.removeItem(REMEMBER_EMAIL_KEY);
+      if (rememberMe && rememberedMethod === "email") localStorage.setItem(REMEMBER_EMAIL_KEY, rememberedEmail);
+      else if (rememberedMethod === "email") localStorage.removeItem(REMEMBER_EMAIL_KEY);
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    completeSignIn(verifiedUser, "email");
+    completeSignIn(verifiedUser, rememberedMethod);
   };
 
   const resendVerifyCode = async () => {
@@ -5730,6 +5753,32 @@ export default function Home() {
           setVerifyInfo(`We sent a 6-digit code to ${refreshed.email}. Enter it below to finish signing in.`);
         });
         return;
+      }
+    }
+    /* PIN sign-in proves its inbox the same way email sign-in does: the first
+       time (and again every configured period — weekly by default) the person
+       enters an emailed code. Governed by Platform Settings, where the period
+       is set and the whole check can be switched off, exactly like the email
+       policy above. A username-only account with no mailbox is never asked. */
+    if (loginMode === "pin" && supabaseConfigured() && user.email) {
+      const pinPolicy = await loadPolicy();
+      if (pinPolicy.enabled !== false && pinPolicy.pin_verification_required !== false) {
+        const hours = Math.max(1, Number(pinPolicy.pin_hours) || 168);
+        const device = findDevice(user, getDeviceId());
+        const verifiedAt = device?.lastVerified ? new Date(device.lastVerified).getTime() : 0;
+        const pinDue = user.emailVerified !== true || !verifiedAt || Date.now() - verifiedAt >= hours * 3600000;
+        if (pinDue) {
+          setVerifyError("");
+          setVerifyInfo("Sending your verification code…");
+          setVerifyBusy(true);
+          sendVerificationCode(user.email).then((problem) => {
+            setVerifyBusy(false);
+            if (problem) { setVerifyInfo(""); setLoginError(problem); return; }
+            setVerifyStage({ user, email: user.email as string, method: "pin" });
+            setVerifyInfo(`We sent a 6-digit code to ${user.email}. Enter it below to finish signing in.`);
+          });
+          return;
+        }
       }
     }
     try {
@@ -6489,6 +6538,199 @@ export default function Home() {
     const clockItem = ITEMS.find((item) => item.id === "staff-clock");
     if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
       notify("Your account cannot reset attendance records.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
+    const logs = store.logs as ClockLog[];
+    const startedAt = new Date(clockIn).getTime();
+    const ordered = logs
+      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
+      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
+    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
+    const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
+    if (!drop.size) { notify("That session could not be found."); return false; }
+    store.logs = logs.filter((log) => !drop.has(log));
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Session removed.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
+  /* ---- Corrections (see CORRECTIONS_ITEM). Every handler gates on its own
+     permission, writes the same store the engine reads, stamps who fixed what,
+     and refreshes the engine — the identical discipline the clock and review
+     handlers above follow. ---- */
+
+  /* Reroute a pending request to different approvers. The decision itself is
+     untouched — decideRequest still walks whatever flow the request carries —
+     this only changes who that is, and says so in the request's history. */
+  const editRequestFlow = useCallback((id: string, nextFlow: string[]) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "admin-corrections");
+    if (!actor || !item || !hasItemPermission(actor, item, "edit")) {
+      notify("Your account cannot change approval flows.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.approvals)) { notify("Requests are still loading."); return false; }
+    const index = (store.approvals as LeaveRequest[]).findIndex((row) => row.id === id);
+    if (index < 0) { notify("That request could not be found."); return false; }
+    const record = store.approvals[index] as LeaveRequest;
+    if (record.status !== "Pending") { notify("Only a pending request's flow can be changed."); return false; }
+    const clean = nextFlow
+      .filter(Boolean)
+      .filter((uid, at, all) => all.indexOf(uid) === at)
+      .filter((uid) => uid !== record.uid)
+      .filter((uid) => accessUsers.some((user) => user.id === uid && user.enabled !== false))
+      .slice(0, 3);
+    if (!clean.length) { notify("An approval flow needs at least one approver."); return false; }
+    const step = Math.min(Math.max(Number(record.step) || 0, 0), clean.length - 1);
+    const names = clean.map((uid) => accessUsers.find((user) => user.id === uid)?.name || uid);
+    store.approvals[index] = {
+      ...record,
+      flow: clean,
+      step,
+      history: [...(record.history || []), {
+        by: actor.name, action: "Flow changed", at: new Date().toISOString(),
+        note: names.join(" → "),
+      }],
+    };
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Approval flow updated.");
+    return true;
+  }, [notify, refreshStaffEngine, accessUsers]);
+
+  /* Fix the figures on a points entry. Scope-checked like the review handler;
+     every fix stamps who corrected it and when, beside any review stamps. */
+  const fixPerformanceRow = useCallback((rowId: string, patch: { date?: string; hours?: number; submitted?: number; approved?: number; status?: string; notes?: string }) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "admin-corrections");
+    if (!actor || !item || !hasItemPermission(actor, item, "edit")) {
+      notify("Your account cannot correct points entries.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.performance)) { notify("Performance records are still loading."); return false; }
+    const index = (store.performance as PerformanceRow[]).findIndex((row) => row.id === rowId);
+    if (index < 0) { notify("That performance record could not be found."); return false; }
+    const row = store.performance[index] as PerformanceRow;
+    const employeeId = rowUserId(row, accessUsers);
+    if (!scopedUsers(actor, accessUsers).some((user) => user.id === employeeId)) {
+      notify("That employee is outside your data scope.");
+      return false;
+    }
+    const next: PerformanceRow = { ...row };
+    if (patch.date) { next.Date = patch.date; next.Week = weekOfDate(patch.date); }
+    if (patch.hours !== undefined) next["Hours Spent"] = Math.max(0, finiteNumber(patch.hours));
+    if (patch.submitted !== undefined) next["Submitted Points"] = Math.max(0, finiteNumber(patch.submitted));
+    if (patch.approved !== undefined) next["Approved Points"] = Math.max(0, finiteNumber(patch.approved));
+    if (patch.status) next.Status = patch.status;
+    if (patch.notes !== undefined) next.Notes = patch.notes;
+    next["Corrected By"] = actor.name;
+    next["Corrected At"] = new Date().toISOString();
+    store.performance[index] = next;
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Points entry corrected.");
+    return true;
+  }, [notify, refreshStaffEngine, accessUsers]);
+
+  /* Fix a session's clock-in and clock-out. Unlike trim, this can move either
+     punch in either direction — that is the point of a correction — so it is
+     gated by its own permission and stamps the change on both logs. */
+  const fixClockSession = useCallback((uid: string, clockIn: string, newIn: string, newOut: string | null) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "admin-corrections");
+    if (!actor || !item || !hasItemPermission(actor, item, "edit")) {
+      notify("Your account cannot correct clock records.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
+    const logs = store.logs as ClockLog[];
+    const startedAt = new Date(clockIn).getTime();
+    const inAt = new Date(newIn).getTime();
+    const outAt = newOut ? new Date(newOut).getTime() : null;
+    if (!Number.isFinite(inAt)) { notify("Enter a valid clock-in time."); return false; }
+    if (inAt > Date.now()) { notify("Clock-in cannot be in the future."); return false; }
+    if (outAt !== null && (!Number.isFinite(outAt) || outAt <= inAt)) { notify("Clock-out has to be after clock-in."); return false; }
+    if (outAt !== null && outAt > Date.now()) { notify("Clock-out cannot be in the future."); return false; }
+    const ordered = logs
+      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
+      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
+    if (!inLog) { notify("That session could not be found."); return false; }
+    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
+    const stamp = `Fixed by ${actor.name} on ${new Date().toLocaleDateString()}`;
+    inLog.time = new Date(inAt).toISOString();
+    inLog.lastSeen = inLog.time;
+    inLog.note = inLog.note ? `${inLog.note} · ${stamp}` : stamp;
+    if (outLog && outAt !== null) {
+      outLog.time = new Date(outAt).toISOString();
+      outLog.lastSeen = outLog.time;
+      outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
+    } else if (!outLog && outAt !== null) {
+      logs.push({
+        id: `l${Date.now()}`, uid, type: inLog.type || "Office", status: "Out",
+        time: new Date(outAt).toISOString(), active: false,
+        lastSeen: new Date(outAt).toISOString(), note: stamp, clockedBy: actor.name,
+      });
+      inLog.active = false;
+    }
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Clock record corrected.");
+    return true;
+  }, [notify, refreshStaffEngine]);
+
+  /* Add a session that was never punched — the same append-a-pair shape the
+     approved-correction path materialises, stamped as a manual entry. */
+  const addClockSession = useCallback((uid: string, date: string, from: string, to: string, mode: string) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "admin-corrections");
+    if (!actor || !item || !hasItemPermission(actor, item, "edit")) {
+      notify("Your account cannot add clock records.");
+      return false;
+    }
+    if (!accessUsers.some((user) => user.id === uid)) { notify("Choose an employee."); return false; }
+    const at = (time: string) => new Date(`${date}T${time}:00`);
+    const inDate = at(from); const outDate = at(to);
+    if (!date || Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) { notify("Enter a valid date and times."); return false; }
+    if (outDate.getTime() <= inDate.getTime()) { notify("Clock-out has to be after clock-in."); return false; }
+    if (outDate.getTime() > Date.now()) { notify("The session cannot end in the future."); return false; }
+    const store = parseStore("larsaStaffV8");
+    if (!store) { notify("Attendance records are still loading."); return false; }
+    if (!Array.isArray(store.logs)) store.logs = [];
+    const stamp = `Manual entry by ${actor.name}`;
+    const pair: [string, Date][] = [["In", inDate], ["Out", outDate]];
+    pair.forEach(([status, when], position) => {
+      (store.logs as ClockLog[]).push({
+        id: `l${Date.now()}${position}`, uid, type: mode || "Office", status,
+        time: when.toISOString(), active: false, lastSeen: when.toISOString(),
+        note: stamp, clockedBy: actor.name,
+      });
+    });
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    notify("Session added.");
+    return true;
+  }, [notify, refreshStaffEngine, accessUsers]);
+
+  /* Remove a session from Corrections. Same drop as resetSession, but gated by
+     this screen's own delete permission so it can be granted separately. */
+  const removeClockSession = useCallback((uid: string, clockIn: string) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "admin-corrections");
+    if (!actor || !item || !hasItemPermission(actor, item, "delete")) {
+      notify("Your account cannot remove clock records.");
       return false;
     }
     const store = parseStore("larsaStaffV8");
@@ -8438,6 +8680,20 @@ export default function Home() {
               store={staffStore}
               submit={submitRequest}
               decide={decideRequest}
+            />
+          </div>
+          <div className={active.native === "corrections" ? "native active" : "native"}>
+            <CorrectionsCentre
+              viewer={sessionUser}
+              users={accessUsers}
+              store={staffStore}
+              sessions={clockSessions}
+              decide={decideRequest}
+              editFlow={editRequestFlow}
+              fixRow={fixPerformanceRow}
+              fixSession={fixClockSession}
+              addSession={addClockSession}
+              removeSession={removeClockSession}
             />
           </div>
           <div className={active.native === "orgStructure" ? "native active" : "native"}>
@@ -13193,10 +13449,17 @@ function AccessCenter({
       setFormError("New email-based accounts are created by the person themselves via Create Account. Approve their request from Pending Requests once they've signed up, or choose a username-only role for an account an admin fully manages.");
       return;
     }
-    if (!draft.name.trim() || !draft.password || (!usernameOnly && (!email || !pin))) {
+    /* Passwords and PINs belong to the person, not the administrator: an
+       email-based account chose both at Create Account, and only its owner can
+       change them (My Settings → Security, behind an email code). So editing
+       someone's ACCESS must never demand — or touch — their secrets; a legacy
+       record with no PIN yet must still be editable. Only a brand-new
+       username-only account, which an admin fully manages by design, still
+       needs a starting password here. */
+    if (!draft.name.trim() || (isNew && !draft.password) || (!usernameOnly && !email)) {
       setFormError(usernameOnly
-        ? "Name and password are required."
-        : "Name, work email, password, and PIN are required.");
+        ? (isNew ? "Name and a starting password are required." : "Name is required.")
+        : "Name and work email are required.");
       return;
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -13239,7 +13502,7 @@ function AccessCenter({
       permissions: staffPermissionsForUser(draft),
     };
     const previousUser = users.find((user) => user.id === draft.id);
-    const securedUser: StaffUser = { ...nextUser, password: isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password || "")), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
+    const securedUser: StaffUser = { ...nextUser, password: !nextUser.password ? "" : isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password)), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
       logAccountChanges(currentUser, previousUser, securedUser, isNew);
       if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = await dialog.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
@@ -14350,6 +14613,393 @@ function RequestsCentre({
   );
 }
 
+/* Administration → Corrections. One screen for putting wrong records right:
+ * reroute a pending request's approval flow, fix the figures on a points
+ * entry, and fix or add clock sessions. Every write goes through the gated
+ * handlers in Home() — this component only collects the change — and the
+ * whole screen is closed to anyone without the admin-corrections grant. */
+function CorrectionsCentre({
+  viewer, users, store, sessions, decide, editFlow, fixRow, fixSession, addSession, removeSession,
+}: {
+  viewer: StaffUser | null;
+  users: StaffUser[];
+  store: Record<string, unknown> | null;
+  sessions: ClockSession[];
+  decide: (id: string, status: "Approved" | "Rejected", note?: string) => boolean;
+  editFlow: (id: string, flow: string[]) => boolean;
+  fixRow: (id: string, patch: { date?: string; hours?: number; submitted?: number; approved?: number; status?: string; notes?: string }) => boolean;
+  fixSession: (uid: string, clockIn: string, newIn: string, newOut: string | null) => boolean;
+  addSession: (uid: string, date: string, from: string, to: string, mode: string) => boolean;
+  removeSession: (uid: string, clockIn: string) => boolean;
+}) {
+  const dialog = useDialog();
+  const item = ITEMS.find((row) => row.id === "admin-corrections");
+  const canEdit = Boolean(viewer && item && hasItemPermission(viewer, item, "edit"));
+  const canDelete = Boolean(viewer && item && hasItemPermission(viewer, item, "delete"));
+  const approvalsItem = ITEMS.find((row) => row.id === "staff-approvals");
+  const canDecide = Boolean(viewer && approvalsItem && hasItemPermission(viewer, approvalsItem, "approve"));
+  const scope = scopedUsers(viewer, users);
+  const scopeIds = new Set(scope.map((user) => user.id));
+  const nameOfUser = (id: string) => users.find((user) => user.id === id)?.name || id;
+
+  const [tab, setTab] = useState<"requests" | "points" | "time">("requests");
+
+  /* datetime-local reads local wall time with no zone, so the stored ISO stamp
+     is converted to the device's own clock for editing — the same convention
+     the QuickClock trim panel uses. */
+  const toLocalInput = (iso: string) => {
+    const when = new Date(iso);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  };
+
+  /* -------- Requests -------- */
+  const allRequests = Array.isArray(store?.approvals) ? (store.approvals as LeaveRequest[]) : [];
+  const [pendingOnly, setPendingOnly] = useState(true);
+  const requests = allRequests
+    .filter((row) => scopeIds.has(row.uid) || row.uid === viewer?.id)
+    .filter((row) => !pendingOnly || row.status === "Pending")
+    .slice()
+    .reverse()
+    .slice(0, 80);
+  const [flowEditId, setFlowEditId] = useState<string | null>(null);
+  const [flowDraft, setFlowDraft] = useState<string[]>(["", "", ""]);
+  const startFlowEdit = (row: LeaveRequest) => {
+    const flow = Array.isArray(row.flow) ? row.flow.filter(Boolean) : [];
+    setFlowDraft([flow[0] || "", flow[1] || "", flow[2] || ""]);
+    setFlowEditId(row.id);
+  };
+  const chainOf = (row: LeaveRequest) => {
+    const steps = approvalSteps(row, nameOfUser);
+    if (!steps.length) return <span className="chain-none">No flow recorded</span>;
+    return (
+      <div className="chain-strip">
+        {steps.map((s, i) => (
+          <div key={`${s.id}-${i}`} className={`chain-step is-${s.state}`} title={s.note || undefined}>
+            <span className="chain-badge" aria-hidden="true">{s.state === "approved" ? "✓" : s.state === "rejected" ? "✗" : s.state === "pending" ? "•" : "·"}</span>
+            <span className="chain-name">{s.name}</span>
+            <span className="chain-state">{s.state === "approved" ? "Approved" : s.state === "rejected" ? "Rejected" : s.state === "pending" ? "With them now" : s.state === "waiting" ? "Waiting" : "—"}{s.at ? ` · ${new Date(s.at).toLocaleDateString()}` : ""}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  /* -------- Points -------- */
+  const allRows = Array.isArray(store?.performance) ? (store.performance as PerformanceRow[]) : [];
+  const [pointsUser, setPointsUser] = useState("");
+  const [pointsSearch, setPointsSearch] = useState("");
+  const pointsRows = allRows
+    .filter((row) => scopeIds.has(rowUserId(row, users)))
+    .filter((row) => !pointsUser || rowUserId(row, users) === pointsUser)
+    .filter((row) => {
+      if (!pointsSearch.trim()) return true;
+      const hay = `${row.Engineer || ""} ${row.Project || ""} ${row.Deliverable || ""} ${row.Week || ""} ${row.Date || ""}`.toLowerCase();
+      return hay.includes(pointsSearch.trim().toLowerCase());
+    })
+    .slice()
+    .sort((a, b) => String(b.Date || "").localeCompare(String(a.Date || "")))
+    .slice(0, 100);
+  const [rowEditId, setRowEditId] = useState<string | null>(null);
+  const [rowDraft, setRowDraft] = useState({ date: "", hours: "", submitted: "", approved: "", status: "", notes: "" });
+  const startRowEdit = (row: PerformanceRow) => {
+    setRowDraft({
+      date: String(row.Date || ""),
+      hours: String(finiteNumber(row["Hours Spent"])),
+      submitted: String(finiteNumber(row["Submitted Points"])),
+      approved: String(finiteNumber(row["Approved Points"])),
+      status: String(row.Status || "Submitted"),
+      notes: String(row.Notes || ""),
+    });
+    setRowEditId(String(row.id));
+  };
+
+  /* -------- Timesheets -------- */
+  const twoWeeksAgo = new Date(); twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+  const [timeUser, setTimeUser] = useState("");
+  const [timeFrom, setTimeFrom] = useState(dateInputValue(twoWeeksAgo));
+  const [timeTo, setTimeTo] = useState(dateInputValue(new Date()));
+  const timeRows = sessions
+    .filter((session) => scopeIds.has(session.uid))
+    .filter((session) => !timeUser || session.uid === timeUser)
+    .filter((session) => session.date >= timeFrom && session.date <= timeTo)
+    .slice()
+    .sort((a, b) => b.clockIn.localeCompare(a.clockIn))
+    .slice(0, 60);
+  const [sessionEditKey, setSessionEditKey] = useState<string | null>(null);
+  const [sessionDraft, setSessionDraft] = useState({ in: "", out: "" });
+  const [addDraft, setAddDraft] = useState({ date: dateInputValue(new Date()), from: "09:00", to: "17:00", mode: "Office" });
+
+  return (
+    <div className="native-scroll requests-scroll">
+      <section className="overview-hero home-hero">
+        <span className="home-hero-mark" aria-hidden="true" />
+        <div>
+          <span className="eyebrow">Administration</span>
+          <h2>Corrections</h2>
+          <p>Put wrong records right: reroute request approvals, fix points figures, and fix clock sessions. Every change is stamped with who made it.</p>
+        </div>
+        <span className="access-pill"><SlidersHorizontal size={16} /> {canEdit ? "Edit access" : "Read only"}</span>
+      </section>
+
+      <div className="settings-tabs" role="tablist" aria-label="Correction sections">
+        <button type="button" role="tab" aria-selected={tab === "requests"} className={tab === "requests" ? "active" : ""} onClick={() => setTab("requests")}>
+          <ClipboardCheck size={16} /> Requests &amp; flows
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "points"} className={tab === "points" ? "active" : ""} onClick={() => setTab("points")}>
+          <TrendingUp size={16} /> Points
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "time"} className={tab === "time" ? "active" : ""} onClick={() => setTab("time")}>
+          <Timer size={16} /> Timesheets
+        </button>
+      </div>
+
+      {tab === "requests" && (
+        <section className="report-panel">
+          <div className="section-head">
+            <div><span className="eyebrow">Approval routing</span><h3>Requests and their flows</h3></div>
+            <label className="auth-remember" style={{ margin: 0 }}>
+              <input type="checkbox" checked={pendingOnly} onChange={(event) => setPendingOnly(event.target.checked)} />
+              <span>Pending only</span>
+            </label>
+          </div>
+          <div className="data-table-wrap">
+            <table className="data-table"><thead><tr>
+              <th>Employee</th><th>Type</th><th>Date</th><th>Status</th><th>Approval flow</th><th>Actions</th>
+            </tr></thead><tbody>
+              {requests.map((row) => {
+                const person = users.find((user) => user.id === row.uid);
+                const editing = flowEditId === row.id;
+                return (
+                  <tr key={row.id}>
+                    <td><b>{person?.name || row.uid}</b><small>{person?.department || ""}</small></td>
+                    <td><b>{row.entry ? "Late points" : row.type}</b><small>{row.requestType || ""}</small></td>
+                    <td>{row.entry ? row.entry.Date : `${row.from || row.date || ""}${row.to ? ` → ${row.to}` : ""}`}</td>
+                    <td><span className={`record-status ${String(row.status || "").toLowerCase()}`}>{row.status}</span></td>
+                    <td>
+                      {chainOf(row)}
+                      {editing && (
+                        <div className="settings-fields" style={{ marginTop: 8 }}>
+                          {[0, 1, 2].map((slot) => (
+                            <label key={slot}>Step {slot + 1}{slot === 0 ? "" : " (optional)"}
+                              <select value={flowDraft[slot]} onChange={(event) => {
+                                const next = [...flowDraft]; next[slot] = event.target.value; setFlowDraft(next);
+                              }}>
+                                <option value="">—</option>
+                                {users.filter((user) => user.enabled !== false && user.id !== row.uid).map((user) => (
+                                  <option key={user.id} value={user.id}>{user.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td><div className="review-actions">
+                      {editing ? (
+                        <>
+                          <button type="button" className="approve" onClick={() => { if (editFlow(row.id, flowDraft)) setFlowEditId(null); }}>Save flow</button>
+                          <button type="button" onClick={() => setFlowEditId(null)}>Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          {canEdit && row.status === "Pending" && (
+                            <button type="button" onClick={() => startFlowEdit(row)}>Edit flow</button>
+                          )}
+                          {canDecide && row.status === "Pending" && (
+                            <>
+                              <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>Approve</button>
+                              <button type="button" onClick={async () => decide(row.id, "Rejected", (await dialog.prompt("Reason for rejecting (optional):")) || "")}>Reject</button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div></td>
+                  </tr>
+                );
+              })}
+              {!requests.length && <tr><td colSpan={6}><div className="empty compact">No requests in this view.</div></td></tr>}
+            </tbody></table>
+          </div>
+        </section>
+      )}
+
+      {tab === "points" && (
+        <section className="report-panel">
+          <div className="section-head">
+            <div><span className="eyebrow">Performance</span><h3>Points entries</h3></div>
+          </div>
+          <div className="settings-fields">
+            <label>Employee
+              <select value={pointsUser} onChange={(event) => setPointsUser(event.target.value)}>
+                <option value="">Everyone in your scope</option>
+                {scope.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+              </select>
+            </label>
+            <label>Search
+              <input value={pointsSearch} onChange={(event) => setPointsSearch(event.target.value)} placeholder="Project, deliverable, week, date" />
+            </label>
+          </div>
+          <div className="data-table-wrap">
+            <table className="data-table"><thead><tr>
+              <th>Date</th><th>Employee</th><th>Work</th><th>Hours</th><th>Submitted</th><th>Approved</th><th>Status</th><th>Fix</th>
+            </tr></thead><tbody>
+              {pointsRows.map((row) => {
+                const editing = rowEditId === String(row.id);
+                return (
+                  <tr key={String(row.id)}>
+                    <td>{String(row.Date || "")}<small>{String(row.Week || "")}</small></td>
+                    <td><b>{String(row.Engineer || nameOfUser(rowUserId(row, users)))}</b></td>
+                    <td>{String(row.Project || "")}<small>{String(row.Deliverable || "")}</small></td>
+                    <td>{finiteNumber(row["Hours Spent"])}</td>
+                    <td>{finiteNumber(row["Submitted Points"])}</td>
+                    <td><b>{finiteNumber(row["Approved Points"])}</b></td>
+                    <td><span className={`record-status ${String(row.Status || "").toLowerCase()}`}>{String(row.Status || "")}</span>
+                      {Boolean(row["Corrected By"]) && <small>fixed by {String(row["Corrected By"])}</small>}</td>
+                    <td>
+                      {editing ? (
+                        <div className="settings-fields">
+                          <label>Date<input type="date" value={rowDraft.date} onChange={(event) => setRowDraft({ ...rowDraft, date: event.target.value })} /></label>
+                          <label>Hours<input type="number" min="0" step="0.25" value={rowDraft.hours} onChange={(event) => setRowDraft({ ...rowDraft, hours: event.target.value })} /></label>
+                          <label>Submitted<input type="number" min="0" step="0.5" value={rowDraft.submitted} onChange={(event) => setRowDraft({ ...rowDraft, submitted: event.target.value })} /></label>
+                          <label>Approved<input type="number" min="0" step="0.5" value={rowDraft.approved} onChange={(event) => setRowDraft({ ...rowDraft, approved: event.target.value })} /></label>
+                          <label>Status
+                            <select value={rowDraft.status} onChange={(event) => setRowDraft({ ...rowDraft, status: event.target.value })}>
+                              {["Draft", "Submitted", "Approved", "Returned"].map((value) => <option key={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="wide">Note<input value={rowDraft.notes} onChange={(event) => setRowDraft({ ...rowDraft, notes: event.target.value })} placeholder="Why this was corrected" /></label>
+                          <div className="review-actions">
+                            <button type="button" className="approve" onClick={() => {
+                              const saved = fixRow(String(row.id), {
+                                date: rowDraft.date || undefined,
+                                hours: Number(rowDraft.hours),
+                                submitted: Number(rowDraft.submitted),
+                                approved: Number(rowDraft.approved),
+                                status: rowDraft.status || undefined,
+                                notes: rowDraft.notes,
+                              });
+                              if (saved) setRowEditId(null);
+                            }}>Save fix</button>
+                            <button type="button" onClick={() => setRowEditId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        canEdit ? <button type="button" className="btn small" onClick={() => startRowEdit(row)}>Fix</button> : <span className="chain-none">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!pointsRows.length && <tr><td colSpan={8}><div className="empty compact">No points entries match.</div></td></tr>}
+            </tbody></table>
+          </div>
+        </section>
+      )}
+
+      {tab === "time" && (
+        <>
+          <section className="report-panel">
+            <div className="section-head">
+              <div><span className="eyebrow">Attendance</span><h3>Clock sessions</h3></div>
+            </div>
+            <div className="settings-fields">
+              <label>Employee
+                <select value={timeUser} onChange={(event) => setTimeUser(event.target.value)}>
+                  <option value="">Everyone in your scope</option>
+                  {scope.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </select>
+              </label>
+              <label>From<input type="date" value={timeFrom} max={timeTo} onChange={(event) => setTimeFrom(event.target.value)} /></label>
+              <label>To<input type="date" value={timeTo} min={timeFrom} onChange={(event) => setTimeTo(event.target.value)} /></label>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table"><thead><tr>
+                <th>Employee</th><th>Date</th><th>Mode</th><th>Clock in → out (your local time)</th><th>Hours</th><th>Fix</th>
+              </tr></thead><tbody>
+                {timeRows.map((session) => {
+                  const key = `${session.uid}|${session.clockIn}`;
+                  const editing = sessionEditKey === key;
+                  return (
+                    <tr key={key}>
+                      <td><b>{session.employee}</b></td>
+                      <td>{session.date}</td>
+                      <td>{session.mode}</td>
+                      <td>
+                        {new Date(session.clockIn).toLocaleString()} → {session.open ? "still clocked in" : new Date(session.clockOut).toLocaleString()}
+                        {editing && (
+                          <div className="settings-fields" style={{ marginTop: 8 }}>
+                            <label>Clock in<input type="datetime-local" value={sessionDraft.in} max={toLocalInput(new Date().toISOString())} onChange={(event) => setSessionDraft({ ...sessionDraft, in: event.target.value })} /></label>
+                            <label>Clock out<input type="datetime-local" value={sessionDraft.out} max={toLocalInput(new Date().toISOString())} onChange={(event) => setSessionDraft({ ...sessionDraft, out: event.target.value })} /></label>
+                          </div>
+                        )}
+                      </td>
+                      <td>{session.hours.toFixed(2)}</td>
+                      <td><div className="review-actions">
+                        {editing ? (
+                          <>
+                            <button type="button" className="approve" onClick={() => {
+                              if (fixSession(session.uid, session.clockIn, sessionDraft.in, sessionDraft.out || null)) setSessionEditKey(null);
+                            }}>Save fix</button>
+                            <button type="button" onClick={() => setSessionEditKey(null)}>Cancel</button>
+                          </>
+                        ) : (
+                          <>
+                            {canEdit && (
+                              <button type="button" className="btn small" onClick={() => {
+                                setSessionDraft({ in: toLocalInput(session.clockIn), out: session.open ? "" : toLocalInput(session.clockOut) });
+                                setSessionEditKey(key);
+                              }}>Fix times</button>
+                            )}
+                            {canDelete && (
+                              <button type="button" className="danger" onClick={async () => {
+                                if (await dialog.confirm({ message: `Remove ${session.employee}'s session on ${session.date}? This cannot be undone.`, danger: true, confirmLabel: "Remove" })) removeSession(session.uid, session.clockIn);
+                              }}>Remove</button>
+                            )}
+                          </>
+                        )}
+                      </div></td>
+                    </tr>
+                  );
+                })}
+                {!timeRows.length && <tr><td colSpan={6}><div className="empty compact">No sessions in this period.</div></td></tr>}
+              </tbody></table>
+            </div>
+          </section>
+
+          {canEdit && (
+            <section className="settings-panel">
+              <div className="section-head"><div><span className="eyebrow">Missing punch</span><h3>Add a session that was never recorded</h3></div></div>
+              <div className="settings-fields">
+                <label>Employee
+                  <select value={timeUser} onChange={(event) => setTimeUser(event.target.value)}>
+                    <option value="">Choose…</option>
+                    {scope.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                  </select>
+                </label>
+                <label>Date<input type="date" value={addDraft.date} max={dateInputValue(new Date())} onChange={(event) => setAddDraft({ ...addDraft, date: event.target.value })} /></label>
+                <label>From<input type="time" value={addDraft.from} onChange={(event) => setAddDraft({ ...addDraft, from: event.target.value })} /></label>
+                <label>To<input type="time" value={addDraft.to} onChange={(event) => setAddDraft({ ...addDraft, to: event.target.value })} /></label>
+                <label>Mode
+                  <select value={addDraft.mode} onChange={(event) => setAddDraft({ ...addDraft, mode: event.target.value })}>
+                    {["Office", "Remote", "Site"].map((value) => <option key={value}>{value}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="form-actions">
+                <button type="button" className="primary" onClick={() => addSession(timeUser, addDraft.date, addDraft.from, addDraft.to, addDraft.mode)}>
+                  <Plus size={15} /> Add session
+                </button>
+              </div>
+              <p className="ps-note">Added sessions are stamped as a manual entry with your name, exactly like an approved correction.</p>
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* Settings → Notifications.
  *
  * Everything on this screen governs alerts OUTSIDE the app. Nothing here can
@@ -14874,7 +15524,7 @@ function MySettings({
             <label>Employee PIN<input inputMode="numeric" value={secret.pin} onChange={(event) => setSecret({ ...secret, pin: event.target.value.replace(/\D/g, "") })} placeholder="4 to 8 digits" /></label>
           </div>
           <div className="form-actions">
-            <button type="button" className="primary" onClick={() => {
+            <button type="button" className="primary" onClick={async () => {
               const patch: Partial<StaffUser> = {};
               if (secret.password || secret.confirm) {
                 if (secret.password.length < 6) { setMessage("Use at least 6 characters for a password."); return; }
@@ -14883,6 +15533,14 @@ function MySettings({
               }
               if (secret.pin) {
                 if (secret.pin.length < 4 || secret.pin.length > 8) { setMessage("A PIN must be 4 to 8 digits."); return; }
+                /* PIN sign-in identifies the person BY the pin alone, so a
+                   duplicate would sign one person in as another. Checked here
+                   exactly as at Create Account and in Users & Access. */
+                const everyone = ((parseStore("larsaStaffV8") as { users?: StaffUser[] } | null)?.users) || [];
+                if (await pinTakenByOther(everyone, secret.pin, user?.id)) {
+                  setMessage("That PIN is already in use by another account. Choose a different one.");
+                  return;
+                }
                 patch.pin = secret.pin;
               }
               if (!Object.keys(patch).length) { setMessage("Nothing to change."); return; }

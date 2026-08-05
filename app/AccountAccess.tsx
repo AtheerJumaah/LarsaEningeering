@@ -203,8 +203,11 @@ export function AccountAccess({
   const [confirm, setConfirm] = useState("");
   /* The quick-access PIN, chosen at sign-up like the password. PIN sign-in
      identifies the person BY the pin alone, so it must be unique across every
-     account — validated below with the same check the admin editor uses. */
+     account — validated below with the same check the admin editor uses. It is
+     typed twice, exactly like the password, because a mistyped PIN locks the
+     person out of the quick clock without them ever knowing what they saved. */
   const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
   const [code, setCode] = useState("");
 
   /* Read once per mount rather than per keystroke. The duplicate check runs
@@ -258,6 +261,10 @@ export function AccountAccess({
       }
       if (!/^\d{4,8}$/.test(pin)) {
         setError("Choose an Employee PIN of 4 to 8 digits.");
+        return;
+      }
+      if (pin !== confirmPin) {
+        setError("The two PINs do not match.");
         return;
       }
       /* A duplicate PIN would sign one person in as another, since PIN sign-in
@@ -513,21 +520,38 @@ export function AccountAccess({
           )}
 
           {mode === "signup" && (
-            <label>
-              Employee PIN
-              <input
-                type={showPass ? "text" : "password"}
-                required
-                inputMode="numeric"
-                minLength={4}
-                maxLength={8}
-                pattern="\d{4,8}"
-                value={pin}
-                onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
-                autoComplete="off"
-                placeholder="4 to 8 digits"
-              />
-            </label>
+            <>
+              <label>
+                Employee PIN
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  inputMode="numeric"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="\d{4,8}"
+                  value={pin}
+                  onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
+                  autoComplete="off"
+                  placeholder="4 to 8 digits"
+                />
+              </label>
+              <label>
+                Confirm PIN
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  inputMode="numeric"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="\d{4,8}"
+                  value={confirmPin}
+                  onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, ""))}
+                  autoComplete="off"
+                  placeholder="Type it again"
+                />
+              </label>
+            </>
           )}
 
           {mode === "signup" && (

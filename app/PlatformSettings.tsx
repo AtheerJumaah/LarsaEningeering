@@ -27,6 +27,8 @@ type Policy = {
   self_signup_enabled: boolean;
   signup_requires_approval: boolean;
   initial_verification_required: boolean;
+  pin_verification_required: boolean;
+  pin_hours: number;
 };
 
 type AuditRow = { at: string; actor: string | null; action: string; target: string | null };
@@ -438,7 +440,23 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           <span><b>Sign out when the interval expires</b><small>Off keeps the session alive; the next sign-in still has to verify.</small></span>
         </label>
 
-        <p className="ps-note">Engineers default to 72 hours; accountants and admins to 24. Changing anything here asks you for an email code first.</p>
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.pin_verification_required !== false} onChange={(e) => setDraft({ ...draft, pin_verification_required: e.target.checked })} />
+          <span><b>PIN sign-in asks for an email code</b><small>On the first PIN sign-in, then again every interval below — off means a PIN alone always signs in.</small></span>
+        </label>
+        <div className="ps-grid">
+          <label className="ps-field">
+            <span>PIN re-verification</span>
+            <span className="ps-inline">
+              <input type="number" min={1} max={8760} disabled={draft.pin_verification_required === false}
+                value={draft.pin_hours || 168}
+                onChange={(e) => setDraft({ ...draft, pin_hours: Number(e.target.value) || 168 })} />
+              <small>hours (168 = weekly)</small>
+            </span>
+          </label>
+        </div>
+
+        <p className="ps-note">Engineers default to 72 hours; accountants and admins to 24; PIN sign-ins to 168 (weekly). Changing anything here asks you for an email code first.</p>
       </section>
 
       <section className="org-card">
