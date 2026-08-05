@@ -438,8 +438,15 @@ test("the sync engine never pushes a write it just applied from Supabase", () =>
   // lastKnown map, which is what stops a remote update from being echoed
   // straight back up as if it were a new local change.
   assert.match(sync, /const lastKnown = new Map<string, string>\(\);/);
-  assert.match(sync, /if \(raw === lastKnown\.get\(key\)\) return; \/\/ nothing new since our last push/);
+  /* The push side compares against the copy last agreed with the server —
+     captured into `base` before lastKnown moves on, because a three-way merge
+     needs that same value (see lib/supabase/merge.ts). */
+  assert.match(sync, /const base = lastKnown\.get\(key\) \?\? null;/);
+  assert.match(sync, /if \(raw === base\) return; \/\/ nothing new since our last push/);
   assert.match(sync, /if \(lastKnown\.get\(row\.store_key\) === text\) return; \/\/ our own write, echoed back/);
+  /* A remote arrival is only pushed back when the merge left this device
+     holding something the server has not got — never as a bare echo. */
+  assert.match(sync, /if \(nextText !== text\) schedulePush\(row\.store_key as SyncedKey\);/);
   // Writes are debounced per key so a flurry of edits becomes one network call.
   assert.match(sync, /setTimeout\(\(\) => \{ pushKey\(key\)\.catch/);
   // Cleanup always restores the original setItem, so a second init (e.g. a
