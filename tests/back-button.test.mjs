@@ -95,14 +95,32 @@ test("the push deep link (?n=) still strips itself without fighting the sentinel
   assert.match(page, /window\.history\.replaceState\(\{\}, "", window\.location\.pathname/);
 });
 
-test("Approval Flow is reachable from HR & Skills without duplicating the editor", () => {
-  // A pointer to the same engine screen, not a second editor: same section,
-  // channel pinned to hr, and its own permission row.
-  assert.match(page, /engineItem\("staff", "hr-approval-flow", "Approval Flow",[^)]*"approvals"\)/);
+test("Approval Flow is edited in HR & Skills, over the same flowConfig", () => {
+  /* It began as a pointer to the engine's setup card, because the engine
+     owned that screen. People still could not rearrange a chain there — three
+     fixed dropdowns, no way to move a step — so it is now a native screen.
+     It writes the SAME flowConfig the engine reads, which is what keeps the
+     two views honest with each other. */
+  assert.match(page, /\{ id: "hr-approval-flow", label: "Approval Flow",[^}]*native: "approvalFlow" \}/);
   assert.match(page, /if \(item\.id === "hr-approval-flow"\) return "hr";/);
   assert.match(page, /"hr-approval-flow": \["view", "add", "edit", "delete", "approve", "manage"\]/);
-  // The alias must not overwrite the canonical permission snapshot the engine receives.
-  assert.match(page, /if \(result\[item\.section!\]\) return;/);
+  assert.match(page, /active\.native === "approvalFlow"/);
+  assert.match(page, /function ApprovalFlowCentre\(/);
+  // Steps can be reordered, added and removed — the thing that was missing.
+  assert.match(page, /const move = \(at: number, by: number\) => \{/);
+  assert.match(page, /\[next\[at\], next\[to\]\] = \[next\[to\], next\[at\]\];/);
+  assert.match(page, />Move up<\/button>/);
+  assert.match(page, />Move down<\/button>/);
+  assert.match(page, /Add approver/);
+  // Saving is permission-gated and writes the shared store the engine reads.
+  assert.match(page, /const saveApprovalFlow = useCallback/);
+  assert.match(page, /hasItemPermission\(actor, item, "edit"\)\) \{\s*\n\s*notify\("Your account cannot change approval flows\."\);/);
+  assert.match(page, /store\.flowConfig = flowConfig;/);
+  assert.match(page, /refreshStaffEngine\(\);/);
+  // Nobody approves their own request, nobody appears twice, three steps max.
+  assert.match(page, /\.filter\(\(id, at, all\) => all\.indexOf\(id\) === at\)/);
+  assert.match(page, /\.filter\(\(id\) => id !== employeeId\)/);
+  assert.match(page, /\.slice\(0, 3\);/);
   // And the deliberately-removed duplicate approval screen stays gone.
   assert.ok(!/approval-flows/.test(page), "the duplicate approval screen must stay gone");
 });
