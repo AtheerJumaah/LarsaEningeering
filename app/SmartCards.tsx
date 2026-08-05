@@ -266,6 +266,8 @@ export function SmartCardGrid({
   const [notice, setNotice] = useState("");
   const [dragId, setDragId] = useState("");
   const loadedFor = useRef("");
+  const barRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLElement>(null);
 
   const key = layoutKey(userId, pageKey, device);
 
@@ -372,6 +374,27 @@ export function SmartCardGrid({
     setNotice("");
   };
 
+  /* Clicking anywhere outside the editor finishes it, the way a dynamic
+     window closes when you move on. A valid layout is saved on the way out so
+     the arrangement is never lost; a layout that still has a gap cannot be
+     saved, so the unsaveable draft is simply dropped rather than kept open
+     forever. */
+  const finishOnOutside = useCallback(() => {
+    const draftSpans = draftOrder.map((id) => {
+      const size = draftSizes[id];
+      return size ? SIZE_SPECS[size].cols : SIZE_SPECS.standard.cols;
+    });
+    if (layoutHoles(draftSpans) > 0) {
+      setEditing(false);
+      setNotice("");
+      return;
+    }
+    saveLayout(key, { version: LAYOUT_VERSION, order: draftOrder, sizes: draftSizes, updatedAt: "" });
+    setSaved({ version: LAYOUT_VERSION, order: draftOrder, sizes: draftSizes, updatedAt: "" });
+    setEditing(false);
+    setNotice("");
+  }, [draftOrder, draftSizes, key]);
+
   const autoArrange = () => {
     setDraftSizes(autoArrangeSizes(draftOrder, cards, draftSizes));
     setNotice("");
@@ -399,12 +422,27 @@ export function SmartCardGrid({
     setDragId("");
   }, [dragId]);
 
+  /* Finish the layout editor on a click outside the bar and the grid. Only
+     listens while editing; a click during a drag lands inside the grid, so it
+     never interrupts a reorder. */
+  useEffect(() => {
+    if (!editing) return;
+    function onDown(event: MouseEvent) {
+      const target = event.target as Node;
+      if (barRef.current?.contains(target)) return;
+      if (gridRef.current?.contains(target)) return;
+      finishOnOutside();
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [editing, finishOnOutside]);
+
   if (!cards.length) return null;
 
   return (
     <>
       {customizable && (
-        <div className="smart-grid-bar">
+        <div className="smart-grid-bar" ref={barRef}>
           {editing ? (
             <>
               <span className="smart-grid-flag">Customising layout</span>
@@ -428,6 +466,7 @@ export function SmartCardGrid({
       )}
 
       <section
+        ref={gridRef}
         className={`module-grid smart-grid ${editing ? "is-editing" : ""} ${className}`}
         aria-label={label}
         style={{ gridTemplateColumns: `repeat(${GRID_COLUMNS}, minmax(0, 1fr))` }}

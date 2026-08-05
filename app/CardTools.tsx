@@ -18,7 +18,7 @@
  * trigger does not protect preference fields yet.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Palette, RotateCcw } from "lucide-react";
 
 const GRIDS = [
@@ -84,6 +84,8 @@ function applyOrder(container: HTMLElement, key: string) {
 
 export function CardTools() {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const leaveTimer = useRef<number | null>(null);
   const [accent, setAccent] = useState("#17181b");
   const [canOrder, setCanOrder] = useState(false);
   const [canColour, setCanColour] = useState(false);  const [surface, setSurface] = useState("");  const [dense, setDense] = useState(false);
@@ -225,10 +227,50 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
     setOpen(false);
   }
 
+  /* Dismiss the panel the way any light popover should: a click anywhere
+     outside it, or the Escape key. Every choice inside applies and saves the
+     instant it is clicked, so closing never loses a setting. Only listens
+     while open. */
+  useEffect(() => {
+    if (!open) return;
+    function onDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  /* Also close a short moment after the pointer leaves the whole control, so
+     it behaves like a dynamic window rather than staying pinned open. The
+     delay is cancelled the instant the pointer comes back, and the close is
+     skipped while the native colour dialog is up (its input keeps focus and
+     lives outside this element, so it must not be pulled out from under). */
+  function armLeaveClose() {
+    if (leaveTimer.current) window.clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active.getAttribute("type") === "color") return;
+      setOpen(false);
+    }, 650);
+  }
+  function cancelLeaveClose() {
+    if (leaveTimer.current) {
+      window.clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+  }
+
   if (!canColour) return null;
 
   return (
-    <div className="cardtools">
+    <div className="cardtools" ref={rootRef} onMouseLeave={open ? armLeaveClose : undefined} onMouseEnter={cancelLeaveClose}>
       <button type="button" className="cardtools-btn" onClick={() => setOpen(!open)} title="Appearance" aria-expanded={open}>
         <Palette size={17} />
       </button>
