@@ -143,8 +143,10 @@ test("timestamps are UTC timestamptz with a configured display timezone", () => 
 
 test("clients, trainees, and interns are username-and-password accounts — no email ever required", () => {
   assert.match(page, /USERNAME_ONLY_PRESETS = \["Client", "Trainee", "Intern"\]/);
-  // The admin editor accepts a missing email and optional PIN for them:
-  assert.match(page, /Name and password are required\./);
+  /* The admin editor accepts a missing email and optional PIN for them, and a
+     starting password is demanded only when CREATING one — editing an existing
+     account's access never requires (or touches) the person's secrets. */
+  assert.match(page, /isNew \? "Name and a starting password are required\." : "Name is required\."/);
   assert.match(page, /const usernameOnly = USERNAME_ONLY_PRESETS\.includes\(draft\.access \|\| ""\)/);
   // A blank email can never collide with another blank email:
   assert.match(page, /Boolean\(email\) &&\s*\n\s*\(user\.email\?\.trim\(\)\.toLowerCase\(\) === email\)/);

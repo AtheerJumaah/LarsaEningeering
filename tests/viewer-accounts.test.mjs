@@ -51,6 +51,52 @@ test("signup asks for an Employee PIN, refuses duplicates, and stores it hashed"
   // Stored only as a hash, exactly like the password beside it.
   assert.match(access, /pin: await hashPin\(pin\),/);
   assert.doesNotMatch(access, /pin: pin[,}]/);
+  // Typed twice, like the password — a mistyped PIN would lock the person out
+  // of the quick clock without them ever knowing what they saved.
+  assert.match(access, /Confirm PIN/);
+  assert.match(access, /if \(pin !== confirmPin\) \{\s*setError\("The two PINs do not match\."\);/);
+});
+
+test("editing a user's ACCESS never demands their password or PIN — those belong to the person", async () => {
+  const page = await read("app/page.tsx");
+  // The save validation asks for a password only when CREATING a username-only
+  // account; an existing account (with or without a stored PIN) saves freely.
+  assert.match(page, /if \(!draft\.name\.trim\(\) \|\| \(isNew && !draft\.password\) \|\| \(!usernameOnly && !email\)\) \{/);
+  assert.doesNotMatch(page, /Name, work email, password, and PIN are required\./);
+  // And an empty secret is never hashed into a sign-in-able credential.
+  assert.match(page, /password: !nextUser\.password \? "" :/);
+});
+
+test("a person changing their own PIN cannot take one already in use", async () => {
+  const page = await read("app/page.tsx");
+  // My Settings → Security runs the same uniqueness check as Create Account
+  // and the admin editor, against every account.
+  assert.match(page, /await pinTakenByOther\(everyone, secret\.pin, user\?\.id\)/);
+});
+
+test("PIN sign-in proves its inbox like email sign-in: first time, then per the configured period", async () => {
+  const page = await read("app/page.tsx");
+  const verification = await read("lib/verification.ts");
+  const platform = await read("app/PlatformSettings.tsx");
+  const policyFn = await read("supabase/functions/auth-policy/index.ts");
+  const migration = await read("supabase/migrations/20260805_auth_026_pin_verification_policy.sql");
+  // The gate in signIn: governed by the policy, weekly by default, and a
+  // username-only account with no mailbox is never asked.
+  assert.match(page, /loginMode === "pin" && supabaseConfigured\(\) && user\.email/);
+  assert.match(page, /pinPolicy\.pin_verification_required !== false/);
+  assert.match(page, /Number\(pinPolicy\.pin_hours\) \|\| 168/);
+  // Finishing through the code screen keeps the PIN session's reduced surface.
+  assert.match(page, /method\?: SignInMethod/);
+  assert.match(page, /completeSignIn\(verifiedUser, rememberedMethod\)/);
+  assert.match(page, /setVerifyStage\(\{ user, email: user\.email as string, method: "pin" \}\)/);
+  // The knob and the switch, managed in Platform Settings like the email ones.
+  assert.match(verification, /pin_verification_required: true, pin_hours: 168/);
+  assert.match(platform, /PIN sign-in asks for an email code/);
+  assert.match(platform, /pin_hours: Number\(e\.target\.value\) \|\| 168/);
+  // Enforced end to end: the policy row stores it and the function serves it.
+  assert.match(migration, /add column if not exists pin_verification_required boolean not null default true/);
+  assert.match(policyFn, /pin_verification_required, pin_hours"\)/);
+  assert.match(policyFn, /next\.pin_hours = Math\.max\(1, Number\(policy\.pin_hours\) \|\| 168\)/);
 });
 
 test("the domain check is exact-match, not a suffix match (anti-spoofing)", async () => {
