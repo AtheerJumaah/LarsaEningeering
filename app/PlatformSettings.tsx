@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { KeyRound, ShieldCheck, UserCog } from "lucide-react";
+import { Database, DownloadCloud, KeyRound, ShieldCheck, UserCog } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 
 type Policy = {
@@ -33,6 +33,28 @@ type AdminRow = { email: string; added_by: string | null; added_at: string };
 type ExemptionRow = { user_id: string; exempt_reason: string | null; exempt_set_by: string | null };
 
 type Person = { id: string; name: string; email?: string; enabled?: boolean };
+
+type BackupSettings = { enabled: boolean; interval_hours: number; retain_days: number; emails: string[]; updated_at?: string; updated_by?: string };
+type BackupRow = { id: string; created_at: string; kind: string; label: string | null; table_counts: Record<string, number>; byte_size: number; created_by: string | null };
+
+/* Never let password or PIN hashes leave the database in a downloaded file,
+   the same rule the in-app Data Center export already follows. */
+function stripBackupSecrets(data: unknown): unknown {
+  try {
+    const clone = JSON.parse(JSON.stringify(data)) as { tables?: { app_state?: Array<{ store_key?: string; data?: { users?: Array<Record<string, unknown>> } }> } };
+    const appState = clone?.tables?.app_state;
+    if (Array.isArray(appState)) {
+      for (const row of appState) {
+        if (row?.store_key === "larsaStaffV8" && Array.isArray(row.data?.users)) {
+          for (const u of row.data!.users!) { delete u.password; delete u.pin; delete u.passwordHash; delete u.pinHash; }
+        }
+      }
+    }
+    return clone;
+  } catch {
+    return data;
+  }
+}
 
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   if (!supabaseConfigured()) return null;
@@ -74,6 +96,13 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
   const [exemptTarget, setExemptTarget] = useState("");
   const [grantTarget, setGrantTarget] = useState("");
 
+  const [backupCfg, setBackupCfg] = useState<BackupSettings | null>(null);
+  const [backupDraft, setBackupDraft] = useState<BackupSettings | null>(null);
+  const [backups, setBackups] = useState<BackupRow[]>([]);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMsg, setBackupMsg] = useState("");
+  const [backupEmail, setBackupEmail] = useState("");
+
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
     users.forEach((row) => map.set(row.id, row.name));
@@ -98,7 +127,61 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     if (l && l.ok) setAuditRows((l.rows as AuditRow[]) || []);
   }
 
-  useEffect(() => { refresh(); }, []);
+  async function loadBackups() {
+    const who = viewer?.email || "";
+    const client = getSupabaseClient();
+    if (!who || !client) return;
+    const s = await client.rpc("platform_backup_settings_get", { p_actor_email: who });
+    if (!s.error && s.data) { setBackupCfg(s.data as BackupSettings); setBackupDraft(s.data as BackupSettings); }
+    const l = await client.rpc("platform_backup_admin_list", { p_actor_email: who });
+    if (!l.error && Array.isArray(l.data)) setBackups(l.data as BackupRow[]);
+  }
+
+  async function saveBackupSettings() {
+    const who = viewer?.email || "";
+    const client = getSupabaseClient();
+    if (!who || !client || !backupDraft) return;
+    setBackupBusy(true);
+    const r = await client.rpc("platform_backup_settings_set", {
+      p_actor_email: who, p_enabled: backupDraft.enabled, p_interval_hours: backupDraft.interval_hours,
+      p_retain_days: backupDraft.retain_days, p_emails: backupDraft.emails,
+    });
+    setBackupBusy(false);
+    if (!r.error && r.data) { setBackupCfg(r.data as BackupSettings); setBackupDraft(r.data as BackupSettings); setBackupMsg("Backup settings saved."); }
+    else setBackupMsg("Could not save backup settings.");
+  }
+
+  async function runManualBackup() {
+    const who = viewer?.email || "";
+    const client = getSupabaseClient();
+    if (!who || !client) return;
+    setBackupBusy(true);
+    setBackupMsg("Taking a backup...");
+    const r = await client.rpc("platform_backup_admin_run", { p_actor_email: who, p_label: "Manual backup" });
+    setBackupBusy(false);
+    if (!r.error) { setBackupMsg("Backup taken."); loadBackups(); }
+    else setBackupMsg("Could not take a backup.");
+  }
+
+  async function downloadBackup(row: BackupRow) {
+    const who = viewer?.email || "";
+    const client = getSupabaseClient();
+    if (!who || !client) return;
+    setBackupBusy(true);
+    const r = await client.rpc("platform_backup_admin_get", { p_actor_email: who, p_id: row.id });
+    setBackupBusy(false);
+    if (r.error || !r.data) { setBackupMsg("Could not load that backup."); return; }
+    const safe = stripBackupSecrets(r.data);
+    const blob = new Blob([JSON.stringify(safe, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `larsa-backup-${new Date(row.created_at).toISOString().slice(0, 10)}-${row.id.slice(0, 8)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  useEffect(() => { refresh(); loadBackups(); }, []);
 
   async function begin(action: NonNullable<typeof pending>) {
     if (!viewer || !viewer.email) return;
@@ -147,6 +230,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
   }
 
   const dirty = JSON.stringify(policy) !== JSON.stringify(draft);
+  const backupDirty = Boolean(backupCfg && backupDraft && JSON.stringify(backupCfg) !== JSON.stringify(backupDraft));
 
   return (
     <div className="platform-settings">
@@ -263,6 +347,78 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           ) : null}
         </div>
         <p className="ps-note">Platform ownership is separate from company roles. An operational admin cannot grant it; only an existing owner can, and only with an email code.</p>
+      </section>
+
+      <section className="org-card">
+        <span className="org-eyebrow"><Database size={14} /> Backups &amp; history</span>
+        <h3>Automatic backups</h3>
+        {backupDraft ? (
+          <>
+            <label className="ps-row">
+              <input type="checkbox" checked={backupDraft.enabled} onChange={(e) => setBackupDraft({ ...backupDraft, enabled: e.target.checked })} />
+              <span><b>Keep automatic backups</b><small>A full snapshot of the whole platform on a schedule, kept for download and history.</small></span>
+            </label>
+            <div className="ps-grid">
+              <label className="ps-field">
+                <span>How often</span>
+                <select className="org-select" value={backupDraft.interval_hours} onChange={(e) => setBackupDraft({ ...backupDraft, interval_hours: Number(e.target.value) })}>
+                  <option value={12}>Every 12 hours</option>
+                  <option value={24}>Every day</option>
+                  <option value={168}>Every week</option>
+                </select>
+              </label>
+              <label className="ps-field">
+                <span>Keep backups for</span>
+                <span className="ps-inline">
+                  <input type="number" min={1} max={3650} value={backupDraft.retain_days} onChange={(e) => setBackupDraft({ ...backupDraft, retain_days: Number(e.target.value) || 365 })} />
+                  <small>days</small>
+                </span>
+              </label>
+            </div>
+            <div className="ps-field" style={{ marginTop: 6 }}>
+              <span>Email a copy to</span>
+              {backupDraft.emails.length ? (
+                <ul className="org-people">
+                  {backupDraft.emails.map((addr) => (
+                    <li key={addr}>
+                      <span><b>{addr}</b></span>
+                      <button type="button" className="btn small" onClick={() => setBackupDraft({ ...backupDraft, emails: backupDraft.emails.filter((x) => x !== addr) })}>Remove</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="org-none">No addresses yet.</p>}
+              <div className="ps-inline" style={{ marginTop: 8 }}>
+                <input className="ps-input" type="email" placeholder="email@larsaeng.com" value={backupEmail} onChange={(e) => setBackupEmail(e.target.value)} />
+                {backupEmail.includes("@") ? (
+                  <button type="button" className="btn small" onClick={() => { const a = backupEmail.trim().toLowerCase(); if (a && !backupDraft.emails.includes(a)) setBackupDraft({ ...backupDraft, emails: [...backupDraft.emails, a] }); setBackupEmail(""); }}>Add</button>
+                ) : null}
+              </div>
+            </div>
+            <div className="ps-actions">
+              {backupDirty ? <button type="button" className="org-add" disabled={backupBusy} onClick={saveBackupSettings}>Save backup settings</button> : null}
+              <button type="button" className="btn small" disabled={backupBusy} onClick={runManualBackup}>Back up now</button>
+            </div>
+            <p className="ps-note">Backups capture the whole platform — staff, accounting, payroll, projects and settings. Password and PIN hashes are removed from any downloaded copy.</p>
+          </>
+        ) : <p className="org-none">Loading backup settings...</p>}
+
+        <h3 style={{ marginTop: 18 }}>Snapshots</h3>
+        {backups.length === 0 ? (
+          <p className="org-none">No backups yet. One will appear on the next scheduled run, or press &quot;Back up now&quot;.</p>
+        ) : (
+          <ul className="org-people">
+            {backups.slice(0, 60).map((b) => (
+              <li key={b.id}>
+                <span>
+                  <b>{new Date(b.created_at).toLocaleString()}</b>
+                  <small>{b.kind === "manual" ? "manual" : "scheduled"} · {Math.max(1, Math.round(b.byte_size / 1024))} KB · {Object.values(b.table_counts || {}).reduce((sum, c) => sum + Number(c || 0), 0)} records</small>
+                </span>
+                <button type="button" className="btn small" disabled={backupBusy} onClick={() => downloadBackup(b)}><DownloadCloud size={13} /> Download</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {backupMsg ? <p className="ps-note">{backupMsg}</p> : null}
       </section>
 
       <section className="org-card">
