@@ -241,6 +241,8 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
   const [backupDraft, setBackupDraft] = useState<BackupSettings | null>(null);
   const [backups, setBackups] = useState<BackupRow[]>([]);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [backupLoading, setBackupLoading] = useState(true);
+  const [backupError, setBackupError] = useState("");
   const [backupMsg, setBackupMsg] = useState("");
   const [backupEmail, setBackupEmail] = useState("");
 
@@ -273,12 +275,32 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     if (l && l.ok) setAuditRows((l.rows as AuditRow[]) || []);
   }
 
-  async function loadBackups() {
+  /* Loading the backup settings used to fail silently, and the panel then sat
+     on "Loading backup settings..." for ever — so the schedule, the addresses
+     and the snapshot list simply never appeared and the whole feature looked
+     like it had never been built. The commonest cause is the least dramatic:
+     a browser left open overnight reaches this with an expired token and the
+     call comes back 401. So a failure now refreshes the session and tries
+     again, and if it still will not load it SAYS so, with a way to retry. */
+  async function loadBackups(attempt = 0) {
     const who = viewer?.email || "";
     const client = getSupabaseClient();
     if (!who || !client) return;
+    if (attempt === 0) { setBackupError(""); setBackupLoading(true); }
     const s = await client.rpc("platform_backup_settings_get", { p_actor_email: who });
-    if (!s.error && s.data) { setBackupCfg(s.data as BackupSettings); setBackupDraft(s.data as BackupSettings); }
+    if (s.error) {
+      if (attempt === 0) {
+        try { await client.auth.refreshSession(); } catch { /* try the call again regardless */ }
+        return loadBackups(1);
+      }
+      setBackupLoading(false);
+      setBackupError(String(s.error.message || "").toLowerCase().includes("forbidden")
+        ? "Your account is not allowed to manage backups."
+        : "Could not load the backup settings. Check your connection and try again.");
+      return;
+    }
+    setBackupLoading(false);
+    if (s.data) { setBackupCfg(s.data as BackupSettings); setBackupDraft(s.data as BackupSettings); }
     const l = await client.rpc("platform_backup_admin_list", { p_actor_email: who });
     if (!l.error && Array.isArray(l.data)) setBackups(l.data as BackupRow[]);
   }
@@ -583,7 +605,12 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
             </div>
             <p className="ps-note">Backups capture the whole platform — staff, accounting, payroll, projects and settings. Password and PIN hashes are removed from any downloaded copy.</p>
           </>
-        ) : <p className="org-none">Loading backup settings...</p>}
+        ) : backupLoading ? <p className="org-none">Loading backup settings...</p> : (
+          <div className="ps-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+            <p className="org-none">{backupError || "Backup settings are not available right now."}</p>
+            <button type="button" className="btn small" onClick={() => loadBackups()}>Try again</button>
+          </div>
+        )}
 
         <h3 style={{ marginTop: 18 }}>Snapshots</h3>
         {backups.length === 0 ? (

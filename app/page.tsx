@@ -4,7 +4,7 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { subscribeToPush, unsubscribeFromPush, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
+import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
   fetchSetup, setCategoryPref, setNotifySettings, updateDevice, removeDevice,
@@ -5393,6 +5393,10 @@ export default function Home() {
     setSessionMethod(method);
     setPreviewOwner(null);
     setLoginError("");
+    /* Alerts survive a sign-out, so this browser may still hold a subscription
+       that belongs to whoever used it last. Claiming it here re-points it at
+       the person now signed in — silently, without asking permission again. */
+    void adoptPushSubscription(normalizedUser.id, normalizedUser.name);
     (Object.keys(refs) as Engine[]).forEach((engine) => applySessionToFrame(engine, normalizedUser, method));
     const requestedView = new URLSearchParams(window.location.search).get("view");
     const requestedItem = ITEMS.find((item) => item.id === requestedView);
@@ -5840,12 +5844,14 @@ export default function Home() {
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.
     try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
-    /* Release this browser's push subscription. On a shared machine the next
-       person to sign in must not keep receiving the last one's notifications —
-       and a banner on a machine nobody is signed into is a leak whether or not
-       anyone is looking at it. Fire-and-forget: sign-out never waits on it. */
-    const leaving = sessionUserRef.current;
-    if (leaving?.id) void unsubscribeFromPush(leaving.id);
+    /* Alerts are NOT cancelled here. Turning them on is a decision the person
+       made, and signing out — which this app does by itself when a
+       verification interval lapses — is not them changing their mind. They
+       used to be dropped on every sign-out, so everybody had to switch them
+       back on again and again. The shared-machine case is handled where it
+       actually arises instead: the next person to sign in adopts this
+       browser's subscription (see adoptPushSubscription), which moves the row
+       to them and stops the previous account receiving on it. */
     setBellOpen(false);
     setNotifyCounts(EMPTY_COUNTS);
     setNotifyActor(null);
@@ -6072,12 +6078,39 @@ export default function Home() {
     window.addEventListener("larsa:installable", adopt);
     window.addEventListener("beforeinstallprompt", onPrompt);
     window.addEventListener("appinstalled", onInstalled);
-    navigator.serviceWorker?.register("/sw.js").catch(() => undefined);
+
+    /* Keeping the installed app on the current version. The worker already
+       takes over the moment it activates, but the PAGE went on running the
+       old code until somebody happened to close and reopen it — which is why
+       a shipped fix could sit unseen on a phone for days. Now the app asks
+       whether a newer worker exists (on load, and whenever it comes back to
+       the foreground) and reloads once when one takes over, so the new
+       version replaces the old one by itself. */
+    let updateCheck: (() => void) | null = null;
+    navigator.serviceWorker?.register("/sw.js").then((registration) => {
+      registration.update().catch(() => undefined);
+      updateCheck = () => { if (!document.hidden) registration.update().catch(() => undefined); };
+      document.addEventListener("visibilitychange", updateCheck);
+    }).catch(() => undefined);
+    /* Only a REPLACEMENT is worth a reload. On a first install there was no
+       controller, and reloading then would restart the app under somebody's
+       hands for no reason — and could loop. */
+    const hadController = Boolean(navigator.serviceWorker?.controller);
+    let reloading = false;
+    const onControllerChange = () => {
+      if (!hadController || reloading) return;
+      reloading = true;
+      window.location.reload();
+    };
+    navigator.serviceWorker?.addEventListener("controllerchange", onControllerChange);
+
     return () => {
       clearTimeout(startupTimer);
       window.removeEventListener("larsa:installable", adopt);
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
+      navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
+      if (updateCheck) document.removeEventListener("visibilitychange", updateCheck);
     };
     // notify is stable for the life of the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9051,7 +9084,15 @@ export default function Home() {
                 </>
               );
             })()}
-            <p className="install-note">The installed app opens in its own window from your home screen, Dock, Start menu, or desktop.</p>
+            {/* The sheet itself says the page may need one reload before the
+                browser will offer an install, so the reload is offered here
+                rather than left as an instruction to follow by hand. */}
+            <div className="form-actions" style={{ justifyContent: "flex-start" }}>
+              <button type="button" className="primary" onClick={() => window.location.reload()}>
+                Reload and try again
+              </button>
+            </div>
+            <p className="install-note">The installed app opens in its own window from your home screen, Dock, Start menu, or desktop. It updates itself — when a new version ships, the app replaces the old one on its own.</p>
           </section>
         </div>
       )}
