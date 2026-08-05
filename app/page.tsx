@@ -5735,12 +5735,28 @@ export default function Home() {
           return;
         }
       }
-      // Separate the two failures so people stop retyping a correct password
-      // against an address that simply has no account.
-      const known = loginMode === "email" && users.some((row) => emailMatches(row));
+      /* Separate the failures so people stop retyping a correct password
+         against an address that simply has no account — and, just as
+         importantly, so somebody whose account exists but cannot sign in yet
+         is told WHY. A new sign-up waiting on an administrator used to be
+         told its password was wrong, which sent people round in circles
+         changing a password that was never the problem. */
+      const account = loginMode === "email" ? users.find((row) => emailMatches(row)) : null;
+      if (account?.offboarded) {
+        setLoginError("This account has been offboarded. Ask an administrator to restore it.");
+        return;
+      }
+      if (account?.pendingApproval) {
+        setLoginError("Your account is waiting for an administrator to approve it. You will be able to sign in once it is approved.");
+        return;
+      }
+      if (account && account.enabled === false) {
+        setLoginError("This account is disabled. Ask an administrator to re-enable it.");
+        return;
+      }
       setLoginError(loginMode === "pin"
         ? "PIN not recognized."
-        : known
+        : account
           ? "That password does not match this account."
           : "No account found for that email address.");
       return;
@@ -5770,9 +5786,18 @@ export default function Home() {
       const pinPolicy = await loadPolicy();
       if (pinPolicy.enabled !== false && pinPolicy.pin_verification_required !== false) {
         const hours = Math.max(1, Number(pinPolicy.pin_hours) || 168);
+        /* When this person last proved their inbox. Asked of the SERVER first:
+           it stamps user_verification every time a code is accepted, and that
+           record cannot be lost the way a field inside the shared staff blob
+           can. Anchoring on the local device stamp alone is what made a weekly
+           policy behave as if it were every-single-sign-in. The device stamp
+           stays as the fallback for when Supabase cannot be reached. */
+        const serverStatus = await checkVerification({ id: user.id, access: user.access, role: user.role });
         const device = findDevice(user, getDeviceId());
-        const verifiedAt = device?.lastVerified ? new Date(device.lastVerified).getTime() : 0;
-        const pinDue = user.emailVerified !== true || !verifiedAt || Date.now() - verifiedAt >= hours * 3600000;
+        const deviceAt = device?.lastVerified ? new Date(device.lastVerified).getTime() : 0;
+        const serverAt = serverStatus?.lastVerifiedAt ? new Date(serverStatus.lastVerifiedAt).getTime() : 0;
+        const verifiedAt = Math.max(Number.isFinite(serverAt) ? serverAt : 0, Number.isFinite(deviceAt) ? deviceAt : 0);
+        const pinDue = !verifiedAt || Date.now() - verifiedAt >= hours * 3600000;
         if (pinDue) {
           setVerifyError("");
           setVerifyInfo("Sending your verification code…");
