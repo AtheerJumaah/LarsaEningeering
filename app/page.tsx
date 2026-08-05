@@ -218,6 +218,12 @@ type StaffUser = {
   department?: string;
   email?: string;
   enabled?: boolean;
+  /* Offboarding, not deletion. A removed colleague's account moves to the
+     Offboarded tab in Users & Access: sign-in is blocked (enabled false), the
+     record and all history stay, and the account can be restored any time. */
+  offboarded?: boolean;
+  offboardedAt?: string;
+  offboardedBy?: string;
   permissions?: string[];
   permissionProfile?: PermissionProfile;
   notes?: string;
@@ -4122,7 +4128,7 @@ export default function Home() {
   const [loginMode, setLoginMode] = useState<SignInMethod>("email");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPass, setLoginPass] = useState("");
-  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | null>(null); const [accountingGate, setAccountingGate] = useState<Item | null>(null); useEffect(() => { const u = sessionUser; if (!u || !u.email || u.platformAdmin !== undefined) return; (async () => { const client = getSupabaseClient(); if (!client) return; try { const { data } = await client.functions.invoke("auth-policy", { body: { op: "amPlatformAdmin", email: u.email } }); const admin = Boolean(data && (data as { admin?: boolean }).admin); setSessionUser((prev) => { const next = prev && prev.id === u.id ? { ...prev, platformAdmin: admin } : prev; if (next) sessionUserRef.current = next; return next; }); } catch { /* the entry just stays hidden */ } })(); }, [sessionUser]);
+  const [loginPin, setLoginPin] = useState(""); const [accessMode, setAccessMode] = useState<"signup" | "forgot" | "forgotPin" | null>(null); const [accountingGate, setAccountingGate] = useState<Item | null>(null); useEffect(() => { const u = sessionUser; if (!u || !u.email || u.platformAdmin !== undefined) return; (async () => { const client = getSupabaseClient(); if (!client) return; try { const { data } = await client.functions.invoke("auth-policy", { body: { op: "amPlatformAdmin", email: u.email } }); const admin = Boolean(data && (data as { admin?: boolean }).admin); setSessionUser((prev) => { const next = prev && prev.id === u.id ? { ...prev, platformAdmin: admin } : prev; if (next) sessionUserRef.current = next; return next; }); } catch { /* the entry just stays hidden */ } })(); }, [sessionUser]);
   const [showPassword, setShowPassword] = useState(false);
   // Email verification gate: only engaged when Supabase is configured (it's
   // what actually sends the code) and the account hasn't verified its email
@@ -7687,7 +7693,7 @@ export default function Home() {
       notify("The protected owner account cannot be deleted.");
       return false;
     }
-    if (!(await dialog.confirm(`Delete the sign-in account for ${target.name}? Historical work records will be kept.`))) {
+    if (!(await dialog.confirm(`Offboard ${target.name}? They lose access immediately, all their history stays viewable, and the account can be restored any time from the Offboarded tab.`))) {
       return false;
     }
     const store = parseStore("larsaStaffV8");
@@ -7700,10 +7706,20 @@ export default function Home() {
       notify("That user could not be found.");
       return false;
     }
-    store.users.splice(existingIndex, 1);
-    if (store.schedule) delete store.schedule[target.id];
-    if (store.flowConfig) delete store.flowConfig[target.id];
+    /* Nothing is removed. The record stays where it is — schedule, approval
+       flows, hashed secrets and every work record intact — so a restore puts
+       the person back exactly as they were. Sign-in is blocked the same way a
+       disabled account is blocked: enabled false, on every sign-in path. */
+    store.users[existingIndex] = {
+      ...(store.users[existingIndex] as StaffUser),
+      offboarded: true,
+      enabled: false,
+      pendingApproval: false,
+      offboardedAt: new Date().toISOString(),
+      offboardedBy: actor.name,
+    };
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    logAccountEvent(actor, "account.offboarded", target.id, target.name, { access: target.access || "" });
     try {
       staffRef.current?.contentWindow?.eval(`
         state=JSON.parse(localStorage.getItem("larsaStaffV8"));
@@ -7713,7 +7729,47 @@ export default function Home() {
       // The saved directory will be picked up when the embedded module next renders.
     }
     setStorageTick((value) => value + 1);
-    notify("User account deleted. Historical work records were kept.");
+    notify(`${target.name} was offboarded. Their history stays viewable, and you can restore the account any time.`);
+    return true;
+  };
+
+  /* The way back: an offboarded account returns exactly as it was — same
+     access, same secrets, same records — and is logged as restored. */
+  const restoreAccessUser = async (target: StaffUser) => {
+    const actor = sessionUserRef.current;
+    if (!actor || !hasItemPermission(actor, ACCESS_ITEM, "edit")) {
+      notify("Your account cannot restore user accounts.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.users)) {
+      notify("The staff directory is still loading. Please try again.");
+      return false;
+    }
+    const existingIndex = store.users.findIndex((row: StaffUser) => row.id === target.id);
+    if (existingIndex < 0) {
+      notify("That user could not be found.");
+      return false;
+    }
+    store.users[existingIndex] = {
+      ...(store.users[existingIndex] as StaffUser),
+      offboarded: false,
+      enabled: true,
+      offboardedAt: undefined,
+      offboardedBy: undefined,
+    };
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    logAccountEvent(actor, "account.restored", target.id, target.name, { access: target.access || "" });
+    try {
+      staffRef.current?.contentWindow?.eval(`
+        state=JSON.parse(localStorage.getItem("larsaStaffV8"));
+        if(typeof render==="function"&&currentUser)render();
+      `);
+    } catch {
+      // The saved directory will be picked up when the embedded module next renders.
+    }
+    setStorageTick((value) => value + 1);
+    notify(`${target.name} is back. Their access works exactly as before.`);
     return true;
   };
 
@@ -8628,6 +8684,9 @@ export default function Home() {
               currentUser={sessionUser}
               saveUser={saveAccessUser}
               deleteUser={deleteAccessUser}
+              restoreUser={restoreAccessUser}
+              sessions={clockSessions}
+              store={staffStore}
               previewUser={startAccessPreview}
               canCreate={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "add"))}
               canEdit={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "edit"))}
@@ -8985,6 +9044,7 @@ export default function Home() {
                 <>
                   <label>Employee PIN<input type="password" required inputMode="numeric" value={loginPin} onChange={(event) => setLoginPin(event.target.value.replace(/\D/g, ""))} autoComplete="one-time-code" placeholder="Enter your PIN" /></label>
                   <p className="auth-hint">Quick access to your clock and personal performance points.</p>
+                  <p className="auth-secondary"><button type="button" onClick={() => { setAccessMode("forgotPin"); setLoginError(""); }}>Forgot PIN?</button></p>
                 </>
               )}
               <div className="auth-error" role="alert">{loginError}</div>
@@ -13186,6 +13246,9 @@ function AccessCenter({
   currentUser,
   saveUser,
   deleteUser,
+  restoreUser,
+  sessions,
+  store,
   previewUser,
   canCreate,
   canEdit,
@@ -13197,6 +13260,9 @@ function AccessCenter({
   currentUser: StaffUser | null;
   saveUser: (user: StaffUser, isNew: boolean) => boolean;
   deleteUser: (user: StaffUser) => boolean | Promise<boolean>;
+  restoreUser: (user: StaffUser) => boolean | Promise<boolean>;
+  sessions: ClockSession[];
+  store: Record<string, unknown> | null;
   previewUser: (user: StaffUser) => void;
   canCreate: boolean;
   canEdit: boolean;
@@ -13243,7 +13309,8 @@ function AccessCenter({
      accounts are never in `users` — they live in Supabase's viewer_accounts
      table with a real auth identity, so this tab keeps its own state and
      talks to the viewer-admin Edge Function rather than saveUser/deleteUser. */
-  const [tab, setTab] = useState<"pending" | "active" | "viewers">("active");
+  const [tab, setTab] = useState<"pending" | "active" | "viewers" | "offboarded">("active");
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const [viewers, setViewers] = useState<ViewerAccountRow[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
   const [viewersError, setViewersError] = useState("");
@@ -13538,8 +13605,9 @@ function AccessCenter({
     }
   };
 
-  const pendingUsers = users.filter((user) => user.pendingApproval === true);
-  const activeUsers = users.filter((user) => user.pendingApproval !== true && user.access !== "Client");
+  const pendingUsers = users.filter((user) => user.pendingApproval === true && user.offboarded !== true);
+  const activeUsers = users.filter((user) => user.pendingApproval !== true && user.access !== "Client" && user.offboarded !== true);
+  const offboardedUsers = users.filter((user) => user.offboarded === true);
   const tabUsers = tab === "pending" ? pendingUsers : tab === "active" ? activeUsers : [];
   const filteredUsers = tabUsers.filter((user) =>
     [user.name, user.email, user.department, user.access]
@@ -13599,6 +13667,9 @@ function AccessCenter({
           </button>
           <button type="button" className={tab === "active" ? "active" : ""} aria-pressed={tab === "active"} onClick={() => setTab("active")}>Active Users</button>
           <button type="button" className={tab === "viewers" ? "active" : ""} aria-pressed={tab === "viewers"} onClick={() => setTab("viewers")}>Viewer Accounts</button>
+          <button type="button" className={tab === "offboarded" ? "active" : ""} aria-pressed={tab === "offboarded"} onClick={() => setTab("offboarded")}>
+            Offboarded{offboardedUsers.length ? ` (${offboardedUsers.length})` : ""}
+          </button>
         </div>
       </div>
 
@@ -13648,7 +13719,7 @@ function AccessCenter({
                 </button>
                 {!protectedAccount && !isNew && canDelete && (
                   <button type="button" className="delete-user-button" onClick={removeDraft}>
-                    <Trash2 size={14} /> Delete Account
+                    <Trash2 size={14} /> Offboard Account
                   </button>
                 )}
                 {protectedAccount && <span className="protected-badge"><ShieldCheck size={14} /> Protected owner</span>}
@@ -13927,6 +13998,95 @@ function AccessCenter({
           projectQuery={viewerProjectQuery}
           setProjectQuery={setViewerProjectQuery}
         />
+      )}
+
+      {tab === "offboarded" && (
+        <section className="report-panel">
+          <div className="section-head">
+            <div><span className="eyebrow">Former colleagues</span><h3>Offboarded accounts</h3></div>
+            <span className="black-badge">{offboardedUsers.length}</span>
+          </div>
+          <p className="builder-note">
+            Offboarding blocks sign-in but removes nothing: every timesheet, points entry, and request stays
+            on record here, and restoring the account brings the person back exactly as they were.
+          </p>
+          {offboardedUsers.length === 0 ? (
+            <div className="empty compact">Nobody is offboarded. Offboarding a user from Active Users moves them here.</div>
+          ) : offboardedUsers.map((person) => {
+            const open = historyId === person.id;
+            const mine = sessions.filter((session) => session.uid === person.id);
+            const hours = mine.reduce((sum, session) => sum + session.hours, 0);
+            const rows = (Array.isArray(store?.performance) ? (store.performance as PerformanceRow[]) : [])
+              .filter((row) => rowUserId(row, users) === person.id);
+            const submitted = rows.reduce((sum, row) => sum + finiteNumber(row["Submitted Points"]), 0);
+            const approved = rows.reduce((sum, row) => sum + finiteNumber(row["Approved Points"]), 0);
+            const requests = (Array.isArray(store?.approvals) ? (store.approvals as LeaveRequest[]) : [])
+              .filter((row) => row.uid === person.id);
+            return (
+              <div className="settings-panel" key={person.id} style={{ marginTop: 10 }}>
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">{person.department || "No department"} · {person.access || "Engineer"}</span>
+                    <h3>{person.name}</h3>
+                    <p>Offboarded {person.offboardedAt ? new Date(person.offboardedAt).toLocaleDateString() : ""}{person.offboardedBy ? ` by ${person.offboardedBy}` : ""}</p>
+                  </div>
+                  <div className="review-actions">
+                    <button type="button" className="btn small" onClick={() => setHistoryId(open ? null : person.id)}>
+                      {open ? "Hide history" : "View history"}
+                    </button>
+                    {canEdit && (
+                      <button type="button" className="primary" onClick={() => void restoreUser(person)}>
+                        Restore account
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {open && (
+                  <>
+                    <div className="request-summary" style={{ marginTop: 6 }}>
+                      <span><b>{mine.length}</b> sessions · <b>{hours.toFixed(1)}</b> hours</span>
+                      <span><b>{rows.length}</b> points entries · {submitted} submitted · <b>{approved}</b> approved</span>
+                      <span><b>{requests.length}</b> requests</span>
+                    </div>
+                    <div className="data-table-wrap" style={{ marginTop: 8 }}>
+                      <table className="data-table"><thead><tr>
+                        <th>Date</th><th>Record</th><th>Detail</th><th>Outcome</th>
+                      </tr></thead><tbody>
+                        {mine.slice(-6).reverse().map((session) => (
+                          <tr key={`s-${session.clockIn}`}>
+                            <td>{session.date}</td>
+                            <td><b>Session</b><small>{session.mode}</small></td>
+                            <td>{new Date(session.clockIn).toLocaleTimeString()} → {session.open ? "open" : new Date(session.clockOut).toLocaleTimeString()}</td>
+                            <td>{session.hours.toFixed(2)} h</td>
+                          </tr>
+                        ))}
+                        {rows.slice(0, 6).map((row) => (
+                          <tr key={`p-${String(row.id)}`}>
+                            <td>{String(row.Date || "")}</td>
+                            <td><b>Points</b><small>{String(row.Week || "")}</small></td>
+                            <td>{String(row.Project || row.Deliverable || "")}</td>
+                            <td>{finiteNumber(row["Approved Points"]) || finiteNumber(row["Submitted Points"])} pts · {String(row.Status || "")}</td>
+                          </tr>
+                        ))}
+                        {requests.slice(-4).reverse().map((row) => (
+                          <tr key={`r-${row.id}`}>
+                            <td>{(row.createdAt || row.date || "").slice(0, 10)}</td>
+                            <td><b>Request</b><small>{row.entry ? "Late points" : row.type}</small></td>
+                            <td>{row.reason || row.requestType || ""}</td>
+                            <td>{row.status}{row.decidedBy ? ` · ${row.decidedBy}` : ""}</td>
+                          </tr>
+                        ))}
+                        {!mine.length && !rows.length && !requests.length && (
+                          <tr><td colSpan={4}><div className="empty compact">No records for this person.</div></td></tr>
+                        )}
+                      </tbody></table>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </section>
       )}
     </div>
   );

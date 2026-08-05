@@ -47,7 +47,7 @@ export type AccessUser = {
   notes?: string;
 };
 
-export type AccessMode = "signup" | "forgot" | "reset" | "confirm";
+export type AccessMode = "signup" | "forgot" | "forgotPin" | "reset" | "confirm";
 
 const STORE_KEY = "larsaStaffV8";
 
@@ -216,9 +216,9 @@ export function AccountAccess({
   const users = useMemo(() => readStore().users, []);
 
   const heading =
-    mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : mode === "confirm" ? "Confirm it is you" : "Choose a new password";
+    mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : mode === "forgotPin" ? "Reset your PIN" : mode === "confirm" ? "Confirm it is you" : "Choose a new password";
 
-  function passwordProblem() {    if (mode === "confirm") return "";
+  function passwordProblem() {    if (mode === "confirm" || mode === "forgotPin") return "";
     if (password.length < 8) return "Use at least 8 characters for your password.";
     if (password !== confirm) return "The two passwords do not match.";
     return "";
@@ -278,7 +278,7 @@ export function AccountAccess({
       }
     }
 
-    if (mode === "forgot" && !users.some((row) => normalise(row.email) === address)) {
+    if ((mode === "forgot" || mode === "forgotPin") && !users.some((row) => normalise(row.email) === address)) {
       setError("No account found for that email address.");
       return;
     }
@@ -307,13 +307,30 @@ export function AccountAccess({
     if (event) event.preventDefault();
     setError("");
 
-    /* On the recovery flow the new password is collected on this second screen,
-       so a stranger who only knows someone's address cannot set a password
-       without also reading that inbox. */
+    /* On the recovery flows the new secret is collected on this second screen,
+       so a stranger who only knows someone's address cannot set a password —
+       or a PIN — without also reading that inbox. */
     if (mode === "forgot") {
       const problem = passwordProblem();
       if (problem) {
         setError(problem);
+        return;
+      }
+    }
+    if (mode === "forgotPin") {
+      if (!/^\d{4,8}$/.test(pin)) {
+        setError("Choose an Employee PIN of 4 to 8 digits.");
+        return;
+      }
+      if (pin !== confirmPin) {
+        setError("The two PINs do not match.");
+        return;
+      }
+      /* The new PIN must still be unique to this person — PIN sign-in
+         identifies the account BY the pin alone. */
+      const owner = users.find((row) => normalise(row.email) === normalise(email));
+      if (await pinTakenByOther(users, pin, owner?.id)) {
+        setError("That PIN is already in use by another account. Choose a different one.");
         return;
       }
     }
@@ -378,8 +395,8 @@ export function AccountAccess({
       return;
     }
 
-    /* forgot and reset both land here: the code proved the inbox, so the new
-       password can be written and the account marked verified. */
+    /* forgot, forgotPin and reset all land here: the code proved the inbox,
+       so the new secret can be written and the account marked verified. */
     const index = list.findIndex((row) =>
       mode === "reset" && currentUser ? row.id === currentUser.id : normalise(row.email) === address,
     );
@@ -388,7 +405,11 @@ export function AccountAccess({
       setError("That account could no longer be found. Ask an administrator for help.");
       return;
     }
-    list[index] = { ...list[index], password: await hashPassword(password), emailVerified: true, mustResetPassword: false };
+    if (mode === "forgotPin") {
+      list[index] = { ...list[index], pin: await hashPin(pin), emailVerified: true };
+    } else {
+      list[index] = { ...list[index], password: await hashPassword(password), emailVerified: true, mustResetPassword: false };
+    }
     writeStore(store);
     setBusy(false);
 
@@ -396,7 +417,7 @@ export function AccountAccess({
       if (onResetComplete) onResetComplete(list[index]);
       return;
     }
-    setInfo("Password updated. Sign in again.");
+    setInfo(mode === "forgotPin" ? "PIN updated. Sign in with it now." : "Password updated. Sign in again.");
     window.setTimeout(() => { if (onCancel) onCancel(); }, 2000);
   }
 
@@ -463,7 +484,9 @@ export function AccountAccess({
             ? "We will email you a code to confirm it is yours."
             : mode === "forgot"
               ? "We will email you a code to set a new password."
-              : mode === "confirm" ? "We will email you a code to confirm it is you." : "Choose a password only you know."}
+              : mode === "forgotPin"
+                ? "We will email you a code to set a new Employee PIN."
+                : mode === "confirm" ? "We will email you a code to confirm it is you." : "Choose a password only you know."}
         </p>
       </div>
 
@@ -512,7 +535,7 @@ export function AccountAccess({
             />
           </label>
 
-          {mode !== "forgot" && mode !== "confirm" && (
+          {mode !== "forgot" && mode !== "forgotPin" && mode !== "confirm" && (
             <>
               {passwordField}
               {confirmField}
@@ -603,10 +626,45 @@ export function AccountAccess({
             </>
           )}
 
+          {mode === "forgotPin" && (
+            <>
+              <label>
+                New Employee PIN
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  inputMode="numeric"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="\d{4,8}"
+                  value={pin}
+                  onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
+                  autoComplete="off"
+                  placeholder="4 to 8 digits"
+                />
+              </label>
+              <label>
+                Confirm PIN
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  inputMode="numeric"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="\d{4,8}"
+                  value={confirmPin}
+                  onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, ""))}
+                  autoComplete="off"
+                  placeholder="Type it again"
+                />
+              </label>
+            </>
+          )}
+
           <div className="auth-error" role="alert">{error}</div>
           {info ? <p className="auth-hint">{info}</p> : null}
           <button type="submit" className="auth-submit" disabled={busy}>
-            {busy ? "Checking..." : mode === "signup" ? "Confirm and Create Account" : mode === "confirm" ? "Confirm" : "Save New Password"}
+            {busy ? "Checking..." : mode === "signup" ? "Confirm and Create Account" : mode === "confirm" ? "Confirm" : mode === "forgotPin" ? "Save New PIN" : "Save New Password"}
           </button>
           <div className="rowActions" style={{ justifyContent: "center", marginTop: 10 }}>
             <button type="button" className="btn small" onClick={resend} disabled={busy}>Resend Code</button>
