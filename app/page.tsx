@@ -116,6 +116,7 @@ type NativeView =
   | "admin"
   | "access"
   | "corrections"
+  | "approvalFlow"
   | "data"
   | "myPoints"
   | "quickClock"
@@ -727,7 +728,11 @@ const GROUPS: Group[] = [
          requests" is an HR question and nobody could find it before. Same id
          rules as staff-development: a staff-engine screen listed under HR,
          with its channel pinned to "hr" in channelForItem. */
-      engineItem("staff", "hr-approval-flow", "Approval Flow", "Who approves each person's leave, schedule, and performance requests", "AF", "approvals"),
+      /* The approval chain, edited where people already are. It was reachable
+         only through the Timeclock engine's Leave & Requests page, which is
+         why nobody could find it; this is a native screen over the very same
+         flowConfig, so both views always agree. */
+      { id: "hr-approval-flow", label: "Approval Flow", description: "Who approves each person's leave, schedule, and performance requests, and in what order", code: "AF", native: "approvalFlow" },
       engineItem("hr", "hr-reports", "HR Reports", "Compact HR report and exports", "HR", "reports"),
     ],
   },
@@ -6734,6 +6739,45 @@ export default function Home() {
     return true;
   }, [notify, refreshStaffEngine, accessUsers]);
 
+  /* Sets who approves one person's requests, and in what order — the standing
+     chain every FUTURE request of that type will follow. It writes the same
+     flowConfig the Timeclock engine's own setup card writes, so the two views
+     can never disagree; requests already in flight keep the chain they were
+     raised with, which is the only honest thing to do with a decision that is
+     already part-made (Corrections can reroute an individual one). */
+  const saveApprovalFlow = useCallback((employeeId: string, type: string, steps: string[]) => {
+    const actor = sessionUserRef.current;
+    const item = ITEMS.find((row) => row.id === "hr-approval-flow");
+    if (!actor || !item || !hasItemPermission(actor, item, "edit")) {
+      notify("Your account cannot change approval flows.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.users)) { notify("The staff directory is still loading."); return false; }
+    const people = store.users as StaffUser[];
+    if (!people.some((row) => row.id === employeeId)) { notify("Choose an employee."); return false; }
+    /* An approver has to be somebody who can actually act: a real, enabled
+       account, never the requester themselves, and never the same person
+       twice — a chain that asks one person twice is a chain with a step that
+       can never be reached. */
+    const clean = steps
+      .filter(Boolean)
+      .filter((id, at, all) => all.indexOf(id) === at)
+      .filter((id) => id !== employeeId)
+      .filter((id) => people.some((row) => row.id === id && row.enabled !== false && row.offboarded !== true))
+      .slice(0, 3);
+    if (!clean.length) { notify("An approval flow needs at least one approver."); return false; }
+    const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
+    flowConfig[employeeId] = { ...(flowConfig[employeeId] || {}), [type]: clean };
+    store.flowConfig = flowConfig;
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    const names = clean.map((id) => people.find((row) => row.id === id)?.name || id);
+    notify(`${type} approvals for ${people.find((row) => row.id === employeeId)?.name || "this person"}: ${names.join(" → ")}`);
+    return true;
+  }, [notify, refreshStaffEngine]);
+
   /* Fix the figures on a points entry. Scope-checked like the review handler;
      every fix stamps who corrected it and when, beside any review stamps. */
   const fixPerformanceRow = useCallback((rowId: string, patch: { date?: string; hours?: number; submitted?: number; approved?: number; status?: string; notes?: string }) => {
@@ -8873,6 +8917,14 @@ export default function Home() {
               store={staffStore}
               submit={submitRequest}
               decide={decideRequest}
+            />
+          </div>
+          <div className={active.native === "approvalFlow" ? "native active" : "native"}>
+            <ApprovalFlowCentre
+              viewer={sessionUser}
+              users={accessUsers}
+              store={staffStore}
+              save={saveApprovalFlow}
             />
           </div>
           <div className={active.native === "corrections" ? "native active" : "native"}>
@@ -14910,6 +14962,184 @@ function RequestsCentre({
             </div>
           </section>
         </>
+      )}
+    </div>
+  );
+}
+
+/* HR & Skills → Approval Flow. Who approves one person's requests, in order.
+ *
+ * The chain lived only inside the Timeclock engine's Leave & Requests page,
+ * which is why people could not find it — and it could only be set, never
+ * really rearranged: three fixed dropdowns and no way to move a step. This is
+ * the same flowConfig, edited where the people are, with steps you can add,
+ * remove, and move up or down — so A → B → C becomes A → D → B in the order
+ * you actually want, rather than by retyping every box. */
+const FLOW_TYPES = ["Leave", "Schedule", "Performance"] as const;
+
+function ApprovalFlowCentre({
+  viewer, users, store, save,
+}: {
+  viewer: StaffUser | null;
+  users: StaffUser[];
+  store: Record<string, unknown> | null;
+  save: (employeeId: string, type: string, steps: string[]) => boolean;
+}) {
+  const item = ITEMS.find((row) => row.id === "hr-approval-flow");
+  const canEdit = Boolean(viewer && item && hasItemPermission(viewer, item, "edit"));
+  const scope = scopedUsers(viewer, users).filter((user) => user.offboarded !== true);
+  const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
+
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [type, setType] = useState<string>("Leave");
+  const [draft, setDraft] = useState<string[]>([]);
+  const [touched, setTouched] = useState(false);
+
+  const person = scope.find((user) => user.id === selectedId) || scope[0] || null;
+  /* Read straight from the store rather than memoised: it is a lookup and a
+     filter over at most three ids, and the store object is rebuilt on every
+     sync tick anyway, so caching it would cost more than it saves. */
+  const saved = person ? (flowConfig[person.id]?.[type] || []).filter(Boolean) : [];
+  /* The editor follows the person and the request type until somebody starts
+     changing it; only then does it hold its own state. */
+  const steps = touched ? draft : saved;
+  const dirty = touched && JSON.stringify(draft) !== JSON.stringify(saved);
+  const nameOf = (id: string) => users.find((user) => user.id === id)?.name || id;
+
+  const change = (next: string[]) => { setDraft(next); setTouched(true); };
+  const move = (at: number, by: number) => {
+    const next = [...steps];
+    const to = at + by;
+    if (to < 0 || to >= next.length) return;
+    [next[at], next[to]] = [next[to], next[at]];
+    change(next);
+  };
+  const reset = () => { setDraft([]); setTouched(false); };
+
+  const candidates = users.filter((user) =>
+    user.enabled !== false && user.offboarded !== true && user.id !== person?.id);
+  const listed = scope.filter((user) =>
+    `${user.name} ${user.department || ""} ${user.access || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+
+  return (
+    <div className="native-scroll requests-scroll">
+      <section className="overview-hero home-hero">
+        <span className="home-hero-mark" aria-hidden="true" />
+        <div>
+          <span className="eyebrow">HR &amp; Skills</span>
+          <h2>Approval Flow</h2>
+          <p>Who approves each person&apos;s requests, and in what order. Requests already waiting keep the chain they were raised with.</p>
+        </div>
+        <span className="access-pill"><CheckCircle2 size={16} /> {canEdit ? "Can edit" : "Read only"}</span>
+      </section>
+
+      <section className="report-panel">
+        <div className="section-head">
+          <div><span className="eyebrow">Employee</span><h3>Choose whose chain to set</h3></div>
+          <span className="black-badge">{listed.length}</span>
+        </div>
+        <div className="settings-fields">
+          <label className="wide">Find someone
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, department, or role" />
+          </label>
+        </div>
+        <div className="data-table-wrap">
+          <table className="data-table"><thead><tr>
+            <th>Employee</th><th>Department</th><th>Leave chain</th><th></th>
+          </tr></thead><tbody>
+            {listed.slice(0, 60).map((user) => {
+              const chain = (flowConfig[user.id]?.Leave || []).filter(Boolean);
+              return (
+                <tr key={user.id}>
+                  <td><b>{user.name}</b><small>{user.access || ""}</small></td>
+                  <td>{user.department || "—"}</td>
+                  <td>{chain.length ? chain.map(nameOf).join(" → ") : <span className="chain-none">No flow set</span>}</td>
+                  <td><button type="button" className="btn small" onClick={() => { setSelectedId(user.id); reset(); }}>
+                    {person?.id === user.id ? "Editing" : "Edit"}
+                  </button></td>
+                </tr>
+              );
+            })}
+            {!listed.length && <tr><td colSpan={4}><div className="empty compact">Nobody matches that search.</div></td></tr>}
+          </tbody></table>
+        </div>
+      </section>
+
+      {person && (
+        <section className="settings-panel">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">{person.department || "No department"}</span>
+              <h3>{person.name}</h3>
+              <p>Set the order approvals travel in. Each step waits for the one before it.</p>
+            </div>
+          </div>
+
+          <div className="settings-tabs" role="tablist" aria-label="Request type">
+            {FLOW_TYPES.map((value) => (
+              <button key={value} type="button" role="tab" aria-selected={type === value}
+                className={type === value ? "active" : ""}
+                onClick={() => { setType(value); reset(); }}>{value}</button>
+            ))}
+          </div>
+
+          {/* What the chain does today, as the person will experience it. */}
+          <div className="chain-strip" style={{ margin: "10px 0 4px" }}>
+            <div className="chain-step is-approved">
+              <span className="chain-badge" aria-hidden="true">1</span>
+              <span className="chain-name">{person.name}</span>
+              <span className="chain-state">raises the request</span>
+            </div>
+            {steps.map((id, index) => (
+              <div key={`${id}-${index}`} className="chain-step is-waiting">
+                <span className="chain-badge" aria-hidden="true">{index + 2}</span>
+                <span className="chain-name">{nameOf(id)}</span>
+                <span className="chain-state">approves {index === steps.length - 1 ? "last" : `step ${index + 1}`}</span>
+              </div>
+            ))}
+            {!steps.length && <span className="chain-none">No approvers yet — add one below.</span>}
+          </div>
+
+          {steps.map((id, index) => (
+            <div className="settings-fields" key={`row-${index}`}>
+              <label>Step {index + 1}
+                <select value={id} disabled={!canEdit} onChange={(event) => {
+                  const next = [...steps]; next[index] = event.target.value; change(next);
+                }}>
+                  {candidates.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </select>
+              </label>
+              {canEdit && (
+                <div className="review-actions" style={{ alignSelf: "end" }}>
+                  <button type="button" onClick={() => move(index, -1)} disabled={index === 0}>Move up</button>
+                  <button type="button" onClick={() => move(index, 1)} disabled={index === steps.length - 1}>Move down</button>
+                  <button type="button" className="danger" onClick={() => change(steps.filter((_, at) => at !== index))}>Remove</button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {canEdit && (
+            <div className="form-actions">
+              {steps.length < 3 && (
+                <button type="button" className="secondary" onClick={() => {
+                  const next = candidates.find((user) => !steps.includes(user.id));
+                  if (next) change([...steps, next.id]);
+                }}><Plus size={15} /> Add approver</button>
+              )}
+              <button type="button" className="primary" disabled={!dirty} onClick={() => {
+                if (save(person.id, type, steps)) reset();
+              }}>Save {type} flow</button>
+              {dirty && <button type="button" onClick={reset}>Cancel</button>}
+            </div>
+          )}
+          <p className="builder-note">
+            Up to three approvers. A person can never approve their own request, and the same
+            person cannot appear twice. Changing this affects requests raised from now on —
+            anything already waiting keeps its own chain, which Corrections can reroute.
+          </p>
+        </section>
       )}
     </div>
   );
