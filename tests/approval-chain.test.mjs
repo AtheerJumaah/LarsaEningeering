@@ -102,3 +102,24 @@ test("the queue shows whose desk a request is on instead of a dead button", () =
   assert.match(page, /return <small>With \{who\?\.name \|\| "another approver"\}\{total > 1 \? ` · step \$\{step \+ 1\} of \$\{total\}` : ""\}<\/small>;/);
   assert.match(page, /\{total > 1 && step \+ 1 < total \? "Approve · next step" : "Approve"\}/);
 });
+
+test("late points and attendance corrections skip the chain: one authorized reviewer decides", () => {
+  /* A points figure or a wrong clock-in is a records question, not a leave
+     question. Both are created with an EMPTY flow, which is the single-step
+     path decideRequest has always enforced for chainless requests: anyone
+     holding the approve grant may decide, and the first decision is final —
+     it settles the request and materialises the record at once. Leave and
+     schedule requests keep their configured chains untouched. */
+  const unlockAt = page.indexOf("Late points do NOT walk an approval chain");
+  const correctionAt = page.indexOf("Attendance corrections do NOT walk an approval chain");
+  assert.ok(unlockAt > 0, "the late-points rationale must be written down");
+  assert.ok(correctionAt > 0, "the corrections rationale must be written down");
+  // Both creations carry an empty flow…
+  assert.match(page.slice(unlockAt, unlockAt + 900), /const flow: string\[\] = \[\];/);
+  assert.match(page.slice(correctionAt, correctionAt + 1200), /flow: \[\],/);
+  // …and notify exactly the people granted approve access, never a chain.
+  const reviewerGate = /hasItemPermission\((?:entry|row), approvalsGate, "approve"\)/g;
+  assert.ok((page.match(reviewerGate) || []).length >= 2, "reviewers must be selected by the approve grant");
+  // Leave and schedule requests still read the configured chain.
+  assert.match(page, /const configured = flowConfig\[actor\.id\]\?\.\[draft\.type\];/);
+});
