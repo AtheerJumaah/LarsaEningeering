@@ -214,14 +214,18 @@ test("13. unread state syncs across devices without leaking content", () => {
   assert.match(ping, /exception when others then[\s\S]{0,300}null;/);
 });
 
-test("14. signing out releases this browser", () => {
+test("14. signing out clears the view but not the person's alerts", () => {
   const out = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("const signOut = useCallback") + 1400);
-  assert.match(out, /if \(leaving\?\.id\) void unsubscribeFromPush\(leaving\.id\)/);
+  /* What signing out still does: nothing of the last person stays on screen. */
   assert.match(out, /setBellOpen\(false\)/);
   assert.match(out, /setNotifyCounts\(EMPTY_COUNTS\)/);
   assert.match(out, /setAppBadge\(0\)/);
-  // Both halves: unsubscribe locally AND drop the row, or the sender keeps
-  // pushing at a browser that is no longer listening.
+  /* What it deliberately no longer does: cancel the push subscription. The app
+     signs people out by itself when a verification interval lapses, so that
+     turned alerts off for people who never asked for them to be off. Handing
+     the browser to the next person is done at sign-in instead. */
+  assert.doesNotMatch(out, /unsubscribeFromPush/);
+  // Turning them off by hand still does both halves properly.
   assert.match(push, /await subscription\.unsubscribe\(\)/);
   assert.match(push, /notify_forget_device/);
 });
@@ -530,4 +534,26 @@ test("the unread badge reaches the app icon, not just the bell", () => {
   assert.match(push, /export function setAppBadge\(count: number\): void/);
   assert.match(sw, /data\.type !== "larsa:badge"/);
   assert.match(sw, /self\.navigator\.setAppBadge/);
+});
+
+test("alerts stay on until the person turns them off", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const push = readFileSync(new URL("../lib/supabase/push.ts", import.meta.url), "utf8");
+  /* Signing out used to cancel this browser's push subscription, and the app
+     signs people out by itself when a verification interval lapses — so alerts
+     switched themselves off and had to be turned on again and again. */
+  const signOut = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("const signOut = useCallback") + 1400);
+  assert.doesNotMatch(signOut, /unsubscribeFromPush/,
+    "signing out must not cancel alerts the person switched on");
+  // Turning them off by hand is still the one thing that does.
+  assert.match(page, /await unsubscribeFromPush\(user\.id\);/);
+  /* The shared-machine case is handled where it arises: the next person to
+     sign in adopts the subscription, and push_subscriptions moves the row to
+     them, so the previous account stops receiving on that hardware. */
+  assert.match(page, /void adoptPushSubscription\(normalizedUser\.id, normalizedUser\.name\);/);
+  assert.match(push, /export async function adoptPushSubscription/);
+  // Silent: it never re-asks for permission and never creates a subscription.
+  assert.match(push, /if \(typeof Notification === "undefined" \|\| Notification\.permission !== "granted"\) return;/);
+  assert.match(push, /const subscription = await registration\.pushManager\.getSubscription\(\);\s*\n\s*if \(!subscription\) return;/);
+  assert.doesNotMatch(push.slice(push.indexOf("export async function adoptPushSubscription")), /requestPermission|pushManager\.subscribe/);
 });

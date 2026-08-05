@@ -359,3 +359,40 @@ test("responsive rules keep the six cards as cards on small screens", () => {
   // Decorations scale down rather than disappear.
   assert.match(pass, /\.module-bubble::after, \.module-bubble \.module-blob \{ width: \d+px/);
 });
+
+test("the installed app replaces itself when a new version ships", () => {
+  /* The worker always took over on activate, but the PAGE kept running the
+     old code until somebody happened to close and reopen it — a shipped fix
+     could sit unseen on a phone for days. The app now asks for a newer worker
+     on load and whenever it returns to the foreground, and reloads once when
+     one takes over. */
+  assert.match(page, /registration\.update\(\)\.catch\(\(\) => undefined\);/);
+  assert.match(page, /document\.addEventListener\("visibilitychange", updateCheck\);/);
+  assert.match(page, /navigator\.serviceWorker\?\.addEventListener\("controllerchange", onControllerChange\);/);
+  /* A first install has no previous controller; reloading then would restart
+     the app under the person's hands, and could loop. */
+  assert.match(page, /const hadController = Boolean\(navigator\.serviceWorker\?\.controller\);/);
+  assert.match(page, /if \(!hadController \|\| reloading\) return;/);
+  // And every listener it adds is removed again.
+  assert.match(page, /navigator\.serviceWorker\?\.removeEventListener\("controllerchange", onControllerChange\);/);
+  assert.match(page, /if \(updateCheck\) document\.removeEventListener\("visibilitychange", updateCheck\);/);
+  // The dead end in the sheet is now an action, not an instruction.
+  assert.match(page, /Reload and try again/);
+});
+
+test("Platform Settings says when backups will not load instead of loading for ever", () => {
+  const panel = read("app/PlatformSettings.tsx");
+  /* A browser left open overnight reaches the backup RPC with an expired
+     token. The failure used to be swallowed, so the schedule, the addresses
+     and the snapshot list never appeared and the feature looked missing. */
+  assert.match(panel, /if \(attempt === 0\) \{\s*\n\s*try \{ await client\.auth\.refreshSession\(\); \}/);
+  assert.match(panel, /return loadBackups\(1\);/);
+  assert.match(panel, /setBackupError\(String\(s\.error\.message/);
+  // And the panel offers a way out rather than an eternal "Loading…".
+  assert.match(panel, /backupLoading \? <p className="org-none">Loading backup settings\.\.\.<\/p> : \(/);
+  assert.match(panel, /onClick=\{\(\) => loadBackups\(\)\}>Try again<\/button>/);
+  // The controls people were looking for are all still there.
+  for (const control of ["Email a copy to", "Back up now", "Snapshots", "interval_hours", "retain_days"]) {
+    assert.ok(panel.includes(control), `the backup panel must still offer ${control}`);
+  }
+});
