@@ -547,7 +547,8 @@ export function AccountAccess({
               <label>
                 Employee PIN
                 <input
-                  type={showPass ? "text" : "password"}
+                  type="text"
+                  className={showPass ? undefined : "pin-mask"}
                   required
                   inputMode="numeric"
                   minLength={4}
@@ -562,7 +563,8 @@ export function AccountAccess({
               <label>
                 Confirm PIN
                 <input
-                  type={showPass ? "text" : "password"}
+                  type="text"
+                  className={showPass ? undefined : "pin-mask"}
                   required
                   inputMode="numeric"
                   minLength={4}
@@ -631,7 +633,8 @@ export function AccountAccess({
               <label>
                 New Employee PIN
                 <input
-                  type={showPass ? "text" : "password"}
+                  type="text"
+                  className={showPass ? undefined : "pin-mask"}
                   required
                   inputMode="numeric"
                   minLength={4}
@@ -646,7 +649,8 @@ export function AccountAccess({
               <label>
                 Confirm PIN
                 <input
-                  type={showPass ? "text" : "password"}
+                  type="text"
+                  className={showPass ? undefined : "pin-mask"}
                   required
                   inputMode="numeric"
                   minLength={4}

@@ -120,7 +120,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .sidebar-account {
   min-height: 64px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-top: auto;
@@ -133,6 +133,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .sidebar-account b, .sidebar-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-account b { color: #fff; font-size: 13px; font-weight: 800; }
 .sidebar-account small { margin-top: 2px; color: #9aa1ad; font-size: 11px; font-weight: 700; }
+.sidebar-account-actions { display: flex; align-items: center; gap: 8px; }
 .sidebar-account button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #303030; border-radius: 11px; background: #151515; color: #cfd3da; }
 
 .main-shell { min-width: 0; height: 100dvh; overflow: hidden; }
@@ -539,6 +540,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .auth-card input:focus { border-color: #2f6fed; box-shadow: 0 0 0 4px rgba(47,111,237,.11); }
 .password-field { position: relative; display: block; }
 .password-field input { padding-right: 48px; }
+/* Numeric PIN fields are masked with this instead of type="password" --
+   pairing type="password" with inputMode="numeric" is what was defeating
+   Backspace/Delete on Android's and iOS's numeric secure-entry keyboards: a
+   digit could be appended but never removed. text-security renders the same
+   masked dots without changing the input's type, so the OS shows its
+   ordinary numeric keypad instead of the special password-numeric one. */
+.pin-mask { -webkit-text-security: disc; }
 .password-field button {
   position: absolute;
   top: 4px;
