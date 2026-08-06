@@ -157,3 +157,19 @@ test("Close app is a deliberate one-tap exit, separate from the Back double-pres
   assert.match(page, /onClick=\{closeApp\} aria-label="Close app"/);
   assert.match(page, /onClick=\{previewOwner \? endAccessPreview : signOut\} aria-label=\{previewOwner \? "Exit preview" : "Sign out"\}/);
 });
+
+test("Close app also sits in the top bar, right beside Sign out, but only on phones", () => {
+  /* The sidebar's Close app button is a tap away only after opening the
+     menu. Sign out already has a second, always-on-screen control in the
+     top bar (.top-signout) -- the one people actually reach for -- so
+     Close app needed the same spot, right next to it. Closing "the app" is
+     a phone-installed-PWA idea though: a desktop tab already has its own
+     close button, so this one stays off until the phone breakpoint. */
+  assert.match(page, /\{sessionUser && !previewOwner && <button type="button" className="top-close-app" onClick=\{closeApp\} aria-label="Close app"[^}]*><X size=\{17\} \/><\/button>\}\s*\n\s*\{sessionUser && !previewOwner && <button type="button" className="top-signout" onClick=\{signOut\} aria-label="Sign out">/);
+  // Hidden by default, only switched on inside the phone-width breakpoint
+  // this file already uses for the rest of the top bar's compact layout.
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.top-close-app \{ display: none;/);
+  const phoneBlock = css.slice(css.indexOf("@media (max-width: 760px)"), css.indexOf("@media (max-width: 760px)") + 800);
+  assert.match(phoneBlock, /\.top-close-app \{ display: grid; width: 42px; min-height: 42px; \}/);
+});
