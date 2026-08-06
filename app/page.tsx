@@ -6653,7 +6653,16 @@ export default function Home() {
   const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string) => {
     const actor = sessionUserRef.current;
     const clockItem = ITEMS.find((item) => item.id === "staff-clock");
-    if (!actor || !clockItem || !hasItemPermission(actor, clockItem, "manage")) {
+    /* Two doors in. A clock manager adjusts anyone's record, as before. And
+       everyone who can use the clock may trim THEMSELVES: the one-way rule
+       below means a trim can only shorten recorded time, so self-service can
+       close a forgotten clock-out or hand back over-counted minutes but can
+       never manufacture an hour — adding time still goes through the
+       correction request and its approval. The uid equality is the scope:
+       an ordinary account can never reach another person's record here. */
+    const managesClock = Boolean(actor && clockItem && hasItemPermission(actor, clockItem, "manage"));
+    const trimsOwnRecord = Boolean(actor && clockItem && uid === actor.id && hasItemPermission(actor, clockItem, "edit"));
+    if (!actor || !clockItem || (!managesClock && !trimsOwnRecord)) {
       notify("Your account cannot adjust attendance records.");
       return false;
     }
@@ -16727,11 +16736,25 @@ function QuickClock({
     const item = ITEMS.find((row) => row.id === "staff-clock");
     return item ? hasItemPermission(user, item, "manage") : false;
   })());
+  /* Everyone who can use the clock may trim their OWN sessions — the trim
+     path only ever shortens (see trimSession), so self-service cannot
+     inflate hours. Managers keep the team-wide panel with removal. */
+  const maySelfTrim = Boolean(!mayAdjustHours && user && (() => {
+    const item = ITEMS.find((row) => row.id === "staff-clock");
+    return item ? hasItemPermission(user, item, "edit") : false;
+  })());
   /* Newest first, across the whole team, so a manager can close someone's
      forgotten clock-out without hunting through the reports. */
   const recentAll = [...sessions]
     .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime())
     .slice(0, 12);
+  const recentMine = [...sessions]
+    .filter((session) => session.uid === user?.id)
+    .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime())
+    .slice(0, 12);
+  /* What the trim panel lists: a manager sees the team, everyone else sees
+     exactly themselves. */
+  const trimRows = mayAdjustHours ? recentAll : recentMine;
   const [now, setNow] = useState<Date | null>(null);
   const [period, setPeriod] = useState("week");
   const monthStart = new Date(); monthStart.setDate(1);
@@ -16874,24 +16897,26 @@ function QuickClock({
         {/* Sits beside the request button on purpose: same place, opposite
             rule. Adding time needs approval; taking it away does not, because
             nobody can inflate their own attendance by removing hours. */}
-        {mayAdjustHours && !showCorrection && (
+        {(mayAdjustHours || maySelfTrim) && !showCorrection && (
           <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
             <Scissors size={18} />
             <span>
-              <b>Trim or remove recorded hours</b>
-              <small>Close a forgotten clock-out or delete a session — applies straight away, no approval</small>
+              <b>{mayAdjustHours ? "Trim or remove recorded hours" : "Trim your recorded hours"}</b>
+              <small>{mayAdjustHours
+                ? "Close a forgotten clock-out or delete a session — applies straight away, no approval"
+                : "Close a forgotten clock-out or shorten a session — applies straight away, your own records only, and only ever shorter"}</small>
             </span>
           </button>
         )}
 
-        {mayAdjustHours && showTrim && !showCorrection && (
+        {(mayAdjustHours || maySelfTrim) && showTrim && !showCorrection && (
           <div className="report-panel trim-panel">
             <div className="section-head">
-              <div><span className="eyebrow">Direct change · no approval</span><h3>Recent sessions</h3></div>
+              <div><span className="eyebrow">{mayAdjustHours ? "Direct change · no approval" : "Your sessions · only ever shorter"}</span><h3>{mayAdjustHours ? "Recent sessions" : "Your recent sessions"}</h3></div>
               <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); }}>Close</button>
             </div>
-            {!recentAll.length && <div className="empty compact">No sessions recorded yet.</div>}
-            {recentAll.map((session) => {
+            {!trimRows.length && <div className="empty compact">No sessions recorded yet.</div>}
+            {trimRows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
               return (
                 <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
@@ -16921,9 +16946,14 @@ function QuickClock({
                         setTrimming({ uid: session.uid, clockIn: session.clockIn });
                         setTrimValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
                       }}>Trim</button>
-                      <button type="button" className="danger" onClick={async () => {
-                        if (await dialog.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
-                      }}>Reset</button>
+                      {/* Removal erases the record outright, so it stays a
+                          manager's tool; self-service gets the one-way trim
+                          alone. */}
+                      {mayAdjustHours && (
+                        <button type="button" className="danger" onClick={async () => {
+                          if (await dialog.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                        }}>Reset</button>
+                      )}
                     </div>
                   )}
                 </div>
