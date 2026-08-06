@@ -1057,6 +1057,8 @@ const STAFF_PERMISSION_LIST = [
 ];
 const ACCOUNTING_SECTIONS: Record<string, Set<string>> = {
   "Super Admin": new Set(GROUPS.find((group) => group.label === "Accounting")!.items.map((item) => item.section!)),
+  // Full parity with Super Admin -- see accountingRole() and presetPermissionProfile's "Admin" branch.
+  Admin: new Set(GROUPS.find((group) => group.label === "Accounting")!.items.map((item) => item.section!)),
   Manager: new Set(GROUPS.find((group) => group.label === "Accounting")!.items.map((item) => item.section!)),
   "Owner / Super Admin": new Set(GROUPS.find((group) => group.label === "Accounting")!.items.map((item) => item.section!)),
   Management: new Set(GROUPS.find((group) => group.label === "Accounting")!.items.map((item) => item.section!)),
@@ -1350,6 +1352,14 @@ function presetPermissionProfile(preset: string): PermissionProfile {
     allow("hr-people");
     allow("hr-matrix");
     allow("hr-reports", VIEW_EXPORT);
+    /* Full Accounting capability, at the same ceiling Super Admin's own
+       profile would compute (allowGroup with no restricted-actions argument
+       grants every action permissionActionsFor(item) allows for that item --
+       the same call Super Admin's own branch above makes per group). This is
+       the client half of Admin's accounting parity; the other half is the
+       Postgres migration that recognizes "Admin" alongside "Owner / Super
+       Admin" in the functions that actually gate writes at the database. */
+    allowGroup("Accounting");
   } else if (preset === "Manager") {
     allowGroup("Time & Attendance");
     allowGroup("Performance & Workboard");
@@ -1496,6 +1506,13 @@ function hasStaffPermission(user: StaffUser, permission: string) {
 
 function accountingRole(user: StaffUser) {
   if (user.access === "Super Admin") return "Owner / Super Admin";
+  /* Admin is deliberately its own distinct engine-facing role rather than a
+     reuse of "Owner / Super Admin" -- see the Postgres migration that grants
+     it identical permissions. Keeping the string distinct (and not merely a
+     superstring of "Super Admin") matters because a couple of legacy client
+     checks elsewhere test for that substring; a clean name avoids ever
+     tripping one by accident in either direction. */
+  if (user.access === "Admin") return "Admin";
   if (user.access === "Manager") return "Management";
   if (user.access === "Accountant") return "Accountant";
   if (user.access === "Admin HR") return "Payroll Accountant";
