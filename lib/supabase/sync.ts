@@ -39,6 +39,53 @@ export const SYNCED_KEYS = [
 ] as const;
 export type SyncedKey = (typeof SYNCED_KEYS)[number];
 
+/* ---- Server clock ------------------------------------------------------
+   Attendance punches must not trust the device's clock: one phone set ten
+   minutes wrong records ten-minutes-wrong shifts (and, before the CAS
+   write above, also broke conflict detection for everyone). The offset
+   between the server's clock and this device's is measured against
+   server_now() with the round trip halved out — accurate to well under a
+   second, against device clocks that are wrong by minutes. Shared through
+   localStorage so the engine iframes (same origin, same storage) stamp
+   punches identically without any injection plumbing. */
+export const CLOCK_OFFSET_STORAGE_KEY = "larsaClockOffsetMsV1";
+let clockOffsetMs: number | null = null;
+
+function storedClockOffset(): number {
+  try {
+    const raw = window.localStorage.getItem(CLOCK_OFFSET_STORAGE_KEY);
+    const parsed = raw === null ? NaN : parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function serverClockOffsetMs(): number {
+  if (typeof window === "undefined") return 0;
+  if (clockOffsetMs === null) clockOffsetMs = storedClockOffset();
+  return clockOffsetMs;
+}
+
+export function serverNowMs(): number {
+  return Date.now() + serverClockOffsetMs();
+}
+
+export function serverNowIso(): string {
+  return new Date(serverNowMs()).toISOString();
+}
+
+async function sampleServerClock(supabase: SupabaseClient, persist: (key: string, value: string) => void) {
+  const before = Date.now();
+  const { data, error } = await supabase.rpc("server_now");
+  if (error || !data) return;
+  const after = Date.now();
+  const serverMs = new Date(String(data)).getTime();
+  if (!Number.isFinite(serverMs)) return;
+  clockOffsetMs = Math.round(serverMs - (before + (after - before) / 2));
+  try { persist(CLOCK_OFFSET_STORAGE_KEY, String(clockOffsetMs)); } catch { /* private mode / storage full */ }
+}
+
 type SyncOptions = {
   onRemoteChange?: (key: SyncedKey) => void;
   onStatusChange?: (status: "connecting" | "synced" | "offline") => void;
@@ -94,50 +141,99 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     }
   }
 
+  /* Publish one key through the app_state_put compare-and-swap RPC. The
+     database accepts the write only if p_base_updated_at still matches the
+     row's current server-side stamp; otherwise NOTHING is overwritten and
+     the current row comes back for this device to merge against and retry.
+     Concurrent writers therefore converge on the union of their work
+     instead of the last one flattening the rest — the select-then-upsert
+     this replaces had a window between the read and the write where a
+     colleague's save (every 8am clock-in rush) was silently lost.
+
+     Client clocks take no part in conflict detection any more: updated_at
+     is stamped by the server's trigger and compared server-side for exact
+     equality. A device with a wrong clock used to publish a stamp from the
+     future and then never again notice the shared row moving — after which
+     every one of its saves reverted everyone else's work. And a device
+     whose bootstrap failed half-way (no lastSeenAt at all) used to treat
+     that as licence to overwrite; the RPC now refuses a null base whenever
+     the row exists, so "I don't know what the server holds" can never
+     again mean "so replace it". */
   async function pushKey(key: SyncedKey) {
     const raw = localStorage.getItem(key);
-    /* The copy this device and the server last agreed on — captured before
-       lastKnown moves on, because it is the base any merge below needs. */
+    /* The copy this device and the server last agreed on — the base any
+       merge below needs. */
     const base = lastKnown.get(key) ?? null;
     if (raw === base) return; // nothing new since our last push
-    lastKnown.set(key, raw ?? "");    /* Refuse to publish work computed from a stale copy. If the shared row has       moved since this device last saw it, take the newer copy instead of       flattening it. The local edit is dropped, which is the right way round:       it was derived from data that is no longer true, and a lost keystroke is       recoverable in a way that a reverted staff table is not. */    /* The shared row may have moved since this device last saw it — somebody
-       else saved something in the meantime. Publishing our copy as-is would
-       flatten their work; discarding ours (what this used to do) threw away a
-       just-created account or a freshly verified device, which is exactly the
-       "no account found" and "asks for a code every time" people reported.
-       Neither is acceptable, so the two versions are MERGED against the copy
-       they both came from and the merge is what gets published. */
-    const seenAt = lastSeenAt.get(key);
-    const { data: current } = await supabase
-      .from("app_state")
-      .select("data, updated_at")
-      .eq("store_key", key)
-      .maybeSingle();
-    let outgoingText = raw;
-    if (current && current.updated_at && seenAt && String(current.updated_at) > seenAt) {
-      console.warn("[larsa-sync] " + key + " changed elsewhere; merging both copies");
+    let outgoingText = raw ?? "";
+    let mergeBase = base;
+    /* What THIS push believes localStorage holds. If the person types while
+       a request is in flight, their write has already queued its own push;
+       overwriting their newer text with this one's result would lose it. */
+    let localBaseline = raw;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let parsed: unknown = {};
+      try { parsed = outgoingText ? JSON.parse(outgoingText) : {}; } catch { return; }
+      const { data, error } = await supabase.rpc("app_state_put", {
+        p_store_key: key,
+        p_data: parsed,
+        p_base_updated_at: lastSeenAt.get(key) ?? null,
+      });
+      if (error) throw error; // schedulePush's catch: retried on next write
+      const row = (Array.isArray(data) ? data[0] : data) as
+        { applied: boolean; current_data: unknown; current_updated_at: string } | undefined;
+      if (!row) throw new Error("app_state_put returned no row");
+      if (row.applied) {
+        /* The server's copy of what we just wrote. It came back through the
+           protective triggers (secret healing, the Super Admin guard), so
+           it is allowed to differ from what we sent — the healed copy is
+           the truthful one. Adopt it locally only if nobody typed here
+           while the request was in flight. */
+        const serverText = JSON.stringify(row.current_data ?? {});
+        lastKnown.set(key, serverText);
+        lastSeenAt.set(key, String(row.current_updated_at));
+        if (localStorage.getItem(key) === localBaseline && serverText !== localBaseline) {
+          originalSetItem(key, serverText);
+          options.onRemoteChange?.(key);
+        }
+        return;
+      }
+      /* Refused: the row moved on (or this device has never seen it).
+         Merge both copies against the base they share and go again from
+         the server's current stamp. */
+      console.warn("[larsa-sync] " + key + " changed elsewhere; merging both copies (attempt " + (attempt + 1) + ")");
+      const remoteValue = row.current_data ?? {};
+      const remoteText = JSON.stringify(remoteValue);
+      lastSeenAt.set(key, String(row.current_updated_at));
       try {
-        const merged = mergeStoreText(base, raw, current.data);
-        outgoingText = JSON.stringify(merged);
-        originalSetItem(key, outgoingText);
-        lastKnown.set(key, outgoingText);
-        options.onRemoteChange?.(key);
+        outgoingText = JSON.stringify(mergeStoreText(mergeBase, outgoingText, remoteValue));
       } catch {
-        /* A merge that cannot be computed must not publish a half-state: keep
-           the copy everyone else already has and let this device catch up. */
-        const remoteText = JSON.stringify(current.data);
-        originalSetItem(key, remoteText);
+        /* A merge that cannot be computed must not publish a half-state:
+           keep the copy everyone else already has and let this device
+           catch up. */
         lastKnown.set(key, remoteText);
-        lastSeenAt.set(key, String(current.updated_at));
+        if (localStorage.getItem(key) === localBaseline) {
+          originalSetItem(key, remoteText);
+          options.onRemoteChange?.(key);
+        }
+        return;
+      }
+      mergeBase = remoteText;
+      lastKnown.set(key, remoteText);
+      if (localStorage.getItem(key) === localBaseline) {
+        originalSetItem(key, outgoingText);
+        localBaseline = outgoingText;
         options.onRemoteChange?.(key);
+        // Next iteration publishes this merge from the fresh stamp.
+      } else {
+        /* Somebody typed here mid-flight. Their write already queued a push
+           that will redo this merge against the newest local text;
+           publishing our now-stale merge would only race it. */
         return;
       }
     }
-    const stamp = new Date().toISOString();    let parsed: unknown = {};
-    try { parsed = outgoingText ? JSON.parse(outgoingText) : {}; } catch { return; }
-    await supabase
-      .from("app_state")
-      .upsert({ store_key: key, data: parsed, updated_at: stamp }, { onConflict: "store_key" });    lastSeenAt.set(key, stamp);
+    /* Five straight refusals means genuinely live contention — the next
+       write or realtime arrival picks it up from the newest stamp. */
   }
 
   function schedulePush(key: SyncedKey) {
@@ -165,6 +261,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     const caughtUpKeys: SyncedKey[] = [];
     try {
       await ensureSession();
+      /* Fire-and-forget: the offset is a refinement, never a gate. */
+      sampleServerClock(supabase, originalSetItem).catch(() => {});
       await Promise.all(SYNCED_KEYS.map(async (key) => {
         const { data: row, error: selectError } = await supabase
           .from("app_state")
@@ -208,7 +306,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         "postgres_changes",
         { event: "*", schema: "public", table: "app_state" },
         (payload) => {
-          const row = payload.new as { store_key?: string; data?: unknown } | null;
+          const row = payload.new as { store_key?: string; data?: unknown; updated_at?: string } | null;
           if (!row?.store_key || !(SYNCED_KEYS as readonly string[]).includes(row.store_key)) return;
           const text = JSON.stringify(row.data ?? {});
           if (lastKnown.get(row.store_key) === text) return; // our own write, echoed back
@@ -227,6 +325,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              the merged text instead would make the push below look like a
              no-op and the merge would never leave this device. */
           lastKnown.set(row.store_key, text);
+          if (row.updated_at) lastSeenAt.set(row.store_key, String(row.updated_at));
           originalSetItem(row.store_key, nextText);
           console.log(`[larsa-sync] realtime change received for "${row.store_key}"`);
           options.onRemoteChange?.(row.store_key as SyncedKey);
@@ -244,11 +343,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 
   let cleanupChannel: (() => void) | null = null;
   bootstrap();
+  /* Clock skew drifts (and phones change it); re-measure every ten minutes. */
+  const clockTimer = setInterval(() => { sampleServerClock(supabase, originalSetItem).catch(() => {}); }, 10 * 60 * 1000);
 
   return () => {
     cancelled = true;
     window.localStorage.setItem = originalSetItem;
     pushTimers.forEach((timer) => clearTimeout(timer));
+    clearInterval(clockTimer);
     cleanupChannel?.();
   };
 }
