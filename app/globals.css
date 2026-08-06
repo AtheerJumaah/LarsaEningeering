@@ -181,13 +181,17 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   text-align: start;
 }
 .clocks b { color: var(--muted); font-size: 9px; text-transform: uppercase; }
-.primary, .secondary, .theme, .top-signout { min-height: 44px; border-radius: 13px; font-weight: 900; }
+.primary, .secondary, .theme, .top-signout, .top-close-app { min-height: 44px; border-radius: 13px; font-weight: 900; }
 .primary { padding: 10px 14px; border: 1px solid #000; background: #000; color: #fff; }
 .dark .primary { border-color: #f3f4f6; background: #f3f4f6; color: #17181b; }
 .secondary { padding: 10px 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 .theme { width: 44px; padding: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: 10px; }
-.theme, .top-signout { display: grid; place-items: center; }
+.theme, .top-signout, .top-close-app { display: grid; place-items: center; }
 .top-signout { width: 44px; padding: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+/* Closing the app is a phone concept -- a desktop tab already has its own
+   close control, so this stays hidden until the phone breakpoint below
+   turns it on, right beside the Sign out button it needs to sit next to. */
+.top-close-app { display: none; width: 44px; padding: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 
 .workspace { position: relative; height: calc(100dvh - 74px); overflow: hidden; }
 .engine, .native {
@@ -1333,6 +1337,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .top-right .primary { padding: 8px 10px; font-size: 11px; }
   .theme { width: 42px; min-height: 42px; }
   .top-signout { width: 42px; min-height: 42px; }
+  .top-close-app { display: grid; width: 42px; min-height: 42px; }
   .native-scroll { gap: 12px; padding: 12px; }
   .home-scroll { padding: 14px; }
   .overview-hero { display: grid; align-items: start; padding: 18px; }

@@ -8877,6 +8877,7 @@ export default function Home() {
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
+            {sessionUser && !previewOwner && <button type="button" className="top-close-app" onClick={closeApp} aria-label="Close app" title="Close the app — you stay signed in"><X size={17} /></button>}
             {sessionUser && !previewOwner && <button type="button" className="top-signout" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button>}
           </div>
         </header>
