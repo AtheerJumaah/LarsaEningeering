@@ -55,11 +55,22 @@ export function OrgStructure({
   const chart = useMemo(() => effectiveOrg(users), [users, tick]);
   const active = useMemo(() => users.filter((row) => row.enabled !== false), [users]);
 
+  /* Resolves an id to a real, non-empty name -- and nothing else. A team or
+     department can reference an id that no longer has a matching staff record
+     (someone removed, or leftover seed data); that is not a person named
+     "Unknown", it is nobody, and every caller below is expected to treat an
+     empty string as "leave this id out" rather than inventing a placeholder. */
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
-    users.forEach((row) => map.set(row.id, String(row.name || "")));
-    return (id: string) => map.get(id) || "Unknown";
+    users.forEach((row) => {
+      const name = String(row.name || "").trim();
+      if (name) map.set(row.id, name);
+    });
+    return (id: string) => map.get(id) || "";
   }, [users]);
+  function isKnown(id: string): boolean {
+    return Boolean(nameOf(id));
+  }
 
   function save(next: OrgChart, message: string) {
     if (writeOrg(next)) {
@@ -78,7 +89,7 @@ export function OrgStructure({
   );
 
   function membersOf(team: Team): string[] {
-    return [...new Set((team.leadIds || []).concat(team.memberIds || []))];
+    return [...new Set((team.leadIds || []).concat(team.memberIds || []))].filter(isKnown);
   }
   function peopleIn(department: Department): string[] {
     const ids = new Set<string>();
@@ -145,11 +156,18 @@ export function OrgStructure({
     save({ departments: chart.departments.filter((row) => row.id !== department.id), teams: chart.teams.filter((row) => row.departmentId !== department.id) }, "Department removed.");
   }
 
-  function moveMember(team: Team, fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = (team.memberIds || []).slice();    const from = list.indexOf(fromId);    const to = list.indexOf(toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    setTeamField(team, "memberIds", list);    setDragPerson("");  }  function Chips({ ids, onRemove, empty, onReorder }: { ids: string[]; onRemove?: (id: string) => void; empty: string; onReorder?: (fromId: string, toId: string) => void }) {
-    if (!ids.length) return <span className="struct-empty">{empty}</span>;
+  function moveMember(team: Team, fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = (team.memberIds || []).slice();    const from = list.indexOf(fromId);    const to = list.indexOf(toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    setTeamField(team, "memberIds", list);    setDragPerson("");  }
+  /* ids can carry references to people who no longer resolve to a name (see
+     nameOf above); those are filtered out here rather than at every call
+     site, so an unresolvable id silently disappears and the field falls back
+     to its own empty-state copy ("No head" / "No lead" / "Nobody yet") the
+     same as if the id had never been added. Nobody ever renders as "Unknown". */
+  function Chips({ ids, onRemove, empty, onReorder }: { ids: string[]; onRemove?: (id: string) => void; empty: string; onReorder?: (fromId: string, toId: string) => void }) {
+    const visible = ids.filter(isKnown);
+    if (!visible.length) return <span className="struct-empty">{empty}</span>;
     return (
       <span className="struct-chips">
-        {ids.map((id) => (
+        {visible.map((id) => (
           <span className={"struct-chip" + (onReorder ? " is-movable" : "")} key={id} title={nameOf(id)} draggable={Boolean(onReorder)} onDragStart={onReorder ? (event) => { event.stopPropagation(); setDragPerson(id); } : undefined} onDragOver={onReorder ? (event) => { event.preventDefault(); event.stopPropagation(); } : undefined} onDrop={onReorder ? (event) => { event.preventDefault(); event.stopPropagation(); onReorder(dragPerson, id); } : undefined}>
             <em>{initials(nameOf(id))}</em>
             {nameOf(id)}

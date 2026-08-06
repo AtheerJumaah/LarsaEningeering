@@ -92,11 +92,21 @@ export function HierarchyDashboard({
     return map;
   }, [summaries]);
 
+  /* An id on the chart with no matching, named staff record is not a person
+     named "Unknown" -- it is a stale reference (someone removed, or leftover
+     seed data) and every caller here is expected to drop it rather than
+     display a fabricated placeholder. */
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
-    users.forEach((row) => map.set(row.id, String(row.name || "")));
-    return (id: string) => map.get(id) || "Unknown";
+    users.forEach((row) => {
+      const name = String(row.name || "").trim();
+      if (name) map.set(row.id, name);
+    });
+    return (id: string) => map.get(id) || "";
   }, [users]);
+  function isKnown(id: string): boolean {
+    return Boolean(nameOf(id));
+  }
 
   const roleOf = useMemo(() => {
     const map = new Map<string, string>();
@@ -200,10 +210,10 @@ export function HierarchyDashboard({
     .map((row) => row.name);
   const myLeads = viewer
     ? [...new Set(teamsContaining(org, viewer.id).flatMap((team) => team.leadIds || []))].filter(
-        (id) => id !== viewer.id,
+        (id) => id !== viewer.id && isKnown(id),
       )
     : [];
-  const myManagers = viewer ? managersOf(org, viewer.id, users) : [];
+  const myManagers = viewer ? managersOf(org, viewer.id, users).filter(isKnown) : [];
 
   const company = rollup(summaries.map((row) => row.user.id));
 
@@ -354,7 +364,7 @@ export function HierarchyDashboard({
             const ids = [...new Set(teams.flatMap((team) => membersOf(team)))].filter((id) => byId.has(id));
             const totals = rollup(ids);
             const isOpen = departmentOpen(department.id);
-            const heads = (department.headIds || []).filter((id) => byId.has(id) || nameOf(id) !== "Unknown");
+            const heads = (department.headIds || []).filter(isKnown);
             return (
               <section className={"org-card hier-department" + (dragId === department.id ? " is-dragging" : "") + (overId === department.id ? " is-over" : "")} key={department.id} draggable onDragStart={() => setDragId(department.id)} onDragEnd={() => { setDragId(""); setOverId(""); }} onDragOver={(event) => { event.preventDefault(); if (overId !== department.id) setOverId(department.id); }} onDrop={(event) => { event.preventDefault(); moveDepartment(dragId, department.id); }}>
                 <button
