@@ -106,7 +106,7 @@ do $$ begin
 end $$;
 EOF
 
-for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql 2>/dev/null | sort); do
+for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql "$repo"/supabase/migrations/2026*_sync_*.sql 2>/dev/null | sort); do
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
 done
@@ -115,7 +115,7 @@ total=0
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
           "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
           "$here/accounting-payroll-sql.test.sql" "$here/accounting-admin-role-sql.test.sql" \
-          "$here/notifications-sql.test.sql" \
+          "$here/notifications-sql.test.sql" "$here/app-state-cas-sql.test.sql" \
           "$here/viewer-accounts-sql.test.sql" "$here/notify-email-sql.test.sql" \
           "$here/qa-spec-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }

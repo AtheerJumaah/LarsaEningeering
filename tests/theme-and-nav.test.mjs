@@ -86,7 +86,9 @@ test("clocking yourself in and out still works, and still guards a double-tap", 
   assert.match(page, /const punchClock = useCallback/);
   assert.match(page, /const punchBreak = useCallback/);
   // The guard stays short and honest: it absorbs a real double-fire and
-  // returns false rather than claiming success while doing nothing.
-  assert.match(page, /Date\.now\(\) - new Date\(latest\.time\)\.getTime\(\) < 1200/);
+  // returns false rather than claiming success while doing nothing. It
+  // compares on the server-corrected clock, because latest.time is now
+  // server-stamped — see tests/sync-clobber-fix.test.mjs.
+  assert.match(page, /serverNowMs\(\) - new Date\(latest\.time\)\.getTime\(\) < 1200/);
   assert.match(page, /< 1200\) \{\s*\n\s*return false;/);
 });
