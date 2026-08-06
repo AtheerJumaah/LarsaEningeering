@@ -6238,16 +6238,12 @@ export default function Home() {
      sentinel only decides whether a press is handled by the app or released
      to the system. */
   const [exitHint, setExitHint] = useState(false);
-  const systemBackRef = useRef<{ armed: boolean; timer: number | null; leaving: number | null; suppressed: boolean }>({ armed: false, timer: null, leaving: null, suppressed: false });
+  const systemBackRef = useRef<{ armed: boolean; timer: number | null; leaving: number | null }>({ armed: false, timer: null, leaving: null });
   const armSentinel = () => {
     try { window.history.pushState({ larsa: "sentinel" }, ""); } catch { /* history unavailable */ }
   };
   const handleSystemBack = () => {
     const flags = systemBackRef.current;
-    // A deliberate "Close app" tap is driving history itself right now (see
-    // closeApp below) — the normal handler must not also react to those
-    // same pops, or it would detour them through "go to Home" first.
-    if (flags.suppressed) return;
     /* Mid-departure: keep stepping out through any stale same-document
        entries a refresh left behind, then hand control to the system. If the
        app is still visible shortly after, the departure is over — restore
@@ -6286,36 +6282,6 @@ export default function Home() {
       setExitHint(false);
       armSentinel();
     }, 2000);
-  };
-  /* An explicit "Close app" tap is not the system Back button: it should not
-     get Back's incremental "close this dialog, then the menu, then go to
-     Home" walk, and it does not need Back's double-press guard either — a
-     clearly labelled button is already the deliberate action that guard
-     exists to tell apart from an accidental press. What it needs is the same
-     real result Back eventually reaches: run the sentinel and base entries
-     off the end of the browser's history, which is what actually lets the
-     browser or OS close the surface. That takes two genuine, separate
-     history.back() calls — this screen's sentinel entry, then the base entry
-     underneath it — with the normal handler switched off in between so it
-     does not treat either pop as a press of its own. Signing out is a
-     different, explicit action; this never touches the session. */
-  const closeApp = () => {
-    const flags = systemBackRef.current;
-    if (flags.timer) { window.clearTimeout(flags.timer); flags.timer = null; }
-    if (flags.leaving !== null) { window.clearTimeout(flags.leaving); flags.leaving = null; }
-    flags.armed = false;
-    flags.suppressed = true;
-    setExitHint(false);
-    setMenuOpen(false);
-    const resume = () => { flags.suppressed = false; };
-    try { window.history.back(); } catch { resume(); return; }
-    window.setTimeout(() => {
-      try { window.history.back(); } catch { /* the system takes it from here */ }
-      // Still here after both pops means the platform did not close the
-      // surface (e.g. a desktop tab with real history behind it) — hand
-      // normal Back handling back rather than leaving it dead.
-      window.setTimeout(resume, 250);
-    }, 60);
   };
   /* The popstate listener is registered once, but the handler reads live
      state — so the listener calls through a ref that an every-render effect
@@ -8759,14 +8725,9 @@ export default function Home() {
               <div><b>{sessionUser.name}</b><small>{sessionUser.access || sessionUser.role}</small></div>
               {unreadCount > 0 && <i className="unread-dot" aria-label={`${unreadCount} unread notifications`} />}
             </button>
-            <div className="sidebar-account-actions">
-              <button type="button" onClick={closeApp} aria-label="Close app" title="Close the app — you stay signed in">
-                <X size={17} />
-              </button>
-              <button type="button" onClick={previewOwner ? endAccessPreview : signOut} aria-label={previewOwner ? "Exit preview" : "Sign out"}>
-                {previewOwner ? <X size={17} /> : <LogOut size={17} />}
-              </button>
-            </div>
+            <button type="button" onClick={previewOwner ? endAccessPreview : signOut} aria-label={previewOwner ? "Exit preview" : "Sign out"}>
+              {previewOwner ? <X size={17} /> : <LogOut size={17} />}
+            </button>
           </div>
         )}
       </aside>
@@ -8877,7 +8838,6 @@ export default function Home() {
             <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            {sessionUser && !previewOwner && <button type="button" className="top-close-app" onClick={closeApp} aria-label="Close app" title="Close the app — you stay signed in"><X size={17} /></button>}
             {sessionUser && !previewOwner && <button type="button" className="top-signout" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button>}
           </div>
         </header>
