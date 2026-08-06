@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs } from "../lib/supabase/sync";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
@@ -6569,14 +6569,19 @@ export default function Home() {
        false on suppression matters too: the caller keeps the note instead of
        clearing it, and the first press's toast is still on screen, so staying
        quiet here is feedback rather than the absence of it. */
-    if (latest?.time && Date.now() - new Date(latest.time).getTime() < 1200) {
+    if (latest?.time && serverNowMs() - new Date(latest.time).getTime() < 1200) {
       return false;
     }
     const status = latest && latest.status === "In" ? "Out" : "In";
-    const now = new Date().toISOString();
+    /* Server-corrected time, not the device's. A phone with a wrong clock
+       used to write that wrong clock straight into the attendance record;
+       serverNowIso() applies the measured skew (see lib/supabase/sync.ts). */
+    const now = serverNowIso();
     // Same record shape the Timeclock engine writes, so both stay in step.
     store.logs.push({
-      id: `l${Date.now()}`, uid: user.id, type: mode, status,
+      // uid + entropy so two people punching in the same millisecond on
+      // different devices can never collide into one merged record.
+      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: mode, status,
       time: now, active: status === "In", lastSeen: now,
       ...(note.trim() ? { note: note.trim() } : {}),
     });
@@ -6613,9 +6618,9 @@ export default function Home() {
         return false;
       }
     }
-    const now = new Date().toISOString();
+    const now = serverNowIso();
     store.logs.push({
-      id: `l${Date.now()}`, uid: user.id, type: "Break",
+      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: "Break",
       status: ending ? "Break End" : "Break Start",
       time: now, active: false, lastSeen: now,
       ...(note.trim() ? { note: note.trim() } : {}),
