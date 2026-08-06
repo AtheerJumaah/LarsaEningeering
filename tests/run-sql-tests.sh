@@ -114,7 +114,8 @@ done
 total=0
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
           "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
-          "$here/accounting-payroll-sql.test.sql" "$here/notifications-sql.test.sql" \
+          "$here/accounting-payroll-sql.test.sql" "$here/accounting-admin-role-sql.test.sql" \
+          "$here/notifications-sql.test.sql" \
           "$here/viewer-accounts-sql.test.sql" "$here/notify-email-sql.test.sql" \
           "$here/qa-spec-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
