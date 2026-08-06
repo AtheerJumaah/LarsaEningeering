@@ -5897,13 +5897,23 @@ export default function Home() {
   }, []);
 
   /* A kept browser session ends with the same verification window as a fresh
-     sign-in. When it expires, the next screen is the normal email + code flow. */
+     sign-in. When it expires, the next screen is the normal email + code flow.
+
+     Never while an access preview is running, though. A preview swaps
+     sessionUser to the person being previewed, and THEY have of course never
+     verified the administrator's device — so this effect used to see an
+     expired window the moment a preview began and sign the administrator
+     straight out of their own real session ("preview as other user logs out
+     directly"). A preview borrows an identity, not a session: the owner's
+     own verification window was checked when they signed in and resumes
+     governing the moment the preview ends. */
   useEffect(() => {
+    if (previewOwner) return;
     if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
     const remaining = verificationRemainingMs(sessionUser, getDeviceId()); if (remaining <= 0) { checkVerification({ id: sessionUser.id, access: sessionUser.access, role: sessionUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) signOut(); }); return; }
     const timer = window.setTimeout(signOut, Math.max(0, Math.min(remaining, 2147483647)));
     return () => window.clearTimeout(timer);
-  }, [sessionMethod, sessionUser, signOut]);
+  }, [previewOwner, sessionMethod, sessionUser, signOut]);
 
   const clickWhenReady = useCallback(
     (find: () => HTMLButtonElement | null, missingMessage: string) => {
