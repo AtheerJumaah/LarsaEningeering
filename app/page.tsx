@@ -10533,7 +10533,7 @@ function PerformanceCenter({
                 return (
                   <tr key={row.id}>
                     <td>{rowDate(row) || "—"}</td>
-                    <td><b>{row.Engineer || "Unknown"}</b><small>{row.Department || ""}</small></td>
+                    <td><b>{row.Engineer || ""}</b><small>{row.Department || ""}</small></td>
                     <td><b>{String(row["Job Number"] || row.Project || "General")}</b><small>{String(row["Work Category"] || "")}</small></td>
                     <td>{finiteNumber(row["Assigned Points"] ?? row["Estimated Points"]) || "—"}</td>
                     <td>{submitted}</td>
@@ -10902,7 +10902,7 @@ function PerformanceHistory({
     [scope, users, viewer],
   );
   const visibleIds = useMemo(() => new Set(visibleUsers.map((user) => user.id)), [visibleUsers]);
-  const nameFor = (uid: string) => users.find((user) => user.id === uid)?.name || "Unknown";
+  const nameFor = (uid: string) => users.find((user) => user.id === uid)?.name || "";
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
