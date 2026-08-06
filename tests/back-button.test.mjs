@@ -124,3 +124,36 @@ test("Approval Flow is edited in HR & Skills, over the same flowConfig", () => {
   // And the deliberately-removed duplicate approval screen stays gone.
   assert.ok(!/approval-flows/.test(page), "the duplicate approval screen must stay gone");
 });
+
+test("Close app is a deliberate one-tap exit, separate from the Back double-press and from Sign out", () => {
+  /* The system Back button needs two presses so an accidental single press
+     can never throw someone out of the app -- but that guard also means
+     Back always tries the in-app stack and Home first, and only exits from
+     there. Someone who wants to leave right now, from wherever they are,
+     asked for a direct control instead: an explicit "Close app" button that
+     never detours through Home and never signs them out. */
+  assert.match(page, /const closeApp = \(\) => \{/);
+  const fn = page.slice(page.indexOf("const closeApp = () => {"), page.indexOf("const systemBackHandlerRef = useRef(handleSystemBack);"));
+  // It runs independently of the Back guard: no arming, no "press again"
+  // hint, no waiting on a second tap.
+  assert.match(fn, /flags\.armed = false;/);
+  assert.doesNotMatch(fn, /setExitHint\(true\)/);
+  // The normal Back handler is told to stand down for the two pops this
+  // performs, so neither gets reinterpreted as "close a dialog" or "go to
+  // Home" -- the exact detour this button exists to skip.
+  assert.match(fn, /flags\.suppressed = true;/);
+  assert.match(fn, /const resume = \(\) => \{ flags\.suppressed = false; \};/);
+  assert.match(page, /if \(flags\.suppressed\) return;/);
+  // Two real, separate history.back() calls -- draining the sentinel entry
+  // and then the base entry underneath it is what actually lets the browser
+  // or OS close the surface, the same result a real double press reaches.
+  const backCalls = fn.match(/window\.history\.back\(\)/g) || [];
+  assert.equal(backCalls.length, 2, "closeApp should perform exactly two real back() calls");
+  // Signing out is a different, explicit action -- this never touches it.
+  assert.doesNotMatch(fn, /signOut\(\)/);
+  assert.doesNotMatch(fn, /unsubscribeFromPush/);
+  // Reachable from the sidebar, beside (not instead of) Sign out.
+  assert.match(page, /<div className="sidebar-account-actions">/);
+  assert.match(page, /onClick=\{closeApp\} aria-label="Close app"/);
+  assert.match(page, /onClick=\{previewOwner \? endAccessPreview : signOut\} aria-label=\{previewOwner \? "Exit preview" : "Sign out"\}/);
+});

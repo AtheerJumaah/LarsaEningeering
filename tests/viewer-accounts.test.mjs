@@ -57,6 +57,25 @@ test("signup asks for an Employee PIN, refuses duplicates, and stores it hashed"
   assert.match(access, /if \(pin !== confirmPin\) \{\s*setError\("The two PINs do not match\."\);/);
 });
 
+test('PIN fields are masked with CSS, not type="password" — that combo ate Backspace on phone keyboards', async () => {
+  const access = await read("app/AccountAccess.tsx");
+  const page = await read("app/page.tsx");
+  const css = await read("app/globals.css");
+  // Pairing type="password" with inputMode="numeric" is what a phone user
+  // actually hit: the numeric secure-entry keypad that combination triggers
+  // on Android and iOS accepted new digits but silently refused
+  // Backspace/Delete. Every PIN field keeps its numeric keypad and its
+  // masked dots, but the masking now comes from CSS so the input itself
+  // stays a plain, fully editable type="text" — only the two real
+  // (alphabetic) password fields still switch native type on showPass.
+  const passwordTypeSwitches = access.match(/type=\{showPass \? "text" : "password"\}/g) || [];
+  assert.equal(passwordTypeSwitches.length, 2, "only New Password and Confirm Password should still switch native type");
+  const pinMaskSwitches = access.match(/className=\{showPass \? undefined : "pin-mask"\}/g) || [];
+  assert.equal(pinMaskSwitches.length, 4, "PIN and Confirm PIN should mask via CSS on both the signup and forgotPin screens");
+  assert.match(page, /<label>Employee PIN<input type="text" className="pin-mask" required inputMode="numeric" value=\{loginPin\}/);
+  assert.match(css, /\.pin-mask \{ -webkit-text-security: disc; \}/);
+});
+
 test("editing a user's ACCESS never demands their password or PIN — those belong to the person", async () => {
   const page = await read("app/page.tsx");
   // The save validation asks for a password only when CREATING a username-only
