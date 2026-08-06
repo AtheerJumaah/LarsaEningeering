@@ -159,7 +159,10 @@
     if (ACCT.myPerms && Object.prototype.hasOwnProperty.call(ACCT.myPerms, p)) return ACCT.myPerms[p] === true;
     // Fallback before permissions load: mirror the server's role defaults.
     var role = (engineUser() || {}).role || "";
-    if (["Owner / Super Admin", "Management"].indexOf(role) !== -1) return p !== "self_approve" && p !== "manage_permissions";
+    // Admin is a distinct role from Owner / Super Admin (see accountingRole()
+    // in app/page.tsx and the acct_role_default_perms migration) but gets the
+    // exact same default grants, so it belongs in the same bucket here too.
+    if (["Owner / Super Admin", "Management", "Admin"].indexOf(role) !== -1) return p !== "self_approve" && p !== "manage_permissions";
     if (role === "Accountant") return ["view", "create", "edit_own_unapproved", "submit_review", "print_receipts", "reprint_receipts", "post_refunds", "export_working"].indexOf(p) !== -1;
     return p === "view";
   }
@@ -171,7 +174,7 @@
     var u = engineUser();
     return { email: u.email || "", name: u.name || "", role: u.role || "" };
   }
-  var WRITER_ROLES = ["Owner / Super Admin", "Management", "Accountant"];
+  var WRITER_ROLES = ["Owner / Super Admin", "Management", "Accountant", "Admin"];
   function canWriteAcct() { return myPerm("create"); }
 
   /* Dual-control scope: per-project assigned accountants/approvers and
@@ -320,8 +323,11 @@
     var accs = emailList(proj.assigned_accountants);
     if (!accs.length) return true;
     var me = myEmailLc();
+    // Mirrors the server's acct_check_entry_scope bypass -- Admin included
+    // alongside Owner / Super Admin so this client-side check never blocks
+    // (or shows a false restriction for) something the backend will allow.
     return accs.indexOf(me) !== -1 || emailList(proj.assigned_approvers).indexOf(me) !== -1
-      || (actor() || {}).role === "Owner / Super Admin";
+      || (actor() || {}).role === "Owner / Super Admin" || (actor() || {}).role === "Admin";
   }
 
   var COLL_KIND = { funding: "funding", materials: "material", projectLabor: "labor", expenses: "expense", revenue: "revenue" };

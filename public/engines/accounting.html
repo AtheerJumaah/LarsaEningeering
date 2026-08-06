@@ -3220,6 +3220,7 @@ document.addEventListener("DOMContentLoaded",boot);
   // access levels the rest of the system already uses.
   function v35AccountingRole(access){
     if(access==="Super Admin") return "Owner / Super Admin";
+    if(access==="Admin") return "Admin";
     if(access==="Manager") return "Management";
     if(access==="Accountant") return "Accountant";
     if(access==="Admin HR") return "Payroll Accountant";
