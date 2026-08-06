@@ -141,8 +141,17 @@ export function effectiveOrg(users: OrgUser[]): OrgChart {
   return buildFallbackOrg(users);
 }
 
+/* Two account types converge on the same org-chart capability: the single
+   protected Super Admin, and anyone the Super Admin has promoted to the
+   Admin role. Both get every department and every team, unrestricted --
+   this stays a plain access-string check, matching how it always worked
+   for Super Admin alone, rather than routing through the granular
+   permission-profile system the rest of the app uses. Admin is still not
+   Super Admin: it grants full org-chart control, not the protected-owner
+   status itself, which stays locked to a single account everywhere else
+   (account deletion, the role dropdown, the database trigger). */
 export function isOrgAdmin(user: OrgUser | null | undefined): boolean {
-  return Boolean(user && user.access === "Super Admin");
+  return Boolean(user && (user.access === "Super Admin" || user.access === "Admin"));
 }
 
 export function departmentsHeadedBy(org: OrgChart, userId: string): Department[] {
@@ -289,7 +298,10 @@ export function managersOf(org: OrgChart, userId: string, users: OrgUser[]): str
 
 export function rolesOf(org: OrgChart, user: OrgUser): string[] {
   const roles: string[] = [];
-  if (isOrgAdmin(user)) roles.push("Super Admin");
+  // isOrgAdmin now covers both account types (see its own comment) -- keep
+  // them distinguishable here rather than calling an Admin "Super Admin".
+  if (user.access === "Super Admin") roles.push("Super Admin");
+  else if (isOrgAdmin(user)) roles.push("Org Admin");
   departmentsHeadedBy(org, user.id).forEach((row) => roles.push("Head of " + row.name));
   teamsLedBy(org, user.id).forEach((row) => roles.push("Lead of " + row.name));
   return roles;
