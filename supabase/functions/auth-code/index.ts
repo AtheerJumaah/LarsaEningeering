@@ -91,13 +91,17 @@ async function sendCodeEmail(email: string, purpose: string, code: string, name?
  * decides access. A client that could call it directly could grant itself
  * another 72 hours without ever opening an email.
  */
-async function stampPeriodicVerification(userId: string) {
+async function stampPeriodicVerification(userId: string, email: string) {
   if (!userId) return;
   try {
     await fetch(`${SUPABASE_URL}/functions/v1/auth-policy`, {
       method: "POST",
       headers: { Authorization: `Bearer ${SERVICE_ROLE_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ op: "stamp", userId, secret: SERVICE_ROLE_KEY }),
+      /* The stamp carries the normalized email as well as the uid: the email
+         is the permanent business identity, so a verification survives the
+         account being recreated under a new uid — the exact failure that had
+         people re-verifying on every sign-in during the incident. */
+      body: JSON.stringify({ op: "stamp", userId, email, secret: SERVICE_ROLE_KEY }),
     });
   } catch {
     // The code was still valid, so let the sign-in through. The worst case is
@@ -196,7 +200,7 @@ Deno.serve(async (req: Request) => {
       const users = (staffRow?.data as { users?: { id?: string; email?: string }[] } | null)?.users;
       const owner = Array.isArray(users) ? users.find((u) => String(u?.id || "") === String(payload.userId)) : null;
       if (owner && normEmail(String(owner.email || "")) === email) {
-        await stampPeriodicVerification(String(payload.userId));
+        await stampPeriodicVerification(String(payload.userId), email);
       }
     }
 
