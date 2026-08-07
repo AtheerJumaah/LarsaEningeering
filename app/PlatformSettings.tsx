@@ -29,6 +29,7 @@ type Policy = {
   initial_verification_required: boolean;
   pin_verification_required: boolean;
   pin_hours: number;
+  interval_unit?: "hours" | "days" | "business_days";
 };
 
 type AuditRow = { at: string; actor: string | null; action: string; target: string | null };
@@ -432,6 +433,20 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           <span><b>Require periodic verification</b><small>Off means nobody is ever asked after sign-in.</small></span>
         </label>
 
+        <label className="ps-field" style={{ marginBottom: 8 }}>
+          <span>Counted in</span>
+          <span className="ps-inline">
+            <select
+              value={draft.interval_unit || "hours"}
+              onChange={(e) => setDraft({ ...draft, interval_unit: e.target.value as "hours" | "days" | "business_days" })}
+            >
+              <option value="hours">Hours</option>
+              <option value="days">Calendar days</option>
+              <option value="business_days">Business days (Sun–Thu)</option>
+            </select>
+            <small>The numbers below are read in this unit. Business days follow the Iraqi working week; Friday and Saturday never count.</small>
+          </span>
+        </label>
         <div className="ps-grid">
           <label className="ps-field">
             <span>Engineers</span>
@@ -439,7 +454,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
               <input type="number" min={1} max={8760} disabled={draft.engineer_hours === null}
                 value={draft.engineer_hours ?? 72}
                 onChange={(e) => setDraft({ ...draft, engineer_hours: Number(e.target.value) || 72 })} />
-              <small>hours</small>
+              <small>{draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours"}</small>
               <label className="ps-mini"><input type="checkbox" checked={draft.engineer_hours === null}
                 onChange={(e) => setDraft({ ...draft, engineer_hours: e.target.checked ? null : 72 })} /> off</label>
             </span>
@@ -450,7 +465,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
               <input type="number" min={1} max={8760} disabled={draft.privileged_hours === null}
                 value={draft.privileged_hours ?? 24}
                 onChange={(e) => setDraft({ ...draft, privileged_hours: Number(e.target.value) || 24 })} />
-              <small>hours</small>
+              <small>{draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours"}</small>
               <label className="ps-mini"><input type="checkbox" checked={draft.privileged_hours === null}
                 onChange={(e) => setDraft({ ...draft, privileged_hours: e.target.checked ? null : 24 })} /> off</label>
             </span>

@@ -45,6 +45,8 @@ export type AccessUser = {
   projectAccessMode?: string;
   projectIds?: string[];
   notes?: string;
+  offboarded?: boolean;
+  recycled?: boolean;
 };
 
 export type AccessMode = "signup" | "forgot" | "forgotPin" | "reset" | "confirm";
@@ -108,18 +110,15 @@ function isCompanyEmail(email: string) {
   return COMPANY_DOMAINS.indexOf(domainOf(email)) >= 0;
 }
 
-/* Keeps new ids in the u1, u2, u3 ... series the seed data uses instead of
-   dropping a timestamp into the middle of it. */
-function nextUserId(users: AccessUser[]) {
-  let highest = 0;
-  users.forEach((row) => {
-    const id = String(row.id || "");
-    if (id.charAt(0) !== "u") return;
-    const digits = id.slice(1);
-    if (!digits || Number.isNaN(Number(digits))) return;
-    highest = Math.max(highest, Number(digits));
-  });
-  return "u" + String(highest + 1);
+/* Collision-free account ids. The old max+1 series (u1, u2, u3 ...) was one
+   of the incident's root causes: when a stale device rolled the shared list
+   back, the next signup re-issued an id that had ALREADY belonged to someone
+   else, silently handing the new person the old person's attendance,
+   verification stamps and audit lines. New ids embed the creation moment
+   plus entropy, so two creations -- on any devices, in any order, through
+   any rollback -- can never collide. Existing short ids stay untouched. */
+function nextUserId() {
+  return "u" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36).padStart(2, "0");
 }
 
 /* The local part of the address, which the sign-in form already accepts in
@@ -240,18 +239,23 @@ export function AccountAccess({
         setError("Enter your full name.");
         return;
       }
-      /* The duplicate check, run before anything is sent or saved. Matching on
-         the address and on the name separately catches both "I forgot I already
-         have an account" and "somebody set one up for me under my name". */
-      const byEmail = users.find((row) => normalise(row.email) === address);
-      const byName = users.find((row) => nameKey(row.name) === nameKey(name));
-      const existing = byEmail || byName;
-      if (existing) {
-        setError(
-          byEmail
-            ? "An account already exists for this email address. Reset its password instead of creating a second one."
-            : "An account already exists for " + existing.name + ". Reset its password instead of creating a second one.",
-        );
+      /* The business identity rules, on the normalized email (Part 52).
+         ACTIVE reserves the address outright. OFFBOARDED reserves it too --
+         the admin must either reactivate the person or move the old account
+         to the Recycling Bin first. Only the RECYCLING BIN frees an address
+         for a new account, and even then the old account's history stays
+         stored untouched. Matching on the name separately still catches
+         "somebody set one up for me under my name". */
+      const byEmail = users.find((row) => normalise(row.email) === address && row.recycled !== true);
+      const byName = users.find((row) => nameKey(row.name) === nameKey(name) && row.recycled !== true);
+      if (byEmail) {
+        setError(byEmail.offboarded === true
+          ? "An offboarded employee already exists with this email. Ask an administrator to reactivate the employee or move the old account to the Recycling Bin first."
+          : "An active account already exists with this email. Reset its password instead of creating a second one.");
+        return;
+      }
+      if (byName) {
+        setError("An account already exists for " + byName.name + ". Reset its password instead of creating a second one.");
         return;
       }
       const problem = passwordProblem();
@@ -358,9 +362,22 @@ export function AccountAccess({
         setError("That PIN was just taken by another account. Choose a different one and try again.");
         return;
       }
+      /* Same for the email: the freshly read list is the authority at the
+         moment of writing, so a same-address account created meanwhile (a
+         second tab, another device, a synced arrival) is caught HERE, not
+         just on the details screen. Recycled accounts do not reserve it. */
+      const emailConflict = list.find((row) => normalise(row.email) === address && row.recycled !== true);
+      if (emailConflict) {
+        setBusy(false);
+        setStage("details");
+        setError(emailConflict.offboarded === true
+          ? "An offboarded employee already exists with this email. Ask an administrator to reactivate the employee or move the old account to the Recycling Bin first."
+          : "An active account already exists with this email. Reset its password instead of creating a second one.");
+        return;
+      }
       const company = isCompanyEmail(address);
       const created: AccessUser = {
-        id: nextUserId(list),
+        id: nextUserId(),
         name: name.trim(),
         username: usernameFor(address, list),
         email: address,

@@ -3,6 +3,8 @@
 import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync, serverNowIso, serverNowMs } from "../lib/supabase/sync";
+import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
+import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
@@ -225,6 +227,26 @@ type StaffUser = {
   offboarded?: boolean;
   offboardedAt?: string;
   offboardedBy?: string;
+  /* The account lifecycle after offboarding. Offboarded RESERVES the email
+     (reactivate, or move to the Recycling Bin first). Recycling Bin is a
+     soft deletion: the record and every work record stay for admin review
+     and restore, but the email becomes free for a new Create Account.
+     Permanent deletion is a separate Super-Admin-only act, and even that
+     leaves the attendance ledger and audit history intact. */
+  recycled?: boolean;
+  recycledAt?: string;
+  recycledBy?: string;
+  /* Employment periods and re-onboarding history modes. Multiple periods
+     accumulate as a person leaves and returns; historyMode only shapes what
+     current REPORTING shows — no mode ever deletes stored history.
+       all      → every session this account ever recorded
+       current  → sessions from the newest employment period only
+       from     → sessions from historyFrom (a date the admin picked) onward */
+  employmentPeriods?: { start: string; end?: string }[];
+  historyMode?: "all" | "current" | "from";
+  historyFrom?: string;
+  /* Controlled email changes: identity history, never silently overwritten. */
+  emailHistory?: { from: string; to: string; at: string; by: string }[];
   permissions?: string[];
   permissionProfile?: PermissionProfile;
   notes?: string;
@@ -2080,10 +2102,7 @@ function requestQuantity(request: { from?: string; to?: string; date?: string; t
     const [fh, fm] = String(request.from).split(":").map(Number);
     const [th, tm] = String(request.to).split(":").map(Number);
     const minutes = (th * 60 + tm) - (fh * 60 + fm);
-    if (minutes > 0) {
-      const hours = minutes / 60;
-      return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
-    }
+    if (minutes > 0) return formatMinutes(minutes);
     return "—";
   }
   const days = requestDays(request);
@@ -2188,7 +2207,7 @@ function buildHomeSummary(
       group: "Today",
       title: "Clocked in",
       detail: `${openClock.mode} · started ${new Date(openClock.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-      meta: `${openClock.hours.toFixed(1)} h so far`,
+      meta: `${formatHours(openClock.hours)} so far`,
       tone: "done",
       itemId: "quick-clock",
     });
@@ -2240,7 +2259,7 @@ function buildHomeSummary(
         id: `dev-${record.id}`,
         group: "Development",
         title: record.title,
-        detail: `${record.completedHours.toFixed(1)} of ${record.targetHours.toFixed(1)} h · ${record.completedPresentations}/${record.targetPresentations} presentations`,
+        detail: `${formatHours(record.completedHours)} of ${formatHours(record.targetHours)} · ${record.completedPresentations}/${record.targetPresentations} presentations`,
         meta: record.dueDate ? (overdue ? `Overdue ${record.dueDate}` : `Due ${record.dueDate}`) : record.status,
         tone: overdue ? "due" : "open",
         itemId: "staff-development",
@@ -2348,7 +2367,7 @@ function buildHomeSummary(
     roleBlurb = "Projects, payroll inputs, and the hours behind them.";
     roleCards = [
       card("projects", "Projects visible", String(projectCount), "Assigned to your account", "plain", "project-portal"),
-      card("hours", "Your hours this week", `${myHoursWeek.toFixed(1)} h`, "Recorded attendance", "plain", "quick-clock"),
+      card("hours", "Your hours this week", `${formatHours(myHoursWeek)}`, "Recorded attendance", "plain", "quick-clock"),
       card("requests", "Open requests", String(pendingAll), pendingAll ? "Leave and schedule requests" : "All clear", pendingAll ? "due" : "good", "staff-approvals"),
       card("ledger", "Accounting", "Open", "Ledgers, payroll, and reports", "plain", "acc-dashboard"),
     ];
@@ -2365,7 +2384,7 @@ function buildHomeSummary(
     roleTitle = "Site work";
     roleBlurb = "Your attendance, assigned projects, and learning targets.";
     roleCards = [
-      card("hours", "Your hours this week", `${myHoursWeek.toFixed(1)} h`, "Recorded attendance", "plain", "quick-clock"),
+      card("hours", "Your hours this week", `${formatHours(myHoursWeek)}`, "Recorded attendance", "plain", "quick-clock"),
       card("points", "Your points", `${weekApproved} / ${weekTarget}`, weekApproved >= weekTarget ? "Target reached" : `${Math.max(0, weekTarget - weekApproved)} to go`, weekApproved >= weekTarget ? "good" : "plain", "performance-center"),
       card("projects", "Assigned projects", String(projectCount), "Available to you", "plain", "project-portal"),
       card("dev", "Your development", String(devMine), devMine ? "Activities open" : "All complete", devMine ? "plain" : "good", "staff-development"),
@@ -2378,7 +2397,7 @@ function buildHomeSummary(
     roleTitle = "Your work";
     roleBlurb = "Your attendance, points, and development in one place.";
     roleCards = [
-      card("hours", "Your hours this week", `${myHoursWeek.toFixed(1)} h`, "Recorded attendance", "plain", "quick-clock"),
+      card("hours", "Your hours this week", `${formatHours(myHoursWeek)}`, "Recorded attendance", "plain", "quick-clock"),
       card("points", "Your points", `${weekApproved} / ${weekTarget}`, weekApproved >= weekTarget ? "Target reached" : `${Math.max(0, weekTarget - weekApproved)} to go`, weekApproved >= weekTarget ? "good" : "plain", "performance-center"),
       card("dev", "Your development", String(devMine), devMine ? "Activities open" : "All complete", devMine ? "plain" : "good", "staff-development"),
       card("shift", "In today", shiftToday || "No shift", todayName, "plain", "week-schedule"),
@@ -2798,12 +2817,35 @@ function scopedUsers(viewer: StaffUser | null, users: StaffUser[]) {
   return activeUsers.filter((user) => user.id === viewer.id);
 }
 
+/* Where a user's CURRENT reporting starts, per their History Mode. A display
+   rule only: logs before this moment stay permanently stored (and appear
+   again the moment the mode is set back to "all"), they are just not shown
+   in current reports. */
+function historyStartFor(user: StaffUser | undefined): number {
+  if (!user) return 0;
+  const mode = user.historyMode || "all";
+  if (mode === "from" && user.historyFrom) {
+    const ms = new Date(user.historyFrom).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  if (mode === "current") {
+    const periods = Array.isArray(user.employmentPeriods) ? user.employmentPeriods : [];
+    const last = periods[periods.length - 1];
+    const ms = last?.start ? new Date(last.start).getTime() : NaN;
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  return 0;
+}
+
 function buildClockSessions(store: Record<string, unknown> | null, users: StaffUser[]): ClockSession[] {
   const logs = Array.isArray(store?.logs) ? (store.logs as ClockLog[]) : [];
   const names = new Map(users.map((user) => [user.id, user.name]));
+  const historyStarts = new Map(users.map((user) => [user.id, historyStartFor(user)]));
   const grouped = new Map<string, ClockLog[]>();
   logs.forEach((log) => {
     if (!log.uid || !log.time) return;
+    const start = historyStarts.get(log.uid) || 0;
+    if (start && new Date(log.time).getTime() < start) return;
     const group = grouped.get(log.uid) || [];
     group.push(log);
     grouped.set(log.uid, group);
@@ -4269,6 +4311,10 @@ export default function Home() {
     return () => window.removeEventListener("storage", onStorage);
   }, [hydrated]);
 
+  /* The sync effect above-any-toast problem: it runs before `notify` is
+     declared, so the ledger-restore toast goes through a ref that the
+     declaration below fills in. */
+  const notifyRef = useRef<(message: string) => void>(() => {});
   useEffect(() => {
     if (!hydrated) return;
     console.log("[larsa-sync] effect fired, hydrated =", hydrated);
@@ -4294,8 +4340,26 @@ export default function Home() {
           try { refs[engine].current?.contentWindow?.location.reload(); } catch { /* iframe not ready yet */ }
         });
       },
+      onStatusChange: (status) => {
+        /* Once the shared blob has been pulled, restore anything the durable
+           ledger holds that the blob lost — the standing repair for the
+           class of incident where a stale device replaced the shared state.
+           Restored punches re-enter the blob, re-render, and sync back up
+           for every other device. */
+        if (status !== "synced") return;
+        reconcileStoreFromLedger().then(({ restored }) => {
+          if (restored > 0) {
+            setStorageTick((value) => value + 1);
+            notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
+          }
+        }).catch(() => { /* runs again on next open */ });
+      },
     });
-    return cleanup;
+    /* Every staff-blob write also appends new clock events to the durable
+       attendance ledger (append-only, database-enforced). Installed AFTER
+       initLarsaSync so both wrappers of localStorage.setItem compose. */
+    const cleanupLedger = initAttendanceLedger();
+    return () => { cleanupLedger(); cleanup(); };
   }, [hydrated, refs]);
 
   useEffect(() => {
@@ -4329,6 +4393,7 @@ export default function Home() {
     setMessage(text);
     setTimeout(() => setMessage(""), 3400);
   }, []);
+  useEffect(() => { notifyRef.current = notify; }, [notify]);
 
   const readStaffUsers = useCallback((): StaffUser[] => {
     const stored = parseStore("larsaStaffV8");
@@ -5587,7 +5652,7 @@ export default function Home() {
             sessionStorage.removeItem("larsa-control-session");
             try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
           } else {
-            completeSignIn(currentUser, method || "email"); if (method === "email" && supabaseConfigured() && currentUser.email) { checkVerification({ id: currentUser.id, access: currentUser.access, role: currentUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) { sessionStorage.removeItem("larsa-control-session"); try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ } sessionUserRef.current = null; setSessionUser(null); setLoginError("For security, please sign in and verify your email again."); } }); }
+            completeSignIn(currentUser, method || "email"); if (method === "email" && supabaseConfigured() && currentUser.email) { checkVerification({ id: currentUser.id, email: currentUser.email, access: currentUser.access, role: currentUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) { sessionStorage.removeItem("larsa-control-session"); try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ } sessionUserRef.current = null; setSessionUser(null); setLoginError("For security, please sign in and verify your email again."); } }); }
           }
         }
       } catch {
@@ -5804,7 +5869,7 @@ export default function Home() {
     if (loginMode === "email") {
       migrateEmailVerification();
       const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || periodicDue)) {
+      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || periodicDue)) {
         setVerifyError("");
         setVerifyInfo("Sending your verification code…");
         setVerifyBusy(true);
@@ -5832,7 +5897,7 @@ export default function Home() {
            can. Anchoring on the local device stamp alone is what made a weekly
            policy behave as if it were every-single-sign-in. The device stamp
            stays as the fallback for when Supabase cannot be reached. */
-        const serverStatus = await checkVerification({ id: user.id, access: user.access, role: user.role });
+        const serverStatus = await checkVerification({ id: user.id, email: user.email, access: user.access, role: user.role });
         const device = findDevice(user, getDeviceId());
         const deviceAt = device?.lastVerified ? new Date(device.lastVerified).getTime() : 0;
         const serverAt = serverStatus?.lastVerifiedAt ? new Date(serverStatus.lastVerifiedAt).getTime() : 0;
@@ -5910,7 +5975,7 @@ export default function Home() {
   useEffect(() => {
     if (previewOwner) return;
     if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
-    const remaining = verificationRemainingMs(sessionUser, getDeviceId()); if (remaining <= 0) { checkVerification({ id: sessionUser.id, access: sessionUser.access, role: sessionUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) signOut(); }); return; }
+    const remaining = verificationRemainingMs(sessionUser, getDeviceId()); if (remaining <= 0) { checkVerification({ id: sessionUser.id, email: sessionUser.email, access: sessionUser.access, role: sessionUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) signOut(); }); return; }
     const timer = window.setTimeout(signOut, Math.max(0, Math.min(remaining, 2147483647)));
     return () => window.clearTimeout(timer);
   }, [previewOwner, sessionMethod, sessionUser, signOut]);
@@ -6727,6 +6792,13 @@ export default function Home() {
     const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
     if (!drop.size) { notify("That session could not be found."); return false; }
     store.logs = logs.filter((log) => !drop.has(log));
+    /* The durable ledger never forgets a punch, so a deliberate removal has
+       to be remembered too -- otherwise boot reconciliation would politely
+       put the session straight back. */
+    markLogsRemoved(store as { removedLogIds?: string[] }, Array.from(drop).map((log) => String(log.id || "")));
+    logAccountEvent(actor, "attendance.session_removed", uid, uid, {
+      clockIn, removed: Array.from(drop).map((log) => ({ id: log.id, status: log.status, time: log.time })),
+    });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
@@ -6959,6 +7031,13 @@ export default function Home() {
     const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
     if (!drop.size) { notify("That session could not be found."); return false; }
     store.logs = logs.filter((log) => !drop.has(log));
+    /* The durable ledger never forgets a punch, so a deliberate removal has
+       to be remembered too -- otherwise boot reconciliation would politely
+       put the session straight back. */
+    markLogsRemoved(store as { removedLogIds?: string[] }, Array.from(drop).map((log) => String(log.id || "")));
+    logAccountEvent(actor, "attendance.session_removed", uid, uid, {
+      clockIn, removed: Array.from(drop).map((log) => ({ id: log.id, status: log.status, time: log.time })),
+    });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
@@ -7861,6 +7940,24 @@ export default function Home() {
         prepared.projectAccessMode = "all";
         prepared.projectIds = [];
       }
+      /* A changed email is an identity migration, never a silent overwrite:
+         both addresses, the moment, and who did it are kept on the record
+         and in the audit trail. */
+      const previousEmail = (existing.email || "").trim().toLowerCase();
+      if (previousEmail && nextEmail && previousEmail !== nextEmail) {
+        prepared.emailHistory = [
+          ...(existing.emailHistory || []),
+          { from: previousEmail, to: nextEmail, at: new Date().toISOString(), by: actor.name },
+        ];
+        logAccountEvent(actor, "account.email_changed", existing.id, existing.name, { from: previousEmail, to: nextEmail });
+      }
+      if ((existing.historyMode || "all") !== (prepared.historyMode || "all")
+        || (existing.historyFrom || "") !== (prepared.historyFrom || "")) {
+        logAccountEvent(actor, "account.history_mode_changed", existing.id, existing.name, {
+          from: { mode: existing.historyMode || "all", historyFrom: existing.historyFrom || null },
+          to: { mode: prepared.historyMode || "all", historyFrom: prepared.historyFrom || null },
+        });
+      }
       store.users[existingIndex] = { ...existing, ...prepared };
     } else {
       notify("That user could not be found.");
@@ -7942,9 +8039,13 @@ export default function Home() {
     return true;
   };
 
-  /* The way back: an offboarded account returns exactly as it was — same
-     access, same secrets, same records — and is logged as restored. */
-  const restoreAccessUser = async (target: StaffUser) => {
+  /* The way back: reactivation. The account returns with the same access,
+     same secrets and same records; a NEW employment period begins, and the
+     admin chooses how much history current reporting should include:
+     everything, the new period only, or from a chosen date. No choice
+     deletes anything — stored history is permanent; the mode only shapes
+     what reports display, and it can be changed later in the editor. */
+  const restoreAccessUser = async (target: StaffUser, historyMode?: "all" | "current" | "from", historyFrom?: string) => {
     const actor = sessionUserRef.current;
     if (!actor || !hasItemPermission(actor, ACCESS_ITEM, "edit")) {
       notify("Your account cannot restore user accounts.");
@@ -7960,15 +8061,35 @@ export default function Home() {
       notify("That user could not be found.");
       return false;
     }
+    const existing = store.users[existingIndex] as StaffUser;
+    const nowIso = new Date().toISOString();
+    /* Close the period that ended at offboarding (synthesizing period 1 for
+       records that predate employment periods), then open the new one. */
+    const periods = Array.isArray(existing.employmentPeriods) && existing.employmentPeriods.length
+      ? existing.employmentPeriods.map((period) => ({ ...period }))
+      : [{ start: "", end: existing.offboardedAt || nowIso }];
+    const lastPeriod = periods[periods.length - 1];
+    if (lastPeriod && !lastPeriod.end) lastPeriod.end = existing.offboardedAt || nowIso;
+    periods.push({ start: nowIso });
+    const mode: "all" | "current" | "from" = historyMode || "all";
     store.users[existingIndex] = {
-      ...(store.users[existingIndex] as StaffUser),
+      ...existing,
       offboarded: false,
       enabled: true,
       offboardedAt: undefined,
       offboardedBy: undefined,
+      recycled: false,
+      recycledAt: undefined,
+      recycledBy: undefined,
+      employmentPeriods: periods,
+      historyMode: mode,
+      historyFrom: mode === "from" ? (historyFrom || nowIso) : undefined,
     };
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    logAccountEvent(actor, "account.restored", target.id, target.name, { access: target.access || "" });
+    logAccountEvent(actor, "account.reactivated", target.id, target.name, {
+      access: target.access || "", historyMode: mode, historyFrom: mode === "from" ? (historyFrom || nowIso) : null,
+      periodStart: nowIso,
+    });
     try {
       staffRef.current?.contentWindow?.eval(`
         state=JSON.parse(localStorage.getItem("larsaStaffV8"));
@@ -7979,6 +8100,104 @@ export default function Home() {
     }
     setStorageTick((value) => value + 1);
     notify(`${target.name} is back. Their access works exactly as before.`);
+    return true;
+  };
+
+  /* Offboarded → Recycling Bin. A soft deletion: sign-in stays blocked, all
+     history stays reviewable and restorable, and — this is the point — the
+     normalized email becomes AVAILABLE again for a new Create Account. */
+  const recycleAccessUser = async (target: StaffUser) => {
+    const actor = sessionUserRef.current;
+    if (!actor || !hasItemPermission(actor, ACCESS_ITEM, "delete")) {
+      notify("Your account cannot move accounts to the Recycling Bin.");
+      return false;
+    }
+    if (!(await dialog.confirm(`Move ${target.name} to the Recycling Bin? All their history stays stored and restorable, and their email address becomes available for a new account.`))) {
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.users)) { notify("The staff directory is still loading. Please try again."); return false; }
+    const existingIndex = store.users.findIndex((row: StaffUser) => row.id === target.id);
+    if (existingIndex < 0) { notify("That user could not be found."); return false; }
+    store.users[existingIndex] = {
+      ...(store.users[existingIndex] as StaffUser),
+      recycled: true,
+      offboarded: true,
+      enabled: false,
+      recycledAt: new Date().toISOString(),
+      recycledBy: actor.name,
+    };
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    logAccountEvent(actor, "account.recycled", target.id, target.name, { email: (target.email || "").trim().toLowerCase() });
+    setStorageTick((value) => value + 1);
+    notify(`${target.name} is in the Recycling Bin. Their email can now be used for a new account; their history stays stored.`);
+    return true;
+  };
+
+  /* Recycling Bin → Offboarded. Refused when the email has since been reused
+     by another live account: restoring must never overwrite the person now
+     holding that address — the conflict is explained instead, and the admin
+     resolves it deliberately (change one of the emails, or recycle the new
+     account) before trying again. */
+  const restoreFromRecycleBin = async (target: StaffUser) => {
+    const actor = sessionUserRef.current;
+    if (!actor || !hasItemPermission(actor, ACCESS_ITEM, "edit")) {
+      notify("Your account cannot restore accounts from the Recycling Bin.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.users)) { notify("The staff directory is still loading. Please try again."); return false; }
+    const email = (target.email || "").trim().toLowerCase();
+    const holder = email
+      ? (store.users as StaffUser[]).find((row) =>
+          row.id !== target.id && row.recycled !== true && (row.email || "").trim().toLowerCase() === email)
+      : undefined;
+    if (holder) {
+      await dialog.confirm(`${target.name} cannot be restored yet: ${email} is now used by ${holder.name}'s account. Change one of the two emails (or move ${holder.name}'s account to the Recycling Bin) first — nothing is ever overwritten automatically.`);
+      return false;
+    }
+    const existingIndex = store.users.findIndex((row: StaffUser) => row.id === target.id);
+    if (existingIndex < 0) { notify("That user could not be found."); return false; }
+    store.users[existingIndex] = {
+      ...(store.users[existingIndex] as StaffUser),
+      recycled: false,
+      recycledAt: undefined,
+      recycledBy: undefined,
+      offboarded: true,
+      enabled: false,
+    };
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    logAccountEvent(actor, "account.bin_restored", target.id, target.name, { email });
+    setStorageTick((value) => value + 1);
+    notify(`${target.name} is back in Offboarded. Reactivate the account to give them access again.`);
+    return true;
+  };
+
+  /* Permanent deletion — a separate, Super-Admin-only act (Part 15). Even
+     this keeps the business history: attendance stays in the immutable
+     ledger and in the clock logs, and the audit trail records a snapshot of
+     the deleted account. Only the sign-in record itself is removed. */
+  const purgeAccessUser = async (target: StaffUser) => {
+    const actor = sessionUserRef.current;
+    if (!actor || actor.access !== "Super Admin") {
+      notify("Only the Super Admin can permanently delete an account.");
+      return false;
+    }
+    if (!(await dialog.confirm(`Permanently delete ${target.name}'s account? Their attendance history and audit records stay stored, but the account itself cannot be recovered after this.`))) {
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.users)) { notify("The staff directory is still loading. Please try again."); return false; }
+    const existing = (store.users as StaffUser[]).find((row) => row.id === target.id);
+    if (!existing) { notify("That user could not be found."); return false; }
+    if (existing.access === "Super Admin") { notify("The protected owner account cannot be deleted."); return false; }
+    store.users = (store.users as StaffUser[]).filter((row) => row.id !== target.id);
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    logAccountEvent(actor, "account.permanent_delete", target.id, target.name, {
+      snapshot: { id: existing.id, name: existing.name, email: (existing.email || "").trim().toLowerCase(), access: existing.access || "", offboardedAt: existing.offboardedAt || null, recycledAt: existing.recycledAt || null },
+    });
+    setStorageTick((value) => value + 1);
+    notify(`${target.name}'s account was permanently deleted. Attendance and audit history remain stored.`);
     return true;
   };
 
@@ -8898,6 +9117,10 @@ export default function Home() {
               saveUser={saveAccessUser}
               deleteUser={deleteAccessUser}
               restoreUser={restoreAccessUser}
+              recycleUser={recycleAccessUser}
+              binRestoreUser={restoreFromRecycleBin}
+              purgeUser={purgeAccessUser}
+              canPurge={Boolean(sessionUser && sessionUser.access === "Super Admin")}
               sessions={clockSessions}
               store={staffStore}
               previewUser={startAccessPreview}
@@ -9379,7 +9602,7 @@ function EngineeringManagementPortal({
             : <tr><th>Employee</th><th>Department</th><th>Entries</th><th>Submitted</th><th>Approved</th><th>Target</th><th>Progress</th></tr>}
           </thead><tbody>
             {summaries.map((row) => tab === "time"
-              ? <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.sessions}</td><td><b>{row.hours.toFixed(2)}</b></td></tr>
+              ? <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.sessions}</td><td><b>{formatHours(row.hours)}</b></td></tr>
               : <tr key={row.user.id}><td><b>{row.user.name}</b></td><td>{row.user.department || "—"}</td><td>{row.entries}</td><td>{row.submitted}</td><td><b>{row.approved}</b></td><td>{row.target}</td><td>{row.target ? Math.round((row.approved / row.target) * 100) : 0}%</td></tr>)}
             {!summaries.length && <tr><td colSpan={tab === "time" ? 4 : 7}><div className="empty compact">No team data in this period.</div></td></tr>}
           </tbody></table></div>
@@ -13476,6 +13699,10 @@ function AccessCenter({
   saveUser,
   deleteUser,
   restoreUser,
+  recycleUser,
+  binRestoreUser,
+  purgeUser,
+  canPurge,
   sessions,
   store,
   previewUser,
@@ -13489,7 +13716,11 @@ function AccessCenter({
   currentUser: StaffUser | null;
   saveUser: (user: StaffUser, isNew: boolean) => boolean;
   deleteUser: (user: StaffUser) => boolean | Promise<boolean>;
-  restoreUser: (user: StaffUser) => boolean | Promise<boolean>;
+  restoreUser: (user: StaffUser, historyMode?: "all" | "current" | "from", historyFrom?: string) => boolean | Promise<boolean>;
+  recycleUser: (user: StaffUser) => boolean | Promise<boolean>;
+  binRestoreUser: (user: StaffUser) => boolean | Promise<boolean>;
+  purgeUser: (user: StaffUser) => boolean | Promise<boolean>;
+  canPurge: boolean;
   sessions: ClockSession[];
   store: Record<string, unknown> | null;
   previewUser: (user: StaffUser) => void;
@@ -13538,7 +13769,13 @@ function AccessCenter({
      accounts are never in `users` — they live in Supabase's viewer_accounts
      table with a real auth identity, so this tab keeps its own state and
      talks to the viewer-admin Edge Function rather than saveUser/deleteUser. */
-  const [tab, setTab] = useState<"pending" | "active" | "viewers" | "offboarded">("active");
+  const [tab, setTab] = useState<"pending" | "active" | "viewers" | "offboarded" | "recycled">("active");
+  /* Reactivation dialog state: which offboarded person, and the history
+     handling the admin picked (Part 16: include all / current period only /
+     from a chosen date — no option deletes stored history). */
+  const [reactivating, setReactivating] = useState<StaffUser | null>(null);
+  const [reactivateMode, setReactivateMode] = useState<"all" | "current" | "from">("all");
+  const [reactivateFrom, setReactivateFrom] = useState("");
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [viewers, setViewers] = useState<ViewerAccountRow[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
@@ -13774,6 +14011,7 @@ function AccessCenter({
     }
     const duplicate = users.find((user) =>
       user.id !== draft.id &&
+      user.recycled !== true &&
       Boolean(email) &&
       (user.email?.trim().toLowerCase() === email),
     );
@@ -13836,7 +14074,8 @@ function AccessCenter({
 
   const pendingUsers = users.filter((user) => user.pendingApproval === true && user.offboarded !== true);
   const activeUsers = users.filter((user) => user.pendingApproval !== true && user.access !== "Client" && user.offboarded !== true);
-  const offboardedUsers = users.filter((user) => user.offboarded === true);
+  const offboardedUsers = users.filter((user) => user.offboarded === true && user.recycled !== true);
+  const recycledUsers = users.filter((user) => user.recycled === true);
   const tabUsers = tab === "pending" ? pendingUsers : tab === "active" ? activeUsers : [];
   const filteredUsers = tabUsers.filter((user) =>
     [user.name, user.email, user.department, user.access]
@@ -13899,10 +14138,13 @@ function AccessCenter({
           <button type="button" className={tab === "offboarded" ? "active" : ""} aria-pressed={tab === "offboarded"} onClick={() => setTab("offboarded")}>
             Offboarded{offboardedUsers.length ? ` (${offboardedUsers.length})` : ""}
           </button>
+          <button type="button" className={tab === "recycled" ? "active" : ""} aria-pressed={tab === "recycled"} onClick={() => setTab("recycled")}>
+            Recycling Bin{recycledUsers.length ? ` (${recycledUsers.length})` : ""}
+          </button>
         </div>
       </div>
 
-      {tab !== "viewers" && (
+      {tab !== "viewers" && tab !== "offboarded" && tab !== "recycled" && (
       <section className="access-layout">
         <aside className="access-directory">
           <div className="access-directory-head">
@@ -14188,7 +14430,38 @@ function AccessCenter({
             </section>
             </fieldset>
 
-            {isNew && currentUser && currentUser.platformAdmin ? (<label className="ps-row" style={{ margin: "0 0 10px" }}><input type="checkbox" checked={skipInitialVerify} onChange={(event) => setSkipInitialVerify(event.target.checked)} /><span><b>Skip initial email verification</b><small>You confirm this address instead. They still follow the periodic policy.</small></span></label>) : null}            <div className="access-savebar">
+            {isNew && currentUser && currentUser.platformAdmin ? (<label className="ps-row" style={{ margin: "0 0 10px" }}><input type="checkbox" checked={skipInitialVerify} onChange={(event) => setSkipInitialVerify(event.target.checked)} /><span><b>Skip initial email verification</b><small>You confirm this address instead. They still follow the periodic policy.</small></span></label>) : null}
+            {!isNew && (
+              <div className="settings-panel" style={{ margin: "0 0 10px" }}>
+                <div className="section-head"><div><span className="eyebrow">Reporting window</span><h3>History Mode</h3></div></div>
+                <p className="builder-note" style={{ marginTop: 0 }}>
+                  Controls how much of this person&apos;s attendance current reports include. Changing it never deletes
+                  anything — every session stays permanently stored, whatever mode is chosen.
+                </p>
+                <div className="correction-fields">
+                  <label>Mode
+                    <select
+                      value={draft.historyMode || "all"}
+                      onChange={(event) => setDraft({ ...draft, historyMode: event.target.value as "all" | "current" | "from" })}
+                    >
+                      <option value="all">All history</option>
+                      <option value="current">Current employment period only</option>
+                      <option value="from">From a selected date</option>
+                    </select>
+                  </label>
+                  {(draft.historyMode || "all") === "from" && (
+                    <label>History start date
+                      <input
+                        type="date"
+                        value={draft.historyFrom ? draft.historyFrom.slice(0, 10) : ""}
+                        onChange={(event) => setDraft({ ...draft, historyFrom: event.target.value ? new Date(`${event.target.value}T00:00:00`).toISOString() : undefined })}
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="access-savebar">
               <div><span className="auth-error">{formError}</span><small>{canChangeDraft ? "Changes apply to menus and actions after saving." : "View-only access: preview is available, but changes are disabled."}</small></div>
               <button type="submit" className="primary icon-label" disabled={!canChangeDraft}><Save size={16} /> Save Access</button>
             </div>
@@ -14263,9 +14536,18 @@ function AccessCenter({
                     <button type="button" className="btn small" onClick={() => setHistoryId(open ? null : person.id)}>
                       {open ? "Hide history" : "View history"}
                     </button>
+                    {canDelete && (
+                      <button type="button" className="btn small danger" onClick={() => void recycleUser(person)}>
+                        Move to Recycling Bin
+                      </button>
+                    )}
                     {canEdit && (
-                      <button type="button" className="primary" onClick={() => void restoreUser(person)}>
-                        Restore account
+                      <button type="button" className="primary" onClick={() => {
+                        setReactivating(person);
+                        setReactivateMode("all");
+                        setReactivateFrom(dateInputValue(new Date()));
+                      }}>
+                        Reactivate account
                       </button>
                     )}
                   </div>
@@ -14273,7 +14555,7 @@ function AccessCenter({
                 {open && (
                   <>
                     <div className="request-summary" style={{ marginTop: 6 }}>
-                      <span><b>{mine.length}</b> sessions · <b>{hours.toFixed(1)}</b> hours</span>
+                      <span><b>{mine.length}</b> sessions · <b>{formatHours(hours)}</b></span>
                       <span><b>{rows.length}</b> points entries · {submitted} submitted · <b>{approved}</b> approved</span>
                       <span><b>{requests.length}</b> requests</span>
                     </div>
@@ -14286,7 +14568,7 @@ function AccessCenter({
                             <td>{session.date}</td>
                             <td><b>Session</b><small>{session.mode}</small></td>
                             <td>{new Date(session.clockIn).toLocaleTimeString()} → {session.open ? "open" : new Date(session.clockOut).toLocaleTimeString()}</td>
-                            <td>{session.hours.toFixed(2)} h</td>
+                            <td>{formatHours(session.hours)}</td>
                           </tr>
                         ))}
                         {rows.slice(0, 6).map((row) => (
@@ -14311,6 +14593,107 @@ function AccessCenter({
                       </tbody></table>
                     </div>
                   </>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {/* Reactivation dialog: how much history should current reporting
+          include? (Part 16.) Whatever the choice, stored history is
+          permanent — the mode only shapes reports and can be changed later
+          in this same screen. */}
+      {reactivating && (
+        <section className="report-panel">
+          <div className="section-head">
+            <div><span className="eyebrow">Reactivate</span><h3>Bring {reactivating.name} back</h3></div>
+            <button type="button" className="btn small" onClick={() => setReactivating(null)}>Cancel</button>
+          </div>
+          <div className="correction-types">
+            {([
+              ["all", "Include all previous history", "Reports include every employment period"],
+              ["current", "Current employment period only", "Reports start from today; older records stay stored"],
+              ["from", "Include history from a date", "Reports start from the date you pick below"],
+            ] as const).map(([mode, label, blurb]) => (
+              <button
+                type="button"
+                key={mode}
+                className={reactivateMode === mode ? "on" : ""}
+                onClick={() => setReactivateMode(mode)}
+              ><b>{label}</b><small>{blurb}</small></button>
+            ))}
+          </div>
+          {reactivateMode === "from" && (
+            <div className="correction-fields" style={{ marginTop: 8 }}>
+              <label>History start date<input type="date" value={reactivateFrom} onChange={(event) => setReactivateFrom(event.target.value)} /></label>
+            </div>
+          )}
+          <div className="review-actions" style={{ marginTop: 10 }}>
+            <button type="button" className="primary" onClick={async () => {
+              const fromIso = reactivateMode === "from" && reactivateFrom ? new Date(`${reactivateFrom}T00:00:00`).toISOString() : undefined;
+              if (await restoreUser(reactivating, reactivateMode, fromIso)) setReactivating(null);
+            }}>Reactivate now</button>
+          </div>
+          <p className="panel-footnote">No option deletes anything: all periods stay stored, and History Mode can be changed later while editing the user.</p>
+        </section>
+      )}
+
+      {tab === "recycled" && (
+        <section className="report-panel">
+          <div className="section-head">
+            <div><span className="eyebrow">Soft-deleted accounts</span><h3>Recycling Bin</h3></div>
+            <span className="black-badge">{recycledUsers.length}</span>
+          </div>
+          <p className="builder-note">
+            Accounts here are deleted but not destroyed: sign-in is blocked, their email is free for a new
+            Create Account, and every timesheet, points entry, request and audit record stays stored. Restore
+            returns the account to Offboarded — unless its email has been reused, in which case the conflict is
+            explained and nothing is overwritten. Permanent deletion is a separate Super-Admin-only act, and even
+            it keeps attendance and audit history.
+          </p>
+          {recycledUsers.length === 0 ? (
+            <div className="empty compact">The Recycling Bin is empty. From Offboarded, &quot;Move to Recycling Bin&quot; places an account here and frees its email.</div>
+          ) : recycledUsers.map((person) => {
+            const open = historyId === person.id;
+            const mine = sessions.filter((session) => session.uid === person.id);
+            const hours = mine.reduce((sum, session) => sum + session.hours, 0);
+            const requests = (Array.isArray(store?.approvals) ? (store.approvals as LeaveRequest[]) : [])
+              .filter((row) => row.uid === person.id);
+            return (
+              <div className="settings-panel" key={person.id} style={{ marginTop: 10 }}>
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">{person.department || "No department"} · {person.access || "Engineer"}</span>
+                    <h3>{person.name}</h3>
+                    <p>
+                      {person.email ? `${person.email} · ` : ""}
+                      In the bin since {person.recycledAt ? new Date(person.recycledAt).toLocaleDateString() : "—"}
+                      {person.recycledBy ? ` (moved by ${person.recycledBy})` : ""}
+                    </p>
+                  </div>
+                  <div className="review-actions">
+                    <button type="button" className="btn small" onClick={() => setHistoryId(open ? null : person.id)}>
+                      {open ? "Hide history" : "View history"}
+                    </button>
+                    {canEdit && (
+                      <button type="button" className="primary" onClick={() => void binRestoreUser(person)}>
+                        Restore
+                      </button>
+                    )}
+                    {canPurge && (
+                      <button type="button" className="btn small danger" onClick={() => void purgeUser(person)}>
+                        Permanently delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {open && (
+                  <div className="request-summary" style={{ marginTop: 6 }}>
+                    <span><b>{mine.length}</b> sessions · <b>{formatHours(hours)}</b></span>
+                    <span><b>{requests.length}</b> requests</span>
+                    <span>Full records stay in reports and the audit history.</span>
+                  </div>
                 )}
               </div>
             );
@@ -15507,7 +15890,7 @@ function CorrectionsCentre({
                           </div>
                         )}
                       </td>
-                      <td>{session.hours.toFixed(2)}</td>
+                      <td>{formatHours(session.hours)}</td>
                       <td><div className="review-actions">
                         {editing ? (
                           <>
@@ -16343,7 +16726,7 @@ function WeekSchedule({
       <section className="schedule-summary">
         <article className="home-stat">
           <span><CalendarDays size={18} /></span>
-          <div><small>Your week</small><b>{myHours.toFixed(1)} h · {myDaysIn} day{myDaysIn === 1 ? "" : "s"}</b>
+          <div><small>Your week</small><b>{formatHours(myHours)} · {myDaysIn} day{myDaysIn === 1 ? "" : "s"}</b>
             <p>{nextShift ? `Next: ${nextShift.day} ${nextShift.entries[0]?.start || ""}` : "No upcoming shift"}</p></div>
         </article>
         <article className="home-stat">
@@ -16852,14 +17235,14 @@ function QuickClock({
           {open ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
-          <div><small>Today worked</small><b>{todayHours.toFixed(2)} h</b></div>
-          <div><small>Today in office</small><b>{todayPresence.toFixed(2)} h</b></div>
-          <div><small>This week worked</small><b>{weekHours.toFixed(2)} h</b></div>
+          <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
+          <div><small>Today in office</small><b>{formatHours(todayPresence)}</b></div>
+          <div><small>This week worked</small><b>{formatHours(weekHours)}</b></div>
           <div><small>Sessions</small><b>{mine.length}</b></div>
         </div>
         {todayBreak > 0 && (
           <p className="clock-break-note">
-            {todayBreak.toFixed(2)} h of break deducted today. In-office time counts it, worked hours do not.
+            {formatHours(todayBreak)} of break deducted today. In-office time counts it, worked hours do not.
           </p>
         )}
       </section>
@@ -16928,8 +17311,8 @@ function QuickClock({
                       {" – "}
                       {session.open ? "still open" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       {" · "}{session.stale || session.unclosed
-                        ? `open ${Math.round(session.openHours || 0)} h — needs correction, not counted`
-                        : `${session.hours.toFixed(2)} h worked`}
+                        ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
+                        : `${formatHours(session.hours)} worked`}
                     </small>
                   </div>
                   {active ? (
@@ -17033,7 +17416,7 @@ function QuickClock({
         )}
         <div className="hours-grid">
           <article className="hours-total">
-            <small>Total</small><b>{breakdown.total.toFixed(2)} h</b>
+            <small>Total</small><b>{formatHours(breakdown.total)}</b>
             <em>{breakdown.count} session{breakdown.count === 1 ? "" : "s"} · {breakdown.days} day{breakdown.days === 1 ? "" : "s"}</em>
           </article>
           {(["office", "online", "site", "other"] as const).map((tone) => {
@@ -17043,7 +17426,7 @@ function QuickClock({
             return (
               <article className="hours-mode" key={tone}>
                 <span className={`mode-chip tone-${tone}`}>{tone === "office" ? "Office" : tone === "online" ? "Online / home" : tone === "site" ? "Site" : "Other"}</span>
-                <b>{value.toFixed(2)} h</b>
+                <b>{formatHours(value)}</b>
                 <div className="mode-bar"><span style={{ width: `${share}%`, background: TONE_COLOURS[tone] }} /></div>
                 <em>{share}% of the period</em>
               </article>
@@ -17130,7 +17513,7 @@ function QuickClock({
                 <button type="button" className="dev-card" key={record.id} onClick={() => go("staff-development")}>
                   <span className={`record-status ${record.status.toLowerCase().replace(/\s+/g, "-")}`}>{record.status}</span>
                   <b>{record.title}</b>
-                  <small>{record.completedHours.toFixed(1)} / {record.targetHours.toFixed(1)} h · {record.completedPresentations}/{record.targetPresentations} presentations</small>
+                  <small>{formatHours(record.completedHours)} / {formatHours(record.targetHours)} · {record.completedPresentations}/{record.targetPresentations} presentations</small>
                   <div className="dev-meter" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label={`${record.title} progress`}>
                     <span style={{ width: `${percent}%` }} />
                   </div>
@@ -17155,7 +17538,7 @@ function QuickClock({
                   <td><span className={`mode-chip tone-${modeTone(session.mode)}`}>{session.mode}</span></td>
                   <td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
                   <td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
-                  <td>{session.hours.toFixed(2)}</td>
+                  <td>{formatHours(session.hours)}</td>
                 </tr>
               ))}
               {!recent.length && <tr><td colSpan={5}><div className="empty compact">No attendance recorded yet.</div></td></tr>}
