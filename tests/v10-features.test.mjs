@@ -410,7 +410,7 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
   assert.match(sync, /if \(!supabaseConfigured\(\)\) \{/);
   // The parent app only calls in after hydration, and always keeps the cleanup.
   assert.match(page, /const cleanup = initLarsaSync\(\{/);
-  assert.match(page, /return cleanup;\s*\n\s*\}, \[hydrated, refs\]\);/);
+  assert.match(page, /return \(\) => \{ cleanupLedger\(\); cleanup\(\); \};\s*\n\s*\}, \[hydrated, refs\]\);/);
   // A remote change bumps the same storageTick the rest of the app already
   // reacts to, and reloads the engines, rather than adding a second code path.
   assert.match(page, /setStorageTick\(\(value\) => value \+ 1\);\s*\n\s*\(Object\.keys\(refs\) as Engine\[\]\)\.forEach/);

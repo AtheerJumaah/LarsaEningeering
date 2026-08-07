@@ -126,5 +126,5 @@ test("the SQL behavioural tests are wired into the local throwaway-Postgres runn
 
 test("the service worker cache version is bumped so every device sheds the old engine promptly", async () => {
   const sw = await read("public/sw.js");
-  assert.match(sw, /const CACHE_NAME = "larsa-control-v44";/);
+  assert.match(sw, /const CACHE_NAME = "larsa-control-v45";/);
 });

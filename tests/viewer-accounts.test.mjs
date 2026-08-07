@@ -114,7 +114,7 @@ test("PIN sign-in proves its inbox like email sign-in: first time, then per the 
   assert.match(platform, /pin_hours: Number\(e\.target\.value\) \|\| 168/);
   // Enforced end to end: the policy row stores it and the function serves it.
   assert.match(migration, /add column if not exists pin_verification_required boolean not null default true/);
-  assert.match(policyFn, /pin_verification_required, pin_hours"\)/);
+  assert.match(policyFn, /pin_verification_required, pin_hours, interval_unit"\)/);
   assert.match(policyFn, /next\.pin_hours = Math\.max\(1, Number\(policy\.pin_hours\) \|\| 168\)/);
 });
 
@@ -128,10 +128,10 @@ test("the domain check is exact-match, not a suffix match (anti-spoofing)", asyn
 
 test("Users & Access is split into Pending, Active, Viewer, and Offboarded tabs", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /const \[tab, setTab\] = useState<"pending" \| "active" \| "viewers" \| "offboarded">\("active"\);/);
+  assert.match(page, /const \[tab, setTab\] = useState<"pending" \| "active" \| "viewers" \| "offboarded" \| "recycled">\("active"\);/);
   assert.match(page, /const pendingUsers = users\.filter\(\(user\) => user\.pendingApproval === true && user\.offboarded !== true\);/);
   assert.match(page, /const activeUsers = users\.filter\(\(user\) => user\.pendingApproval !== true && user\.access !== "Client" && user\.offboarded !== true\);/);
-  assert.match(page, /const offboardedUsers = users\.filter\(\(user\) => user\.offboarded === true\);/);
+  assert.match(page, /const offboardedUsers = users\.filter\(\(user\) => user\.offboarded === true && user\.recycled !== true\);/);
   assert.match(page, /const decidePending = async \(approve: boolean\) => \{/);
   assert.match(page, /<ViewerAccountsPanel/);
 });
@@ -181,12 +181,12 @@ test("offboarding keeps everything and can be undone; the Offboarded tab shows t
   // Schedule and approval-flow config are no longer thrown away on removal.
   assert.doesNotMatch(page, /if \(store\.schedule\) delete store\.schedule\[target\.id\];/);
   // The way back, gated and audited like the way out.
-  assert.match(page, /const restoreAccessUser = async \(target: StaffUser\)/);
+  assert.match(page, /const restoreAccessUser = async \(target: StaffUser, historyMode\?: "all" \| "current" \| "from", historyFrom\?: string\)/);
   assert.match(page, /logAccountEvent\(actor, "account\.offboarded", target\.id, target\.name/);
-  assert.match(page, /logAccountEvent\(actor, "account\.restored", target\.id, target\.name/);
+  assert.match(page, /logAccountEvent\(actor, "account\.reactivated", target\.id, target\.name/);
   // The tab, its restore button, and the viewable history.
   assert.match(page, /setTab\("offboarded"\)/);
-  assert.match(page, /Restore account/);
+  assert.match(page, /Reactivate account/);
   assert.match(page, /View history/);
   // Offboarded people never appear in the active or pending lists.
   assert.match(page, /user\.pendingApproval !== true && user\.access !== "Client" && user\.offboarded !== true/);
