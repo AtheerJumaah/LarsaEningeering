@@ -33,7 +33,7 @@ Every reconnected record keeps its **original timestamp**, its **original accoun
 | Account | Records | Detail | Candidates |
 |---------|---------|--------|-----------|
 | u11 | 1 | Clock-**out** Aug 6 20:36:10 with no surviving clock-in | Ayman Al-Jumaili, Anas Sayala, or Dillon Takhuma |
-| u12 | 2 | Clock-in 19:25 → clock-out 21:49 Aug 6 (2 HR 24 MIN) | Ghufran Taha (plausible but unproven) |
+| u12 | 2 | Clock-in 19:25 → clock-out 21:49 Aug 6 (2 hr 24 min) | Ghufran Taha (plausible but unproven) |
 
 No backup captured u11/u12's account records (their user entries were lost before the Aug 6 12:17 backup ran), so their identities cannot be proven from data. The records are preserved and annotated in the app; once the person confirms, an admin can reconnect them the same way.
 
