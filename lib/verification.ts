@@ -31,6 +31,9 @@ export type VerificationPolicy = {
      Platform Settings exactly like the email intervals above. */
   pin_verification_required: boolean;
   pin_hours: number;
+  /* The unit the interval numbers are counted in — hours, calendar days, or
+     business days (Iraqi working week, Sun–Thu). Set in Platform Settings. */
+  interval_unit?: "hours" | "days" | "business_days";
 };
 
 export type VerificationStatus = {
@@ -82,10 +85,15 @@ export async function savePolicy(policy: VerificationPolicy, updatedBy: string):
  */
 export async function checkVerification(user: {
   id: string;
+  email?: string;
   access?: string;
   role?: string;
 }): Promise<VerificationStatus | null> {
-  const data = await call({ op: "status", userId: user.id, access: user.access || "", role: user.role || "" });
+  /* The email travels with the check: verification stamps are keyed to the
+     normalized email (the permanent business identity), so an account that
+     was recreated under a new uid keeps its verification clock instead of
+     being challenged on every sign-in — the incident's most-reported bug. */
+  const data = await call({ op: "status", userId: user.id, email: String(user.email || "").trim().toLowerCase(), access: user.access || "", role: user.role || "" });
   if (!data || !data.ok) return null;
   return {
     required: Boolean(data.required),
