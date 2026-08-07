@@ -1,0 +1,17 @@
+-- LARSA ONE-TIME INCIDENT RECOVERY, first pass (superseded by repair_005).
+--
+-- This pass reassigned the orphaned incident records' uid fields IN PLACE and
+-- backfilled the durable ledger. The ledger backfill (136 events, including
+-- the recovered identities) COMMITTED and survives. The in-place blob edits,
+-- however, were reverted within a minute by an open client whose three-way
+-- merge lets the device win on same-id field conflicts — a server-side edit
+-- is "foreign" to every client at once, so some open tab always holds the
+-- old copy of those records. repair_005 re-applies the recovery in a
+-- merge-proof way (remove + replace under new ids, with tombstones).
+--
+-- Kept in the history because its ledger backfill is live production data
+-- and because the failure it exposed is documented in the Root Cause Report.
+-- The full SQL as applied is preserved in the database migration history
+-- (supabase migration list: repair_004_incident_recovery_aug6). See
+-- repair_005_incident_recovery_merge_proof.sql for the effective recovery.
+select 1;
