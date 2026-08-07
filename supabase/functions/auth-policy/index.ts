@@ -41,6 +41,9 @@ type Policy = {
   initial_verification_required: boolean;
   pin_verification_required: boolean;
   pin_hours: number;
+  /* The unit the numbers above are counted in: 'hours', 'days' (calendar) or
+     'business_days' (Iraqi working week, Sunday–Thursday). */
+  interval_unit: "hours" | "days" | "business_days";
 };
 
 const FALLBACK: Policy = {
@@ -53,15 +56,58 @@ const FALLBACK: Policy = {
   initial_verification_required: true,
   pin_verification_required: true,
   pin_hours: 168,
+  interval_unit: "hours",
 };
 
 async function readPolicy(): Promise<Policy> {
   const { data } = await db
     .from("auth_policy")
-    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours")
+    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit")
     .eq("id", 1)
     .maybeSingle();
-  return (data as Policy) || FALLBACK;
+  const policy = (data as Policy) || FALLBACK;
+  if (policy.interval_unit !== "days" && policy.interval_unit !== "business_days") policy.interval_unit = "hours";
+  return policy;
+}
+
+/* ---- Interval arithmetic ------------------------------------------------
+   Exact elapsed time for 'hours' and 'days'; whole working days for
+   'business_days'. Days are counted on the company clock (Baghdad, UTC+3,
+   no DST), never on whatever the server's locale happens to be. The Iraqi
+   working week runs Sunday–Thursday; Friday and Saturday are the weekend.
+   Epoch day 0 (1 Jan 1970) was a Thursday, so dayIndex % 7 maps
+   0=Thu 1=Fri 2=Sat 3=Sun 4=Mon 5=Tue 6=Wed. Extend WEEKEND (or add a
+   holiday list) here when LARSA adopts a business calendar. */
+const BAGHDAD_OFFSET_MS = 3 * 3600_000;
+const WEEKEND = new Set([1, 2]); // Friday, Saturday
+function baghdadDayIndex(ms: number): number {
+  return Math.floor((ms + BAGHDAD_OFFSET_MS) / 86_400_000);
+}
+function businessDaysElapsed(fromMs: number, toMs: number): number {
+  const first = baghdadDayIndex(fromMs);
+  const last = baghdadDayIndex(toMs);
+  let count = 0;
+  for (let day = first + 1; day <= last; day++) {
+    if (!WEEKEND.has(day % 7)) count++;
+  }
+  return count;
+}
+/* Is a verification stamped at `stampMs` due again under `value` units? */
+function verificationDue(stampMs: number, value: number, unit: Policy["interval_unit"], nowMs: number): boolean {
+  if (!stampMs) return true; // never verified counts as due, not as exempt
+  if (unit === "days") return nowMs - stampMs >= value * 86_400_000;
+  if (unit === "business_days") return businessDaysElapsed(stampMs, nowMs) >= value;
+  return (nowMs - stampMs) / 3600_000 >= value;
+}
+/* Rough hours remaining, for the "expires in" hint in the interface. */
+function hoursRemaining(stampMs: number, value: number, unit: Policy["interval_unit"], nowMs: number): number {
+  if (!stampMs) return 0;
+  if (unit === "days") return Math.max(0, (stampMs + value * 86_400_000 - nowMs) / 3600_000);
+  if (unit === "business_days") {
+    const left = value - businessDaysElapsed(stampMs, nowMs);
+    return Math.max(0, left * 24);
+  }
+  return Math.max(0, value - (nowMs - stampMs) / 3600_000);
 }
 
 function normEmail(value: unknown): string {
@@ -141,40 +187,55 @@ Deno.serve(async (req: Request) => {
 
   if (op === "status") {
     const userId = String(payload.userId || "");
+    const email = normEmail(payload.email);
     const access = String(payload.access || "");
     const role = String(payload.role || "");
-    if (!userId) return json({ ok: false, error: "Unknown account." });
+    if (!userId && !email) return json({ ok: false, error: "Unknown account." });
 
     const policy = await readPolicy();
 
-    const { data } = await db
-      .from("user_verification")
-      .select("last_periodic_email_verified_at, verification_exempt")
-      .eq("user_id", userId)
-      .maybeSingle();
+    /* Match by the permanent identity (normalized email) FIRST, and by uid as
+       the fallback for username-only accounts. Several rows can reference the
+       same person across account recreations; the newest genuine stamp wins,
+       so recreating an account never restarts anyone's verification clock. */
+    let rows: { last_periodic_email_verified_at: string | null; verification_exempt: boolean | null }[] = [];
+    if (email) {
+      const { data } = await db
+        .from("user_verification")
+        .select("last_periodic_email_verified_at, verification_exempt")
+        .eq("normalized_email", email);
+      rows = rows.concat((data as typeof rows) || []);
+    }
+    if (userId) {
+      const { data } = await db
+        .from("user_verification")
+        .select("last_periodic_email_verified_at, verification_exempt")
+        .eq("user_id", userId);
+      rows = rows.concat((data as typeof rows) || []);
+    }
 
-    if (data && data.verification_exempt) {
+    if (rows.some((row) => row.verification_exempt)) {
       return json({ ok: true, required: false, exempt: true, policy, hours: null });
     }
 
-    const hours = !policy.enabled ? null : (isPrivileged(access, role) ? policy.privileged_hours : policy.engineer_hours);
-    if (!hours) return json({ ok: true, required: false, policy, hours: null });
+    const value = !policy.enabled ? null : (isPrivileged(access, role) ? policy.privileged_hours : policy.engineer_hours);
+    if (!value) return json({ ok: true, required: false, policy, hours: null });
 
-    const stamp = data && data.last_periodic_email_verified_at
-      ? new Date(data.last_periodic_email_verified_at as string).getTime()
-      : 0;
+    const stamp = rows.reduce((max, row) => {
+      const ms = row.last_periodic_email_verified_at ? new Date(row.last_periodic_email_verified_at).getTime() : 0;
+      return Number.isFinite(ms) && ms > max ? ms : max;
+    }, 0);
 
-    /* Never verified counts as due, not as exempt. */
-    const ageHours = stamp ? (Date.now() - stamp) / 3600000 : Number.POSITIVE_INFINITY;
-    const required = ageHours >= hours;
+    const now = Date.now();
+    const required = verificationDue(stamp, value, policy.interval_unit, now);
 
     return json({
       ok: true,
       required,
       exempt: false,
       policy,
-      hours,
-      expiresInHours: required ? 0 : Math.max(0, hours - ageHours),
+      hours: value,
+      expiresInHours: required ? 0 : hoursRemaining(stamp, value, policy.interval_unit, now),
       lastVerifiedAt: stamp ? new Date(stamp).toISOString() : null,
     });
   }
@@ -189,6 +250,7 @@ Deno.serve(async (req: Request) => {
     const { error } = await db.from("user_verification").upsert(
       {
         user_id: userId,
+        normalized_email: normEmail(payload.email) || null,
         last_periodic_email_verified_at: new Date().toISOString(),
         initial_verification_skipped: Boolean(payload.initialSkipped),
         approved_by: payload.approvedBy ? String(payload.approvedBy) : null,
@@ -218,6 +280,9 @@ Deno.serve(async (req: Request) => {
     next.privileged_hours = policy.privileged_hours === null ? null : Number(policy.privileged_hours) || 24;
     if (typeof policy.pin_verification_required === "boolean") next.pin_verification_required = policy.pin_verification_required;
     if (policy.pin_hours !== undefined) next.pin_hours = Math.max(1, Number(policy.pin_hours) || 168);
+    if (policy.interval_unit === "hours" || policy.interval_unit === "days" || policy.interval_unit === "business_days") {
+      next.interval_unit = policy.interval_unit;
+    }
 
     const { error } = await db.from("auth_policy").upsert(next, { onConflict: "id" });
     if (error) return json({ ok: false, error: "Could not save the policy." });
