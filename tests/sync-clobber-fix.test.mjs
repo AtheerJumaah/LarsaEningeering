@@ -126,5 +126,13 @@ test("the SQL behavioural tests are wired into the local throwaway-Postgres runn
 
 test("the service worker cache version is bumped so every device sheds the old engine promptly", async () => {
   const sw = await read("public/sw.js");
-  assert.match(sw, /const CACHE_NAME = "larsa-control-v45";/);
+  /* What matters is that the name keeps MOVING — the activate handler evicts
+     every cache whose name does not match, so a version that never changes is
+     how a shipped fix keeps serving the old broken file. Pinning the exact
+     number here just meant this test failed on every release for the wrong
+     reason, so it asserts the shape and a floor instead: v45 was the version
+     current when the durable-ledger repair shipped, and it may only go up. */
+  const found = sw.match(/const CACHE_NAME = "larsa-control-v(\d+)";/);
+  assert.ok(found, "sw.js must declare a versioned CACHE_NAME");
+  assert.ok(Number(found[1]) >= 45, `cache version must not go backwards (found v${found[1]})`);
 });
