@@ -249,6 +249,12 @@ type StaffUser = {
   emailHistory?: { from: string; to: string; at: string; by: string }[];
   permissions?: string[];
   permissionProfile?: PermissionProfile;
+  /* Accounting is closed unless someone is deliberately let in. A Super Admin
+     sets this per person in Users & Access; no role grants it by itself and
+     no Admin can set it. See accountingAccessAllowed(). */
+  accountingAccess?: boolean;
+  accountingAccessAt?: string;
+  accountingAccessBy?: string;
   notes?: string;
   phone?: string;
   location?: string;
@@ -1553,6 +1559,52 @@ function accountingRole(user: StaffUser) {
   return "Engineer";
 }
 
+/* ---- Accounting is closed unless somebody is deliberately let in --------
+   The company rule: nobody sees the Accounting area except the Developer, a
+   Super Admin, an Accountant, and any individual one of those has explicitly
+   given access to. Every other role — Admin, Manager, Team Leader, Admin HR,
+   Construction Engineer, Engineer, Trainee, Client — sees no financial screen
+   at all: not the hub, not the dashboard, not P&L, revenue, operating costs,
+   funding, expenses, materials, labour, payroll, commissions, client
+   statements, BOQ, suppliers, reports, the review queue, or the settings.
+
+   Two screens stay open on purpose, because neither shows the company's
+   money to somebody it does not belong to:
+
+     My Pay — the employee's own salary record, personal the way My Settings
+       is, and scoped to the signed-in person by the server, not by this file.
+     Assigned Projects — the project workspace engineers actually work in. It
+       is filed under Accounting in the navigation, but it carries no
+       financial figures of its own; the money view of a project is
+       Construction Financials, which IS closed.
+
+   This is a hard gate rather than a default, and it is checked BEFORE any
+   stored permission. That matters: the older role presets baked accounting
+   grants into people's saved profiles when their accounts were made, and
+   fifteen accounts have no profile at all and fall back to role defaults.
+   Checking first means every one of those routes is closed by this single
+   rule, and not one stored record had to be edited to close it. */
+const ACCOUNTING_ALWAYS_OPEN = new Set(["my-pay", "project-portal"]);
+
+function isAccountingItem(item: Item) {
+  if (ACCOUNTING_ALWAYS_OPEN.has(item.id)) return false;
+  return item.engine === "accounting"
+    || item.id === "accounting-hub"
+    || item.id === "payroll-portal"
+    || item.id === "sales-commissions"
+    || item.id === "construction-financials";
+}
+
+function accountingAccessAllowed(user: StaffUser) {
+  // The Developer, resolved server-side from platform_admins by email.
+  if (user.platformAdmin === true) return true;
+  if (user.access === "Super Admin") return true;
+  // The people whose job this is.
+  if (user.access === "Accountant") return true;
+  // Anyone a Super Admin has deliberately let in, one person at a time.
+  return user.accountingAccess === true;
+}
+
 function legacyCanOpen(user: StaffUser, item: Item) {
   if (item.id === "overview") return true;
   if (item.id === "performance-center") return hasStaffPermission(user, "Submit Performance") || hasStaffPermission(user, "Reports View");
@@ -1657,6 +1709,13 @@ function legacyCanAct(user: StaffUser, item: Item, action: PermissionAction) {
 
 function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction = "view"): boolean {
   if (isAdmin(user)) return true;
+  /* Before anything else, including any stored grant: an account that has not
+     been let into Accounting cannot view, add, edit, approve, export or manage
+     a single accounting screen. Placed here so the sidebar, the work-area
+     tiles, the hub, quick actions, the landing page and the accounting engine
+     itself all inherit the one rule — they every one of them ask this
+     function, so there is no second place for it to be got wrong. */
+  if (isAccountingItem(item) && !accountingAccessAllowed(user)) return false;
   if (item.id === "overview") return true;
   // Everyone manages their own account and notification preferences.
   if (item.id === "my-settings") return true;
@@ -1790,7 +1849,14 @@ const ACCOUNTING_MODULE_FOR_ITEM: Record<string, string> = {
 };
 
 function accountingPermissionsForUser(user: StaffUser) {
-  if (!user.permissionProfile || isAdmin(user)) return {};
+  if (isAdmin(user)) return {};
+  /* An account with no accounting access is handed a fully closed matrix
+     rather than the empty object, because an empty object means "no override"
+     and lets the engine fall back to its own role defaults. Falling through to
+     the loop below produces exactly that closed matrix, since every lookup in
+     it goes through hasItemPermission, which now refuses. */
+  const denied = !accountingAccessAllowed(user);
+  if (!denied && !user.permissionProfile) return {};
   const modules = [
     "dashboard", "funding", "revenue", "operating", "expenses", "materials", "labor", "payroll",
     "commissions", "clients", "reports", "review", "projects", "suppliers", "employees", "boq", "settings",
@@ -1814,7 +1880,10 @@ function accountingPermissionsForUser(user: StaffUser) {
     result[moduleKey].export ||= hasItemPermission(user, item, "export");
     result[moduleKey].manageSettings ||= hasItemPermission(user, item, "manage");
   });
-  result.settings.manageUsers = hasItemPermission(user, ACCESS_ITEM, "manage");
+  /* Managing users is an Administration capability, not an accounting one, so
+     it has to be forced shut here too — otherwise an admin with no accounting
+     access would still be handed the engine's user-management switch. */
+  result.settings.manageUsers = !denied && hasItemPermission(user, ACCESS_ITEM, "manage");
   return result;
 }
 
@@ -7943,8 +8012,11 @@ export default function Home() {
       Object.entries(profile?.grants || {})
         .filter(([itemId]) => itemId === "accounting-hub" || itemId.startsWith("acc-"))
         .sort(([left], [right]) => left.localeCompare(right)));
+    const accountingWas = existingRecord?.accountingAccess === true;
+    const accountingNow = nextUser.accountingAccess === true;
     if (!actorIsDeveloper && !actorIsSuperAdmin
-      && accountingGrantsOf(existingRecord?.permissionProfile) !== accountingGrantsOf(nextUser.permissionProfile)) {
+      && (accountingGrantsOf(existingRecord?.permissionProfile) !== accountingGrantsOf(nextUser.permissionProfile)
+        || accountingWas !== accountingNow)) {
       notify("Only the Developer or a Super Admin can change Accounting access.");
       return false;
     }
@@ -7966,6 +8038,16 @@ export default function Home() {
       projectIds: nextUser.access === "Super Admin" ? [] : nextUser.projectIds || [],
       permissions: staffPermissionsForUser(nextUser),
       emailVerified: nextEmail ? true : undefined,
+      /* Who was let into Accounting, when, and by whom — carried on the record
+         itself as well as in the audit trail, so the answer is visible in the
+         same place the switch is. */
+      accountingAccess: accountingNow || undefined,
+      accountingAccessAt: accountingNow === accountingWas
+        ? existingRecord?.accountingAccessAt
+        : new Date().toISOString(),
+      accountingAccessBy: accountingNow === accountingWas
+        ? existingRecord?.accountingAccessBy
+        : (actor.name || actor.email || actor.id),
     };
     const existingIndex = store.users.findIndex((row: StaffUser) => row.id === prepared.id);
     if (isNew) {
@@ -8017,6 +8099,12 @@ export default function Home() {
       if ((existing.access || "") !== (prepared.access || "")) {
         logAccountEvent(actor, "account.role_changed", existing.id, existing.name, {
           from: existing.access || "(none)", to: prepared.access || "(none)",
+        });
+      }
+      /* So is every opening and closing of the Accounting door. */
+      if (accountingWas !== accountingNow) {
+        logAccountEvent(actor, "account.accounting_access_changed", existing.id, existing.name, {
+          from: accountingWas, to: accountingNow,
         });
       }
       store.users[existingIndex] = { ...existing, ...prepared };
@@ -14161,6 +14249,13 @@ function AccessCenter({
     ].some((value) => value.toLowerCase().includes(projectQuery.trim().toLowerCase())),
   );
   const protectedAccount = draft?.access === "Super Admin";
+  /* Accounting: closed for every role, opened one person at a time, and only
+     by the Developer or a Super Admin. Super Admins and Accountants already
+     hold it through their role, so for them the switch is shown satisfied and
+     inert rather than pretending to be the thing granting it. */
+  const canGrantAccounting = currentUser?.platformAdmin === true || currentUser?.access === "Super Admin";
+  const accountingByRole = draft?.access === "Super Admin" || draft?.access === "Accountant";
+  const accountingOpen = accountingByRole || draft?.accountingAccess === true;
   const enabledPermissionCount = draft?.permissionProfile
     ? Object.values(draft.permissionProfile.grants)
         .flatMap((actions) => Object.values(actions))
@@ -14373,6 +14468,41 @@ function AccessCenter({
               <div className="scope-note">
                 {DATA_SCOPES.find((scope) => scope.id === draft.permissionProfile?.scope)?.description}
               </div>
+            </section>
+
+            {/* Accounting is shut for every role. This switch is the only thing
+                that opens it, and only the Developer or a Super Admin may
+                touch it — an Admin sees it locked, and saveAccessUser refuses
+                the change even if the control itself were bypassed. */}
+            <section className="access-section">
+              <div className="access-section-title">
+                <div><BadgeDollarSign size={18} /><span><b>Accounting access</b><small>Closed for every role unless it is switched on here. My Pay stays open to everyone either way.</small></span></div>
+                <span className="black-badge">{accountingOpen ? "Open" : "Closed"}</span>
+              </div>
+              <label className="enable-user">
+                <input
+                  type="checkbox"
+                  checked={accountingOpen}
+                  onChange={(event) => updateDraft("accountingAccess", event.target.checked)}
+                  disabled={!canGrantAccounting || accountingByRole}
+                />
+                <span>
+                  <b>Let this account into Accounting</b>
+                  <small>
+                    {accountingByRole
+                      ? `${draft.access} accounts hold Accounting through their role, so this switch is not needed.`
+                      : canGrantAccounting
+                        ? "Opens the Accounting area — dashboard, ledgers, payroll, reports. Every change here is audited."
+                        : "Only the Developer or a Super Admin can change Accounting access."}
+                  </small>
+                </span>
+              </label>
+              {accountingOpen && !accountingByRole && draft.accountingAccessAt && (
+                <div className="scope-note">
+                  Granted {new Date(draft.accountingAccessAt).toLocaleString()}
+                  {draft.accountingAccessBy ? ` by ${draft.accountingAccessBy}` : ""}.
+                </div>
+              )}
             </section>
 
             <section className="access-section project-access-section">
