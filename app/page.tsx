@@ -4,6 +4,7 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow } from "../lib/supabase/sync";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
+import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
@@ -4436,13 +4437,29 @@ export default function Home() {
             notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
           }
         }).catch(() => { /* runs again on next open */ });
+        /* And the same for accounts. An account missing from the blob is
+           never read as a deletion — that is the failure this undoes — so
+           anything the account ledger holds and the blob has lost comes
+           back, unless it was deliberately tombstoned. */
+        reconcileAccountsFromLedger().then(({ restored, names }) => {
+          if (restored > 0) {
+            setStorageTick((value) => value + 1);
+            notifyRef.current(
+              restored === 1
+                ? `${names[0]}'s account was restored from the durable ledger.`
+                : `${restored} accounts were restored from the durable ledger: ${names.slice(0, 3).join(", ")}${restored > 3 ? `, and ${restored - 3} more` : ""}.`,
+            );
+          }
+        }).catch(() => { /* runs again on next open */ });
       },
     });
     /* Every staff-blob write also appends new clock events to the durable
-       attendance ledger (append-only, database-enforced). Installed AFTER
-       initLarsaSync so both wrappers of localStorage.setItem compose. */
+       attendance ledger, and every account in it to the durable account
+       ledger — both append-only and database-enforced. Installed AFTER
+       initLarsaSync so all three wrappers of localStorage.setItem compose. */
     const cleanupLedger = initAttendanceLedger();
-    return () => { cleanupLedger(); cleanup(); };
+    const cleanupAccounts = initAccountLedger();
+    return () => { cleanupAccounts(); cleanupLedger(); cleanup(); };
   }, [hydrated, refs]);
 
   useEffect(() => {
@@ -8341,7 +8358,15 @@ export default function Home() {
     if (!existing) { notify("That user could not be found."); return false; }
     if (existing.access === "Super Admin") { notify("The protected owner account cannot be deleted."); return false; }
     store.users = (store.users as StaffUser[]).filter((row) => row.id !== target.id);
+    /* The ONLY deliberate account removal in the app, so the only place a
+       tombstone is written. Both halves are needed: the local list stops this
+       device restoring the account from the ledger, and the server-side
+       tombstone stops every OTHER device doing so a moment later. Without
+       the second, a permanent delete would simply undo itself. */
+    markAccountsRemoved(store, [target.id]);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    void tombstoneAccount(target.id, actor.email || actor.name || actor.id,
+      `Permanently deleted by ${actor.name || actor.email || actor.id}`);
     logAccountEvent(actor, "account.permanent_delete", target.id, target.name, {
       snapshot: { id: existing.id, name: existing.name, email: (existing.email || "").trim().toLowerCase(), access: existing.access || "", offboardedAt: existing.offboardedAt || null, recycledAt: existing.recycledAt || null },
     });
