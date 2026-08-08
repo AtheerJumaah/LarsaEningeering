@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow } from "../lib/supabase/sync";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
@@ -329,6 +329,13 @@ type ClockLog = {
   clockedBy?: string;
   lastSeen?: string;
   active?: boolean;
+  /* Incident-recovery provenance: the original record id/uid before a
+     reconnection, and how the record was recovered ("incident-20260806",
+     "backup-restore", "ledger-restore", or "needs-review" for sessions
+     whose owner is not yet identified). */
+  recovery?: string;
+  origUid?: string;
+  origId?: string;
 };
 type ClockSession = {
   uid: string;
@@ -2888,7 +2895,14 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
 
     /* A session shown to nobody by its raw id is a bug report waiting to
        happen; a removed account still worked those hours as a person. */
-    const label = names.get(uid) || `Former staff (${uid})`;
+    /* Never show a bare account id where a person's name belongs. A uid with
+       no matching account is either a recovered session awaiting
+       identification (flagged needs-review by the incident repair) or a
+       genuinely departed account whose history is retained. Both get an
+       honest human label — "u12" must never read like an employee. */
+    const needsReview = rows.some((row) => row.recovery === "needs-review");
+    const label = names.get(uid)
+      || (needsReview ? `Needs identification (recovered session, was ${uid})` : `Former staff (${uid})`);
 
     /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
        the original punches (they are the session's identity for trim and
@@ -6661,6 +6675,11 @@ export default function Home() {
       ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    /* Persistence must not even wait out the sync debounce: the punch is
+       already visible locally (state and timer flip instantly from the
+       localStorage write above); this starts the backend write and the
+       broadcast to other devices in the same breath. */
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify(status === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
@@ -6701,6 +6720,7 @@ export default function Home() {
       ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify(ending ? "Break ended." : "Break started.");
@@ -7004,6 +7024,7 @@ export default function Home() {
       });
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Session added.");
@@ -7889,8 +7910,42 @@ export default function Home() {
       return false;
     }
     const existingRecord = store.users.find((row: StaffUser) => row.id === nextUser.id) as StaffUser | undefined;
-    if (nextUser.access === "Super Admin" && existingRecord?.access !== "Super Admin") {
-      notify("The protected Super Admin account already controls full access.");
+    /* ---- Role hierarchy: Developer → Super Admin → Admin → everyone ----
+       The Developer is the platform owner, identified by platform_admins
+       membership resolved SERVER-SIDE at sign-in (never by display name),
+       and their own row is additionally locked by the database trigger.
+       Only the Developer touches the Super Admin tier; only the Developer
+       or a Super Admin touches the Admin tier or Accounting access; and
+       nobody — whatever their tier — changes their own role. */
+    const actorIsDeveloper = actor.platformAdmin === true;
+    const actorIsSuperAdmin = actor.access === "Super Admin";
+    const previousAccess = existingRecord?.access || "";
+    const nextAccess = nextUser.access || "";
+    if (!isNew && existingRecord && actor.id === existingRecord.id
+      && previousAccess !== nextAccess && previousAccess !== "Super Admin") {
+      notify("You cannot change your own role. Another authorized administrator has to do it.");
+      return false;
+    }
+    if ((nextAccess === "Super Admin") !== (previousAccess === "Super Admin") && !actorIsDeveloper) {
+      notify("Only the Developer can create or remove Super Admins.");
+      return false;
+    }
+    if ((nextAccess === "Admin") !== (previousAccess === "Admin") && !actorIsDeveloper && !actorIsSuperAdmin) {
+      notify("Only the Developer or a Super Admin can grant or remove the Admin role.");
+      return false;
+    }
+    /* Accounting access is the strictest module: an Admin cannot grant,
+       remove, or modify it — and the true financial permissions are ALSO
+       enforced server-side (acct_set_permissions requires the platform
+       owner plus a fresh emailed code), so a forged request cannot get
+       around this either. */
+    const accountingGrantsOf = (profile?: PermissionProfile) => JSON.stringify(
+      Object.entries(profile?.grants || {})
+        .filter(([itemId]) => itemId === "accounting-hub" || itemId.startsWith("acc-"))
+        .sort(([left], [right]) => left.localeCompare(right)));
+    if (!actorIsDeveloper && !actorIsSuperAdmin
+      && accountingGrantsOf(existingRecord?.permissionProfile) !== accountingGrantsOf(nextUser.permissionProfile)) {
+      notify("Only the Developer or a Super Admin can change Accounting access.");
       return false;
     }
     /* This function is only reachable at all with "add"/"edit" on Users &
@@ -7956,6 +8011,12 @@ export default function Home() {
         logAccountEvent(actor, "account.history_mode_changed", existing.id, existing.name, {
           from: { mode: existing.historyMode || "all", historyFrom: existing.historyFrom || null },
           to: { mode: prepared.historyMode || "all", historyFrom: prepared.historyFrom || null },
+        });
+      }
+      /* Every role move is audited with who did it and both values. */
+      if ((existing.access || "") !== (prepared.access || "")) {
+        logAccountEvent(actor, "account.role_changed", existing.id, existing.name, {
+          from: existing.access || "(none)", to: prepared.access || "(none)",
         });
       }
       store.users[existingIndex] = { ...existing, ...prepared };
@@ -14295,7 +14356,7 @@ function AccessCenter({
                     {[
                       ...ROLE_PRESETS.filter((role) => !LEGACY_CLIENT_PRESETS.includes(role)),
                       ...(draft.access && LEGACY_CLIENT_PRESETS.includes(draft.access) ? [draft.access] : []),
-                    ].map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount}>{role}</option>)}
+                    ].map((role) => <option key={role} value={role} disabled={role === "Super Admin" && !protectedAccount && currentUser?.platformAdmin !== true}>{role}</option>)}
                   </select>
                 </label>
                 <label>
