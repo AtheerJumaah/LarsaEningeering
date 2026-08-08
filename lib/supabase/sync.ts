@@ -308,49 +308,127 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         (payload) => {
           const row = payload.new as { store_key?: string; data?: unknown; updated_at?: string } | null;
           if (!row?.store_key || !(SYNCED_KEYS as readonly string[]).includes(row.store_key)) return;
-          const text = JSON.stringify(row.data ?? {});
-          if (lastKnown.get(row.store_key) === text) return; // our own write, echoed back
-          /* An edit made here in the last moment may not have been pushed yet
-             (writes are debounced), so this arrival is merged in rather than
-             pasted over the top — the same reason pushKey merges. */
-          const base = lastKnown.get(row.store_key) ?? null;
-          const localText = localStorage.getItem(row.store_key);
-          let nextText = text;
-          if (localText && localText !== base) {
-            try { nextText = JSON.stringify(mergeStoreText(base, localText, row.data ?? {})); }
-            catch { nextText = text; }
-          }
-          /* lastKnown tracks what the SERVER holds, not what we now hold: it
-             is the base for the next merge and the echo check. Setting it to
-             the merged text instead would make the push below look like a
-             no-op and the merge would never leave this device. */
-          lastKnown.set(row.store_key, text);
-          if (row.updated_at) lastSeenAt.set(row.store_key, String(row.updated_at));
-          originalSetItem(row.store_key, nextText);
-          console.log(`[larsa-sync] realtime change received for "${row.store_key}"`);
-          options.onRemoteChange?.(row.store_key as SyncedKey);
-          /* If the merge produced something the server has not got, publish it
-             so the other devices converge instead of quietly diverging. */
-          if (nextText !== text) schedulePush(row.store_key as SyncedKey);
+          applyRemote(row.store_key as SyncedKey, row.data ?? {}, row.updated_at ? String(row.updated_at) : null);
         },
       )
       .subscribe((status, err) => {
         console.log("[larsa-sync] realtime channel status:", status, err ?? "");
+        /* A channel that comes back after a drop has MISSED whatever
+           happened while it was down — realtime replays nothing. Re-fetch
+           the authoritative rows instead of assuming silence meant
+           stillness (phone sleep, network switch, websocket failure). */
+        if (status === "SUBSCRIBED" && hadChannelDrop) {
+          hadChannelDrop = false;
+          refreshFromServer("realtime resubscribed");
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          hadChannelDrop = true;
+        }
       });
 
     cleanupChannel = () => { supabase.removeChannel(channel); };
   }
 
+  /* Apply a copy of the shared row that arrived from the server — via
+     realtime OR via an explicit authoritative re-fetch. Merges any un-pushed
+     local edit against the shared base exactly like the push path does. */
+  function applyRemote(key: SyncedKey, remoteData: unknown, remoteUpdatedAt: string | null) {
+    const text = JSON.stringify(remoteData ?? {});
+    if (lastKnown.get(key) === text) {
+      if (remoteUpdatedAt) lastSeenAt.set(key, remoteUpdatedAt);
+      return; // our own write echoed back, or nothing new
+    }
+    /* An edit made here in the last moment may not have been pushed yet
+       (writes are debounced), so this arrival is merged in rather than
+       pasted over the top — the same reason pushKey merges. */
+    const base = lastKnown.get(key) ?? null;
+    const localText = localStorage.getItem(key);
+    let nextText = text;
+    if (localText && localText !== base) {
+      try { nextText = JSON.stringify(mergeStoreText(base, localText, remoteData ?? {})); }
+      catch { nextText = text; }
+    }
+    /* lastKnown tracks what the SERVER holds, not what we now hold: it is
+       the base for the next merge and the echo check. Setting it to the
+       merged text instead would make the push below look like a no-op and
+       the merge would never leave this device. */
+    lastKnown.set(key, text);
+    if (remoteUpdatedAt) lastSeenAt.set(key, remoteUpdatedAt);
+    originalSetItem(key, nextText);
+    console.log(`[larsa-sync] remote state applied for "${key}"`);
+    options.onRemoteChange?.(key);
+    /* If the merge produced something the server has not got, publish it so
+       the other devices converge instead of quietly diverging. */
+    if (nextText !== text) schedulePush(key);
+  }
+
+  /* Authoritative revalidation: pull every shared row and apply whatever is
+     newer than this device's copy. Runs when the app regains focus, when the
+     network returns, and when the realtime channel re-subscribes after a
+     drop — the moments a device is most likely to be silently stale. */
+  let refreshing = false;
+  async function refreshFromServer(reason: string) {
+    if (refreshing || cancelled || !bootstrapped) return;
+    refreshing = true;
+    try {
+      const { data: rows, error } = await supabase
+        .from("app_state")
+        .select("store_key, data, updated_at")
+        .in("store_key", SYNCED_KEYS as readonly string[]);
+      if (error || !Array.isArray(rows)) return;
+      rows.forEach((row) => {
+        const key = String(row.store_key || "") as SyncedKey;
+        if (!(SYNCED_KEYS as readonly string[]).includes(key)) return;
+        const stamp = row.updated_at ? String(row.updated_at) : null;
+        if (stamp && lastSeenAt.get(key) === stamp) return; // already current
+        applyRemote(key, row.data ?? {}, stamp);
+      });
+      console.log(`[larsa-sync] authoritative refresh complete (${reason})`);
+    } catch {
+      /* Offline or mid-reconnect: the next trigger tries again. */
+    } finally {
+      refreshing = false;
+    }
+  }
+
   let cleanupChannel: (() => void) | null = null;
-  bootstrap();
+  let hadChannelDrop = false;
+  let bootstrapped = false;
+  bootstrap().then(() => { bootstrapped = true; });
   /* Clock skew drifts (and phones change it); re-measure every ten minutes. */
   const clockTimer = setInterval(() => { sampleServerClock(supabase, originalSetItem).catch(() => {}); }, 10 * 60 * 1000);
+
+  /* The app must revalidate its real state the moment it is looked at again
+     or reconnected — nobody should ever need a refresh (hard or otherwise)
+     to see the truth. */
+  const onVisible = () => { if (!document.hidden) refreshFromServer("app focused"); };
+  const onOnline = () => { refreshFromServer("network back"); };
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("online", onOnline);
+  /* Immediate-push hook for punch-critical writes: a clock event must not
+     even wait out the write debounce. */
+  pushNowHook = (key: SyncedKey) => {
+    const existing = pushTimers.get(key);
+    if (existing) clearTimeout(existing);
+    pushKey(key).catch(() => { /* retried by the next write or refresh */ });
+  };
 
   return () => {
     cancelled = true;
     window.localStorage.setItem = originalSetItem;
     pushTimers.forEach((timer) => clearTimeout(timer));
     clearInterval(clockTimer);
+    document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("online", onOnline);
+    pushNowHook = null;
     cleanupChannel?.();
   };
+}
+
+/* Push a synced key RIGHT NOW, skipping the write debounce. Used by clock
+   punches so persistence starts the instant the button is pressed; the
+   localStorage write has already made the UI state correct either way. */
+let pushNowHook: ((key: SyncedKey) => void) | null = null;
+export function pushSyncedKeyNow(key: SyncedKey) {
+  pushNowHook?.(key);
 }
