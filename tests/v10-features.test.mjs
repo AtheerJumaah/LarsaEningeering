@@ -443,10 +443,10 @@ test("the sync engine never pushes a write it just applied from Supabase", () =>
      needs that same value (see lib/supabase/merge.ts). */
   assert.match(sync, /const base = lastKnown\.get\(key\) \?\? null;/);
   assert.match(sync, /if \(raw === base\) return; \/\/ nothing new since our last push/);
-  assert.match(sync, /if \(lastKnown\.get\(row\.store_key\) === text\) return; \/\/ our own write, echoed back/);
+  assert.match(sync, /if \(lastKnown\.get\(key\) === text\) \{/);
   /* A remote arrival is only pushed back when the merge left this device
      holding something the server has not got — never as a bare echo. */
-  assert.match(sync, /if \(nextText !== text\) schedulePush\(row\.store_key as SyncedKey\);/);
+  assert.match(sync, /if \(nextText !== text\) schedulePush\(key\);/);
   // Writes are debounced per key so a flurry of edits becomes one network call.
   assert.match(sync, /setTimeout\(\(\) => \{ pushKey\(key\)\.catch/);
   // Cleanup always restores the original setItem, so a second init (e.g. a

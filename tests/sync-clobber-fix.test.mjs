@@ -53,7 +53,7 @@ test("sync.ts retries a refused write by merging against the returned row", asyn
 test("sync.ts records the server stamp carried by realtime arrivals", async () => {
   const sync = await read("lib/supabase/sync.ts");
   assert.match(sync, /store_key\?: string; data\?: unknown; updated_at\?: string/);
-  assert.match(sync, /if \(row\.updated_at\) lastSeenAt\.set\(row\.store_key, String\(row\.updated_at\)\);/);
+  assert.match(sync, /if \(remoteUpdatedAt\) lastSeenAt\.set\(key, remoteUpdatedAt\);/);
 });
 
 test("sync.ts measures device clock skew against server_now() and shares it via localStorage", async () => {
@@ -68,7 +68,7 @@ test("sync.ts measures device clock skew against server_now() and shares it via 
 
 test("punchClock and punchBreak stamp with the server-corrected clock, not the device's", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /import \{ initLarsaSync, serverNowIso, serverNowMs \} from "\.\.\/lib\/supabase\/sync";/);
+  assert.match(page, /import \{ initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow \} from "\.\.\/lib\/supabase\/sync";/);
   const punchClock = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
   const punchBreak = page.slice(page.indexOf("const punchBreak = useCallback"), page.indexOf("const trimSession = useCallback"));
   assert.match(punchClock, /const now = serverNowIso\(\);/);
