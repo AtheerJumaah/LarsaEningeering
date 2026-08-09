@@ -6,6 +6,7 @@ import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow } from "../l
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
+import { findPunchSession, planTrim } from "../lib/attendance.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
@@ -374,6 +375,10 @@ type ClockSession = {
      keeps the raw span visible so the flag can say how long it has been. */
   stale?: boolean;
   unclosed?: boolean;
+  /* A punch of this session carries a correction stamp ("Adjusted by …",
+     "Fixed by …", "Manual entry by …") — surfaced so the trim panel can say
+     a session has already been corrected before somebody corrects it again. */
+  adjusted?: boolean;
   openHours?: number;
 };
 type DevelopmentStatus = "Assigned" | "In Progress" | "Submitted" | "Approved" | "Returned";
@@ -2974,10 +2979,16 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     const label = names.get(uid)
       || (needsReview ? `Needs identification (recovered session, was ${uid})` : `Former staff (${uid})`);
 
+    /* A correction stamp on either punch marks the whole session as already
+       adjusted, so the trim panel can say so instead of leaving the next
+       corrector to guess. */
+    const adjustedMark = (...notes: (string | undefined)[]) => notes.some((note) =>
+      Boolean(note && (note.includes("Adjusted by") || note.includes("Fixed by") || note.includes("Manual entry by"))));
+
     /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
        the original punches (they are the session's identity for trim and
        reset); the segment's own hours carry only what fell on `date`. */
-    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed") => {
+    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed", adjusted?: boolean) => {
       const from = new Date(start).getTime();
       const to = Math.max(new Date(end).getTime(), from);
       const flagged = flag === "stale" || flag === "unclosed";
@@ -3002,6 +3013,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           breakHours: flagged ? 0 : breakMs / 3600000,
           open: isOpen && segEnd === to,
           ...(flag ? { [flag]: true, openHours: (to - from) / 3600000 } : {}),
+          ...(adjusted ? { adjusted: true } : {}),
         });
         if (segEnd >= to) break;
         cursor = segEnd;
@@ -3022,13 +3034,13 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
                session was abandoned, so it surfaces flagged for correction
                rather than being silently discarded — or silently merged into
                one enormous shift. */
-            record(open.time, row.time, open.type || "Unspecified", false, "unclosed");
+            record(open.time, row.time, open.type || "Unspecified", false, "unclosed", adjustedMark(open.note));
           }
           open = row;
           return;
         }
         if (row.status !== "Out" || !open?.time || !row.time) return;
-        record(open.time, row.time, open.type || row.type || "Unspecified", false);
+        record(open.time, row.time, open.type || row.type || "Unspecified", false, undefined, adjustedMark(open.note, row.note));
         open = null;
       });
     /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
@@ -3041,7 +3053,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
          Still never auto-closed — the logs are untouched and the person or a
          manager closes or resets it — but flagged and excluded until then. */
       record(stillOpen.time, new Date().toISOString(), stillOpen.type || "Unspecified", true,
-        openHours >= 48 ? "stale" : undefined);
+        openHours >= 48 ? "stale" : undefined, adjustedMark(stillOpen.note));
     }
   });
   return sessions;
@@ -6824,58 +6836,99 @@ export default function Home() {
   const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string) => {
     const actor = sessionUserRef.current;
     const clockItem = ITEMS.find((item) => item.id === "staff-clock");
-    /* Two doors in. A clock manager adjusts anyone's record, as before. And
+    /* Two doors in. A clock manager — the staff-clock "manage" capability
+       (a Super Admin) or an Admin account — adjusts OTHER people's records,
+       but only people inside their own data scope, checked below. And
        everyone who can use the clock may trim THEMSELVES: the one-way rule
        below means a trim can only shorten recorded time, so self-service can
        close a forgotten clock-out or hand back over-counted minutes but can
        never manufacture an hour — adding time still goes through the
        correction request and its approval. The uid equality is the scope:
        an ordinary account can never reach another person's record here. */
-    const managesClock = Boolean(actor && clockItem && hasItemPermission(actor, clockItem, "manage"));
-    const trimsOwnRecord = Boolean(actor && clockItem && uid === actor.id && hasItemPermission(actor, clockItem, "edit"));
+    const managesClock = Boolean(actor && clockItem && (hasItemPermission(actor, clockItem, "manage") || actor.access === "Admin"));
+    const trimsOwnRecord = Boolean(actor && clockItem && uid === actor.id
+      && (hasItemPermission(actor, clockItem, "edit") || hasItemPermission(actor, clockItem, "add")));
     if (!actor || !clockItem || (!managesClock && !trimsOwnRecord)) {
       notify("Your account cannot adjust attendance records.");
+      return false;
+    }
+    /* Somebody else's record: the target has to be somebody the actor is
+       authorized to manage. A Super Admin manages everyone (scopedUsers
+       short-circuits on isAdmin); an Admin or a granted clock manager
+       reaches exactly the people their configured data scope covers. This
+       lives in the handler, not the panel, so a forged call fails the same
+       way a forged click would — the UI list is convenience, not the gate. */
+    if (uid !== actor.id && !scopedUsers(actor, accessUsers).some((user) => user.id === uid)) {
+      notify("That employee is outside your data scope.");
       return false;
     }
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const startedAt = new Date(clockIn).getTime();
-    const nextOut = new Date(newClockOut).getTime();
-    if (!Number.isFinite(nextOut)) { notify("Enter a valid clock-out time."); return false; }
-    if (nextOut <= startedAt) { notify("Clock-out has to be after clock-in."); return false; }
-    if (nextOut > Date.now()) { notify("Clock-out cannot be in the future."); return false; }
 
-    // The matching Out is the first one after this In for the same person.
-    const ordered = logs
-      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-    const existingOut = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
-    if (existingOut && new Date(existingOut.time || 0).getTime() < nextOut) {
-      notify("You can only bring a clock-out earlier, not later. Use a correction request to add hours.");
+    /* The decision is pure and shared (lib/attendance.mjs): identify the ONE
+       session that starts at clockIn by walking the person's punches with
+       the same pairing rules the session list uses, then validate the new
+       clock-out against THAT session's own records and boundaries. "The
+       first Out after this In" is gone — it used to grab the NEXT session's
+       clock-out when an abandoned open session was trimmed, which rewrote a
+       record nobody had selected and could flip the person's live status. */
+    const plan = planTrim(logs, uid, clockIn, newClockOut, serverNowMs());
+    if (!plan.ok) {
+      if (plan.reason === "not-found") notify("That session could not be found.");
+      else if (plan.reason === "invalid-time") notify("Enter a valid clock-out time.");
+      else if (plan.reason === "not-after-in") notify("Clock-out has to be after clock-in.");
+      else if (plan.reason === "future") notify("Clock-out cannot be in the future.");
+      else if (plan.reason === "later-than-out") notify("You can only bring a clock-out earlier, not later. Use a correction request to add hours.");
+      else notify("That would run into the next session. Pick a time before the following clock-in.");
       return false;
     }
+    const { inLog, outLog } = plan.session;
+    const previousOut = outLog?.time || null;
+    const nextOutIso = new Date(newClockOut).toISOString();
     const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString()}`;
-    if (existingOut) {
-      existingOut.time = new Date(nextOut).toISOString();
-      existingOut.lastSeen = existingOut.time;
-      existingOut.note = existingOut.note ? `${existingOut.note} · ${stamp}` : stamp;
+    if (outLog) {
+      /* This session's own clock-out, corrected in place: same record id,
+         earlier time, the adjustment stamped beside any note it carried.
+         Nothing else in the store is touched. */
+      outLog.time = nextOutIso;
+      outLog.lastSeen = outLog.time;
+      outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
     } else {
-      // An open session: closing it counts as trimming to the chosen time.
-      const source = logs.find((log) => log.uid === uid && log.time === clockIn && log.status === "In");
+      /* An open (or abandoned) session: closing it counts as trimming to the
+         chosen time. planTrim already proved the time sits before the
+         person's next clock-in, so this can never swallow a later session
+         — and a CURRENT open session closes only when it was deliberately
+         the one selected. */
       logs.push({
-        id: `l${Date.now()}`, uid, type: source?.type || "Office", status: "Out",
-        time: new Date(nextOut).toISOString(), active: false,
-        lastSeen: new Date(nextOut).toISOString(), note: stamp, clockedBy: actor.name,
+        id: `l${uid}${Date.now()}${Math.random()}`, uid, type: inLog.type || "Office", status: "Out",
+        time: nextOutIso, active: false,
+        lastSeen: nextOutIso, note: stamp, clockedBy: actor.name,
       });
-      if (source) source.active = false;
+      inLog.active = false;
     }
+    /* The correction itself becomes part of the durable audit trail: who
+       trimmed whose session, and both the before and after clock-outs. The
+       original punch times additionally survive verbatim in the append-only
+       attendance_events ledger, which a trim never rewrites. */
+    logAccountEvent(actor, "attendance.session_trimmed", uid,
+      accessUsers.find((user) => user.id === uid)?.name || uid, {
+        clockIn: inLog.time || clockIn,
+        previousClockOut: previousOut,
+        newClockOut: nextOutIso,
+        closedOpenSession: !outLog,
+        self: uid === actor.id,
+      });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    /* Same urgency as a punch: the adjusted record must reach the server
+       before this tab can be closed, or a refresh inside the sync debounce
+       would quietly hand the hours back. */
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Attendance record adjusted.");
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, accessUsers]);
 
   /* Removes a session outright -- the clock-in and its matching clock-out.
      For a punch that should never have existed at all. */
@@ -6886,16 +6939,23 @@ export default function Home() {
       notify("Your account cannot reset attendance records.");
       return false;
     }
+    /* Removal reaches only the people the actor manages, the same wall the
+       trim path has. A Super Admin passes (scopedUsers short-circuits);
+       anyone else holding the manage grant is bounded by their data scope. */
+    if (uid !== actor.id && !scopedUsers(actor, accessUsers).some((user) => user.id === uid)) {
+      notify("That employee is outside your data scope.");
+      return false;
+    }
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const startedAt = new Date(clockIn).getTime();
-    const ordered = logs
-      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
-    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
-    const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
+    /* The same session pairing the list uses (lib/attendance.mjs), so the
+       removal drops exactly the selected session's own records — for an
+       abandoned open session that is the lone clock-in, never the NEXT
+       session's clock-out, which the old "first Out after this In" match
+       used to take with it. */
+    const found = findPunchSession(logs, uid, clockIn);
+    const drop = new Set([found?.inLog, found?.outLog].filter(Boolean).map((log) => log as ClockLog));
     if (!drop.size) { notify("That session could not be found."); return false; }
     store.logs = logs.filter((log) => !drop.has(log));
     /* The durable ledger never forgets a punch, so a deliberate removal has
@@ -6906,11 +6966,14 @@ export default function Home() {
       clockIn, removed: Array.from(drop).map((log) => ({ id: log.id, status: log.status, time: log.time })),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    /* removedLogIds has to reach the server ahead of any other device's boot
+       reconciliation, or the ledger politely restores what was just removed. */
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Session removed.");
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, accessUsers]);
 
   /* ---- Corrections (see CORRECTIONS_ITEM). Every handler gates on its own
      permission, writes the same store the engine reads, stamps who fixed what,
@@ -7043,22 +7106,42 @@ export default function Home() {
       notify("Your account cannot correct clock records.");
       return false;
     }
+    /* The person being corrected has to be inside the actor's data scope —
+       the same wall fixPerformanceRow already has, closed here too so a
+       crafted call cannot reach an employee the screen would never list. */
+    if (uid !== actor.id && !scopedUsers(actor, accessUsers).some((user) => user.id === uid)) {
+      notify("That employee is outside your data scope.");
+      return false;
+    }
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const startedAt = new Date(clockIn).getTime();
     const inAt = new Date(newIn).getTime();
     const outAt = newOut ? new Date(newOut).getTime() : null;
     if (!Number.isFinite(inAt)) { notify("Enter a valid clock-in time."); return false; }
-    if (inAt > Date.now()) { notify("Clock-in cannot be in the future."); return false; }
+    if (inAt > serverNowMs()) { notify("Clock-in cannot be in the future."); return false; }
     if (outAt !== null && (!Number.isFinite(outAt) || outAt <= inAt)) { notify("Clock-out has to be after clock-in."); return false; }
-    if (outAt !== null && outAt > Date.now()) { notify("Clock-out cannot be in the future."); return false; }
-    const ordered = logs
-      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
-    if (!inLog) { notify("That session could not be found."); return false; }
-    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
+    if (outAt !== null && outAt > serverNowMs()) { notify("Clock-out cannot be in the future."); return false; }
+    /* The one session that starts at clockIn, by the same pairing walk the
+       session list makes (lib/attendance.mjs) — its own clock-out or none,
+       plus the neighbouring-session boundaries. The old "first Out after
+       this In" match could hand back the NEXT session's clock-out when an
+       abandoned session was corrected, and the fix would rewrite it. */
+    const found = findPunchSession(logs, uid, clockIn);
+    if (!found) { notify("That session could not be found."); return false; }
+    const { inLog, outLog, prevTime, nextTime } = found;
+    /* A correction may move either punch in either direction, but never
+       across a NEIGHBOURING session — that would splice two sessions into
+       one and re-pair every punch after it. */
+    if (prevTime !== null && inAt <= prevTime) {
+      notify("That clock-in would overlap the previous session. Pick a later time.");
+      return false;
+    }
+    if (outAt !== null && nextTime !== null && outAt >= nextTime) {
+      notify("That clock-out would run into the next session. Pick an earlier time.");
+      return false;
+    }
+    const previous = { clockIn: inLog.time || clockIn, clockOut: outLog?.time || null };
     const stamp = `Fixed by ${actor.name} on ${new Date().toLocaleDateString()}`;
     inLog.time = new Date(inAt).toISOString();
     inLog.lastSeen = inLog.time;
@@ -7069,18 +7152,26 @@ export default function Home() {
       outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
     } else if (!outLog && outAt !== null) {
       logs.push({
-        id: `l${Date.now()}`, uid, type: inLog.type || "Office", status: "Out",
+        id: `l${uid}${Date.now()}${Math.random()}`, uid, type: inLog.type || "Office", status: "Out",
         time: new Date(outAt).toISOString(), active: false,
         lastSeen: new Date(outAt).toISOString(), note: stamp, clockedBy: actor.name,
       });
       inLog.active = false;
     }
+    logAccountEvent(actor, "attendance.session_corrected", uid,
+      accessUsers.find((user) => user.id === uid)?.name || uid, {
+        previousClockIn: previous.clockIn,
+        previousClockOut: previous.clockOut,
+        newClockIn: inLog.time,
+        newClockOut: outAt !== null ? new Date(outAt).toISOString() : previous.clockOut,
+      });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Clock record corrected.");
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, accessUsers]);
 
   /* Add a session that was never punched — the same append-a-pair shape the
      approved-correction path materialises, stamped as a manual entry. */
@@ -7092,6 +7183,13 @@ export default function Home() {
       return false;
     }
     if (!accessUsers.some((user) => user.id === uid)) { notify("Choose an employee."); return false; }
+    /* Only somebody the actor manages — the same scope wall the other
+       correction handlers keep, so a crafted call cannot write hours onto
+       an employee the screen would never offer. */
+    if (uid !== actor.id && !scopedUsers(actor, accessUsers).some((user) => user.id === uid)) {
+      notify("That employee is outside your data scope.");
+      return false;
+    }
     const at = (time: string) => new Date(`${date}T${time}:00`);
     const inDate = at(from); const outDate = at(to);
     if (!date || Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) { notify("Enter a valid date and times."); return false; }
@@ -7126,16 +7224,18 @@ export default function Home() {
       notify("Your account cannot remove clock records.");
       return false;
     }
+    /* Same scope wall as every other correction handler. */
+    if (uid !== actor.id && !scopedUsers(actor, accessUsers).some((user) => user.id === uid)) {
+      notify("That employee is outside your data scope.");
+      return false;
+    }
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const startedAt = new Date(clockIn).getTime();
-    const ordered = logs
-      .filter((log) => log.uid === uid && log.time && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-    const inLog = ordered.find((log) => log.status === "In" && new Date(log.time || 0).getTime() === startedAt);
-    const outLog = ordered.find((log) => log.status === "Out" && new Date(log.time || 0).getTime() > startedAt);
-    const drop = new Set([inLog, outLog].filter(Boolean).map((log) => log as ClockLog));
+    /* Exact-session pairing (lib/attendance.mjs): drop THIS session's own
+       records only — never a neighbouring session's clock-out. */
+    const found = findPunchSession(logs, uid, clockIn);
+    const drop = new Set([found?.inLog, found?.outLog].filter(Boolean).map((log) => log as ClockLog));
     if (!drop.size) { notify("That session could not be found."); return false; }
     store.logs = logs.filter((log) => !drop.has(log));
     /* The durable ledger never forgets a punch, so a deliberate removal has
@@ -7146,11 +7246,12 @@ export default function Home() {
       clockIn, removed: Array.from(drop).map((log) => ({ id: log.id, status: log.status, time: log.time })),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify("Session removed.");
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, accessUsers]);
 
   /* Appending to somebody's formal record. Deliberately append-only: there is
      no edit or delete path, because a personnel file that can be quietly
@@ -17335,25 +17436,108 @@ function QuickClock({
     const item = ITEMS.find((row) => row.id === "staff-clock");
     return item ? hasItemPermission(user, item, "manage") : false;
   })());
+  /* Who may trim OTHER people: clock managers (staff-clock "manage" — a
+     Super Admin) and Admin accounts. Their reach is their data scope —
+     everyone for a Super Admin or a company-scoped Admin, narrower where a
+     Super Admin has narrowed it — and the handler in Home() enforces the
+     same wall, so this flag only decides what the panel offers. Removal
+     (Reset) stays with the manage capability alone. */
+  const mayTrimOthers = mayAdjustHours || Boolean(user && user.access === "Admin");
   /* Everyone who can use the clock may trim their OWN sessions — the trim
      path only ever shortens (see trimSession), so self-service cannot
-     inflate hours. Managers keep the team-wide panel with removal. */
-  const maySelfTrim = Boolean(!mayAdjustHours && user && (() => {
+     inflate hours. Managers keep the team-wide panel; removal stays theirs. */
+  const maySelfTrim = Boolean(!mayTrimOthers && user && (() => {
     const item = ITEMS.find((row) => row.id === "staff-clock");
-    return item ? hasItemPermission(user, item, "edit") : false;
+    return item ? hasItemPermission(user, item, "edit") || hasItemPermission(user, item, "add") : false;
   })());
-  /* Newest first, across the whole team, so a manager can close someone's
-     forgotten clock-out without hunting through the reports. */
-  const recentAll = [...sessions]
-    .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime())
-    .slice(0, 12);
-  const recentMine = [...sessions]
-    .filter((session) => session.uid === user?.id)
-    .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime())
-    .slice(0, 12);
-  /* What the trim panel lists: a manager sees the team, everyone else sees
-     exactly themselves. */
-  const trimRows = mayAdjustHours ? recentAll : recentMine;
+  /* Whose sessions the trim panel may LIST for this viewer: exactly the
+     people the handler would accept — themselves for everyone, plus their
+     data scope for a manager or an Admin. Nobody browses records the rules
+     would refuse to change; two colleagues never see each other's sessions
+     here. */
+  const trimScope = useMemo(
+    () => (user && mayTrimOthers ? scopedUsers(user, users) : []),
+    [user, users, mayTrimOthers],
+  );
+  const trimScopeIds = useMemo(() => new Set(trimScope.map((row) => row.id)), [trimScope]);
+  /* The manager flow the correction spec asks for: pick the employee, then
+     pick that person's exact session. "" lists the scope's recent sessions
+     so a forgotten clock-out still jumps out at a glance. */
+  const [trimUser, setTrimUser] = useState("");
+  const [trimShown, setTrimShown] = useState(12);
+  /* Every session stays reachable, not just the recent window: pick a month
+     (or any range of days) and EVERY session in it is laid out to choose
+     from — the way an old record is actually found: by when it happened.
+     "Recent" keeps the compact newest-first window; a period lists all of
+     its sessions with no cap, because a cap inside a chosen period is
+     exactly the "which twelve?" guessing the correction rules forbid. */
+  const [trimPreset, setTrimPreset] = useState<"recent" | "this-month" | "last-month" | "all" | "custom">("recent");
+  const [trimFrom, setTrimFrom] = useState("");
+  const [trimTo, setTrimTo] = useState("");
+  const pickTrimPreset = (preset: "recent" | "this-month" | "last-month" | "all") => {
+    setTrimPreset(preset);
+    setTrimming(null);
+    setTrimShown(12);
+    if (preset === "this-month") {
+      setTrimFrom(`${currentMonthKey()}-01`);
+      setTrimTo(dateInputValue(new Date()));
+    } else if (preset === "last-month") {
+      const now = new Date();
+      const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      setTrimFrom(dateInputValue(previous));
+      setTrimTo(monthEnd(currentMonthKey(previous)));
+    } else {
+      // "recent" and "all" carry no date bounds; they differ only in the cap.
+      setTrimFrom("");
+      setTrimTo("");
+    }
+  };
+  /* One row per SESSION. The session builder splits a midnight-crossing
+     session into per-day segments for the reports; the trim panel corrects
+     PUNCHES, so those segments fold back into the one record they came
+     from (same uid + clockIn identity trim and reset key on), worked hours
+     summed across its days. */
+  const trimRows = useMemo(() => {
+    const visible = mayTrimOthers
+      ? sessions.filter((session) => {
+        /* Even the people who can trim the whole team live in their OWN
+           record first: the panel opens on "My sessions", and the team is
+           an explicit choice — a mixed team-wide list is where the wrong
+           row gets picked. "__team__" is the deliberate everyone view; a
+           Super Admin's everyone additionally includes sessions whose
+           account has since been removed, because attendance history
+           outlives accounts here and those records still need closing. */
+        if (trimUser === "") return session.uid === user?.id;
+        if (trimUser === "__team__") return (user ? isAdmin(user) : false) || trimScopeIds.has(session.uid);
+        return session.uid === trimUser;
+      })
+      : sessions.filter((session) => session.uid === user?.id);
+    const folded = new Map<string, ClockSession & { spanDays: number }>();
+    visible.forEach((session) => {
+      const key = `${session.uid}|${session.clockIn}`;
+      const kept = folded.get(key);
+      if (!kept) {
+        folded.set(key, { ...session, spanDays: 1 });
+        return;
+      }
+      kept.spanDays += 1;
+      kept.hours += session.hours;
+      kept.presenceHours += session.presenceHours;
+      kept.breakHours += session.breakHours;
+      kept.open = kept.open || session.open;
+      kept.adjusted = kept.adjusted || session.adjusted;
+      kept.stale = kept.stale || session.stale;
+      kept.unclosed = kept.unclosed || session.unclosed;
+      if (session.date < kept.date) kept.date = session.date;
+    });
+    return [...folded.values()]
+      /* A session belongs to the day it started; a chosen period keeps every
+         session whose clock-in day falls inside it. */
+      .filter((session) => (!trimFrom || session.date >= trimFrom) && (!trimTo || session.date <= trimTo))
+      .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime());
+  }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo]);
+  /* Only the "Recent" window is capped; a chosen period shows everything. */
+  const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
   const [now, setNow] = useState<Date | null>(null);
   const [period, setPeriod] = useState("week");
   const monthStart = new Date(); monthStart.setDate(1);
@@ -17496,39 +17680,112 @@ function QuickClock({
         {/* Sits beside the request button on purpose: same place, opposite
             rule. Adding time needs approval; taking it away does not, because
             nobody can inflate their own attendance by removing hours. */}
-        {(mayAdjustHours || maySelfTrim) && !showCorrection && (
+        {(mayTrimOthers || maySelfTrim) && !showCorrection && (
           <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
             <Scissors size={18} />
             <span>
-              <b>{mayAdjustHours ? "Trim or remove recorded hours" : "Trim your recorded hours"}</b>
+              <b>{mayAdjustHours ? "Trim or remove recorded hours" : mayTrimOthers ? "Trim recorded hours" : "Trim your recorded hours"}</b>
               <small>{mayAdjustHours
                 ? "Close a forgotten clock-out or delete a session — applies straight away, no approval"
-                : "Close a forgotten clock-out or shorten a session — applies straight away, your own records only, and only ever shorter"}</small>
+                : mayTrimOthers
+                  ? "Close a forgotten clock-out or shorten a session for anyone you manage — applies straight away, and only ever shorter"
+                  : "Close a forgotten clock-out or shorten a session — applies straight away, your own records only, and only ever shorter"}</small>
             </span>
           </button>
         )}
 
-        {(mayAdjustHours || maySelfTrim) && showTrim && !showCorrection && (
+        {(mayTrimOthers || maySelfTrim) && showTrim && !showCorrection && (
           <div className="report-panel trim-panel">
             <div className="section-head">
-              <div><span className="eyebrow">{mayAdjustHours ? "Direct change · no approval" : "Your sessions · only ever shorter"}</span><h3>{mayAdjustHours ? "Recent sessions" : "Your recent sessions"}</h3></div>
+              <div><span className="eyebrow">{mayTrimOthers ? "Direct change · no approval" : "Your sessions · only ever shorter"}</span><h3>{mayTrimOthers ? "Clock sessions" : "Your recent sessions"}</h3></div>
               <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); }}>Close</button>
             </div>
-            {!trimRows.length && <div className="empty compact">No sessions recorded yet.</div>}
-            {trimRows.map((session) => {
+            {/* The flow the correction rules ask managers to follow: choose
+                the employee first, then the exact session — never guess a
+                record from a mixed team-wide list. */}
+            {mayTrimOthers && (
+              <label className="trim-employee">
+                Employee
+                <select
+                  value={trimUser}
+                  onChange={(event) => { setTrimUser(event.target.value); setTrimming(null); setTrimShown(12); }}
+                  aria-label="Whose sessions to show"
+                >
+                  <option value="">My sessions</option>
+                  <option value="__team__">{isAdmin(user!) ? "Everyone — team view" : "People I manage — team view"}</option>
+                  {trimScope.filter((row) => row.id !== user?.id).map((row) => (
+                    <option key={row.id} value={row.id}>{row.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {/* Which sessions to lay out: the compact recent window, a whole
+                month, all history, or any range of days — so the exact old
+                session can be found by when it happened, then picked. */}
+            <div className="trim-range" role="group" aria-label="Which sessions to show">
+              {([["recent", "Recent"], ["this-month", "This month"], ["last-month", "Last month"], ["all", "All history"]] as const).map(([id, label]) => (
+                <button key={id} type="button" className={trimPreset === id ? "on" : ""} onClick={() => pickTrimPreset(id)}>{label}</button>
+              ))}
+              <label>From<input type="date" value={trimFrom} max={dateInputValue(new Date())} onChange={(event) => { setTrimFrom(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions from" /></label>
+              <label>To<input type="date" value={trimTo} max={dateInputValue(new Date())} onChange={(event) => { setTrimTo(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions up to" /></label>
+            </div>
+            {!trimRows.length && (
+              <div className="empty compact">
+                {trimFrom || trimTo ? "No sessions in this period." : "No sessions recorded yet."}
+              </div>
+            )}
+            {(trimFrom || trimTo) && trimRows.length > 0 && (
+              <p className="trim-range-note">
+                {trimRows.length} session{trimRows.length === 1 ? "" : "s"}
+                {trimFrom ? ` from ${new Date(`${trimFrom}T12:00:00`).toLocaleDateString()}` : ""}
+                {trimTo ? ` to ${new Date(`${trimTo}T12:00:00`).toLocaleDateString()}` : ""}
+                {" · "}{formatHours(trimRows.reduce((sum, row) => sum + row.hours, 0))} worked — all shown, pick any to trim.
+              </p>
+            )}
+            {(() => {
+              /* Sessions read best the way people remember them: day by day.
+                 Every row sits under its calendar day, and the day carries
+                 its own summary — how many sessions, how many hours — so a
+                 chosen month scans like a timesheet, not a jumble of rows. */
+              const days: { date: string; rows: typeof visibleTrimRows }[] = [];
+              visibleTrimRows.forEach((session) => {
+                const last = days[days.length - 1];
+                if (last && last.date === session.date) last.rows.push(session);
+                else days.push({ date: session.date, rows: [session] });
+              });
+              return days.map((day) => (
+                <div className="trim-day" key={day.date}>
+                  <div className="trim-day-head">
+                    <b>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</b>
+                    <small>
+                      {day.rows.length} session{day.rows.length === 1 ? "" : "s"} · {formatHours(day.rows.reduce((sum, row) => sum + row.hours, 0))} worked
+                    </small>
+                  </div>
+                  {day.rows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
+              const liveOpen = session.open && !session.stale && !session.unclosed;
               return (
                 <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
                   <div className="trim-who">
-                    <b>{session.employee}</b>
+                    {/* In the deliberate team view every row is named; a
+                        single person's list (mine, or a picked employee) is
+                        already named by the picker, so rows stay clean. */}
+                    {trimUser === "__team__" && <b>{session.employee}</b>}
                     <small>
-                      {new Date(session.clockIn).toLocaleDateString()} ·{" "}
                       {new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       {" – "}
-                      {session.open ? "still open" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {liveOpen
+                        ? "clocked in — active session"
+                        : session.open || session.stale || session.unclosed
+                          ? "no clock-out"
+                          : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {session.spanDays > 1 ? ` (${session.spanDays} days)` : ""}
                       {" · "}{session.stale || session.unclosed
                         ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
-                        : `${formatHours(session.hours)} worked`}
+                        : liveOpen
+                          ? `${formatHours(session.hours)} so far`
+                          : `${formatHours(session.hours)} worked`}
+                      {session.adjusted ? " · adjusted earlier" : ""}
                     </small>
                   </div>
                   {active ? (
@@ -17538,16 +17795,32 @@ function QuickClock({
                         if (trimSession(session.uid, session.clockIn, new Date(trimValue).toISOString())) setTrimming(null);
                       }}>Save</button>
                       <button type="button" onClick={() => setTrimming(null)}>Cancel</button>
+                      {(session.open || session.stale || session.unclosed) && (
+                        <small className="trim-close-note">
+                          {liveOpen
+                            ? "This session is still running: saving clocks it out at the time you picked. Other sessions are untouched."
+                            : "Saving records the missing clock-out at the time you picked. It has to sit before the next clock-in."}
+                        </small>
+                      )}
                     </div>
                   ) : (
                     <div className="session-edit">
                       <button type="button" onClick={() => {
                         setTrimming({ uid: session.uid, clockIn: session.clockIn });
-                        setTrimValue(toLocalInput(session.open ? new Date().toISOString() : session.clockOut));
+                        /* A sensible starting value: a live shift closes "now",
+                           a closed session starts from its own clock-out, and
+                           an abandoned one starts a minute inside its hard
+                           ceiling (its clockOut holds the NEXT clock-in, which
+                           the rules must refuse verbatim). */
+                        setTrimValue(toLocalInput(liveOpen
+                          ? new Date().toISOString()
+                          : session.unclosed
+                            ? new Date(Math.max(new Date(session.clockIn).getTime() + 60000, new Date(session.clockOut).getTime() - 60000)).toISOString()
+                            : session.clockOut));
                       }}>Trim</button>
                       {/* Removal erases the record outright, so it stays a
-                          manager's tool; self-service gets the one-way trim
-                          alone. */}
+                          manager's tool; self-service and Admin trimming get
+                          the one-way trim alone. */}
                       {mayAdjustHours && (
                         <button type="button" className="danger" onClick={async () => {
                           if (await dialog.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
@@ -17557,9 +17830,17 @@ function QuickClock({
                   )}
                 </div>
               );
-            })}
+                  })}
+                </div>
+              ));
+            })()}
+            {trimPreset === "recent" && trimRows.length > trimShown && (
+              <button type="button" className="btn small trim-more" onClick={() => setTrimShown((count) => count + 12)}>
+                Show older sessions ({trimRows.length - trimShown} more)
+              </button>
+            )}
             <p className="panel-footnote">
-              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval.
+              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval. Every trim is recorded in the audit trail with the before and after times.
             </p>
           </div>
         )}

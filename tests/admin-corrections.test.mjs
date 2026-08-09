@@ -47,17 +47,44 @@ test("a points fix is scope-checked and stamped with who corrected it", () => {
 });
 
 test("clock fixes stamp both punches, refuse impossible times, and append missing sessions like approved corrections", () => {
-  assert.match(page, /notify\("Clock-out has to be after clock-in\."\); return false; \}\s*\n\s*if \(outAt !== null && outAt > Date\.now\(\)\)/);
+  // Future-guards compare on the server-corrected clock, the same clock the
+  // punches themselves are stamped with — a device set minutes wrong must
+  // neither refuse a valid fix nor accept a future one.
+  assert.match(page, /notify\("Clock-out has to be after clock-in\."\); return false; \}\s*\n\s*if \(outAt !== null && outAt > serverNowMs\(\)\)/);
   assert.match(page, /const stamp = `Fixed by \$\{actor\.name\} on \$\{new Date\(\)\.toLocaleDateString\(\)\}`;/);
   assert.match(page, /const stamp = `Manual entry by \$\{actor\.name\}`;/);
   // Added pairs use position-suffixed ids so both logs never collide.
   assert.match(page, /id: `l\$\{Date\.now\(\)\}\$\{position\}`, uid, type: mode \|\| "Office", status,/);
 });
 
+test("clock fixes and removals are scope-checked and land on the exact paired session, not the first Out after the In", () => {
+  const fix = page.slice(page.indexOf("const fixClockSession = useCallback"), page.indexOf("const addClockSession = useCallback"));
+  assert.match(fix, /!scopedUsers\(actor, accessUsers\)\.some\(\(user\) => user\.id === uid\)/);
+  assert.match(fix, /const found = findPunchSession\(logs, uid, clockIn\);/);
+  // Neighbouring-session boundaries: a correction may move punches, never
+  // splice two sessions into one.
+  assert.match(fix, /if \(prevTime !== null && inAt <= prevTime\)/);
+  assert.match(fix, /if \(outAt !== null && nextTime !== null && outAt >= nextTime\)/);
+  // The fix is audited with the before and after punches.
+  assert.match(fix, /logAccountEvent\(actor, "attendance\.session_corrected", uid,/);
+  const remove = page.slice(page.indexOf("const removeClockSession = useCallback"), page.indexOf("const saveFormalRecord = useCallback"));
+  assert.match(remove, /!scopedUsers\(actor, accessUsers\)\.some\(\(user\) => user\.id === uid\)/);
+  assert.match(remove, /const found = findPunchSession\(logs, uid, clockIn\);/);
+  const add = page.slice(page.indexOf("const addClockSession = useCallback"), page.indexOf("const removeClockSession = useCallback"));
+  assert.match(add, /!scopedUsers\(actor, accessUsers\)\.some\(\(user\) => user\.id === uid\)/);
+});
+
 test("every correction writes the shared store, refreshes the engine, and bumps the tick", () => {
   const block = page.slice(page.indexOf("const editRequestFlow"), page.indexOf("/* Administration → Corrections"));
-  const saves = block.match(/localStorage\.setItem\("larsaStaffV8", JSON\.stringify\(store\)\);\s*\n\s*refreshStaffEngine\(\);\s*\n\s*setStorageTick/g) || [];
+  const saves = block.match(/localStorage\.setItem\("larsaStaffV8", JSON\.stringify\(store\)\);\s*\n(?:\s*pushSyncedKeyNow\("larsaStaffV8"\);\s*\n)?(?:\s*\/\*[^]*?\*\/\s*\n)?\s*refreshStaffEngine\(\);\s*\n\s*setStorageTick/g) || [];
   assert.ok(saves.length >= 5, `expected the save+refresh+tick trio in all five handlers (found ${saves.length})`);
+  // Attendance-record corrections must not even wait out the sync debounce:
+  // a fixed or removed session has to reach the server before the tab can
+  // close, exactly like a punch.
+  const fix = page.slice(page.indexOf("const fixClockSession = useCallback"), page.indexOf("const addClockSession = useCallback"));
+  const remove = page.slice(page.indexOf("const removeClockSession = useCallback"), page.indexOf("const saveFormalRecord = useCallback"));
+  assert.match(fix, /pushSyncedKeyNow\("larsaStaffV8"\);/);
+  assert.match(remove, /pushSyncedKeyNow\("larsaStaffV8"\);/);
 });
 
 test("the Timesheet shows every punch in the viewer's own local time, ahead of the reference zones", () => {
