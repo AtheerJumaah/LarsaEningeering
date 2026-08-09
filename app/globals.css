@@ -2924,6 +2924,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .dark .trim-row { border-bottom-color: #23272f; }
 .dark .trim-who b { color: #f3f4f6; }
 .dark .trim-who small { color: #8a919d; }
+/* The employee picker managers use before touching anyone's record, and the
+   quiet notes the trim editor shows. Built on the theme variables so both
+   themes come from one set of rules. */
+.trim-employee { display: grid; gap: 6px; margin: 4px 0 10px; font-size: 10px; font-weight: 950;
+  text-transform: uppercase; letter-spacing: .075em; color: var(--muted); }
+.trim-employee select { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+  font: inherit; font-size: 13.5px; font-weight: 650; text-transform: none; letter-spacing: normal; color: var(--ink); }
+.trim-employee select:focus { outline: none; border-color: #6d28d9; box-shadow: 0 0 0 4px rgba(109,40,217,.10); }
+.trim-close-note { flex-basis: 100%; font-size: 11.5px; font-weight: 650; line-height: 1.5; color: var(--muted); }
+.trim-more { margin-top: 10px; }
 
 /* --- Performance week locking --------------------------------------------
    A week is closed by hand, usually on a Saturday, and that state has to be
