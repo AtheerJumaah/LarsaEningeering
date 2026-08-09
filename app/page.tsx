@@ -219,6 +219,11 @@ type StaffUser = {
   password?: string;
   pin?: string;
   access?: string;
+  /* When this record was last DELIBERATELY edited (server time). The sync
+     merge and push guard settle conflicts by this stamp, so a stale
+     wholesale write-back can never revert a role, name, or lifecycle
+     change. See lib/supabase/merge.ts. */
+  touchedAt?: string;
   role?: string;
   department?: string;
   email?: string;
@@ -5803,7 +5808,7 @@ export default function Home() {
       if (!store || !Array.isArray(store.users)) return;
       const index = store.users.findIndex((row) => row.id === userId);
       if (index < 0) return;
-      store.users[index] = { ...store.users[index], emailVerified: verified };
+      store.users[index] = { ...store.users[index], emailVerified: verified, touchedAt: serverNowIso() };
       localStorage.setItem("larsaStaffV8", JSON.stringify(store));
       (Object.keys(refs) as Engine[]).forEach((engine) => {
         try {
@@ -8113,8 +8118,21 @@ export default function Home() {
       notify("You cannot change your own role. Another authorized administrator has to do it.");
       return false;
     }
-    if ((nextAccess === "Super Admin") !== (previousAccess === "Super Admin") && !actorIsDeveloper) {
-      notify("Only the Developer can create or remove Super Admins.");
+    if ((nextAccess === "Super Admin") !== (previousAccess === "Super Admin")) {
+      if (!actorIsDeveloper) {
+        notify("Only the Developer can create or remove Super Admins.");
+        return false;
+      }
+      /* Even the Developer cannot do it FROM THE APP: the database's account
+         guard (app_state_guard_super_admin) refuses any app write that mints
+         or alters a Super Admin — a deliberate, unbypassable hardening.
+         Without this refusal the save used to sit in localStorage, every
+         push from this browser was rejected by that guard, and every OTHER
+         edit made here quietly reverted on the next pull — the "my role and
+         name changes keep undoing themselves" report. Saying no honestly
+         here keeps this device healthy; Super Admin changes are a
+         server-side act by the platform owner. */
+      notify("Super Admin cannot be granted or removed from the app — the database's account guard refuses that write. Every other role saves normally; changing the Super Admin tier is a server-side step.");
       return false;
     }
     if ((nextAccess === "Admin") !== (previousAccess === "Admin") && !actorIsDeveloper && !actorIsSuperAdmin) {
@@ -8166,6 +8184,11 @@ export default function Home() {
       accountingAccessBy: accountingNow === accountingWas
         ? existingRecord?.accountingAccessBy
         : (actor.name || actor.email || actor.id),
+      /* Recency-of-edit stamp, in server time: the merge and the push guard
+         use it so a stale wholesale write-back (a long-open engine iframe
+         saving its old in-memory copy) can never drag this record backwards.
+         This is what makes a role or name change actually STICK. */
+      touchedAt: serverNowIso(),
     };
     const existingIndex = store.users.findIndex((row: StaffUser) => row.id === prepared.id);
     if (isNew) {
@@ -8231,6 +8254,9 @@ export default function Home() {
       return false;
     }
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    /* A role or identity change must reach the server before this tab can
+       close or a stale copy can race it — same urgency as a punch. */
+    pushSyncedKeyNow("larsaStaffV8");
     try {
       staffRef.current?.contentWindow?.eval(`
         state=JSON.parse(localStorage.getItem("larsaStaffV8"));
@@ -8290,6 +8316,7 @@ export default function Home() {
       pendingApproval: false,
       offboardedAt: new Date().toISOString(),
       offboardedBy: actor.name,
+      touchedAt: serverNowIso(),
     };
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     logAccountEvent(actor, "account.offboarded", target.id, target.name, { access: target.access || "" });
@@ -8348,6 +8375,7 @@ export default function Home() {
       recycled: false,
       recycledAt: undefined,
       recycledBy: undefined,
+      touchedAt: serverNowIso(),
       employmentPeriods: periods,
       historyMode: mode,
       historyFrom: mode === "from" ? (historyFrom || nowIso) : undefined,
@@ -8393,6 +8421,7 @@ export default function Home() {
       enabled: false,
       recycledAt: new Date().toISOString(),
       recycledBy: actor.name,
+      touchedAt: serverNowIso(),
     };
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     logAccountEvent(actor, "account.recycled", target.id, target.name, { email: (target.email || "").trim().toLowerCase() });
@@ -8432,6 +8461,7 @@ export default function Home() {
       recycledBy: undefined,
       offboarded: true,
       enabled: false,
+      touchedAt: serverNowIso(),
     };
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     logAccountEvent(actor, "account.bin_restored", target.id, target.name, { email });
@@ -8926,7 +8956,7 @@ export default function Home() {
       const taken = store.users.some((row: StaffUser) => row.id !== actor.id && row.pin === safe.pin);
       if (taken) { notify("That PIN is already used by another account."); return false; }
     }
-    const next = { ...store.users[index], ...safe };
+    const next = { ...store.users[index], ...safe, touchedAt: serverNowIso() };
     store.users[index] = next;
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     sessionUserRef.current = next;
