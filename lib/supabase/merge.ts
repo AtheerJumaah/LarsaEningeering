@@ -38,29 +38,29 @@ type Json = unknown;
 type JsonObject = Record<string, Json>;
 
 function isPlainObject(value: Json): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /* Structural equality. JSON.stringify would be shorter but compares key
    ORDER too, so two identical objects built by different spreads would read
    as different and every merge would look like a conflict. */
 export function deepEqual(left: Json, right: Json): boolean {
-  if (left === right) return true;
-  if (typeof left !== typeof right) return false;
-  if (left === null || right === null) return false;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right)) return false;
-    if (left.length !== right.length) return false;
-    return left.every((item, index) => deepEqual(item, right[index]));
-  }
-  if (isPlainObject(left) && isPlainObject(right)) {
-    const leftKeys = Object.keys(left);
-    const rightKeys = Object.keys(right);
-    if (leftKeys.length !== rightKeys.length) return false;
-    return leftKeys.every((key) =>
-      Object.prototype.hasOwnProperty.call(right, key) && deepEqual(left[key], right[key]));
-  }
-  return false;
+    if (left === right) return true;
+    if (typeof left !== typeof right) return false;
+    if (left === null || right === null) return false;
+    if (Array.isArray(left) || Array.isArray(right)) {
+          if (!Array.isArray(left) || !Array.isArray(right)) return false;
+          if (left.length !== right.length) return false;
+          return left.every((item, index) => deepEqual(item, right[index]));
+    }
+    if (isPlainObject(left) && isPlainObject(right)) {
+          const leftKeys = Object.keys(left);
+          const rightKeys = Object.keys(right);
+          if (leftKeys.length !== rightKeys.length) return false;
+          return leftKeys.every((key) =>
+                  Object.prototype.hasOwnProperty.call(right, key) && deepEqual(left[key], right[key]));
+    }
+    return false;
 }
 
 /* Records are matched by id. Everything this app stores in an array — users,
@@ -69,58 +69,108 @@ export function deepEqual(left: Json, right: Json): boolean {
    single value instead of being merged element-wise (which would interleave
    two unrelated orderings into nonsense). */
 function idOf(value: Json): string | null {
-  if (!isPlainObject(value)) return null;
-  const id = value.id;
-  if (typeof id === "string" && id) return id;
-  if (typeof id === "number" && Number.isFinite(id)) return String(id);
-  return null;
+    if (!isPlainObject(value)) return null;
+    const id = value.id;
+    if (typeof id === "string" && id) return id;
+    if (typeof id === "number" && Number.isFinite(id)) return String(id);
+    return null;
 }
 
 function isKeyedArray(value: Json): value is JsonObject[] {
-  return Array.isArray(value) && value.length > 0 && value.every((item) => idOf(item) !== null);
+    return Array.isArray(value) && value.length > 0 && value.every((item) => idOf(item) !== null);
 }
 
 function indexById(rows: JsonObject[]): Map<string, JsonObject> {
-  const map = new Map<string, JsonObject>();
-  rows.forEach((row) => {
-    const id = idOf(row);
-    if (id !== null) map.set(id, row);
-  });
-  return map;
+    const map = new Map<string, JsonObject>();
+    rows.forEach((row) => {
+          const id = idOf(row);
+          if (id !== null) map.set(id, row);
+    });
+    return map;
+}
+
+/* ---- Recency of EDIT beats recency of WRITE --------------------------------
+   A record that carries a touchedAt stamp (ISO server time, written by every
+   deliberate edit — staff accounts get one from the Access Center and the
+   lifecycle handlers) resolves a conflict by WHEN IT WAS LAST EDITED, not by
+   which copy happened to be saved last. This is what stops the observed
+   role/name reverts: a browser (usually a legacy engine iframe) holding the
+   whole document in memory writes it back wholesale hours later, and that
+   stale copy used to look exactly like a fresh deliberate edit. Its records
+   still carry their OLD stamps, so now they lose to the server's newer ones —
+   while a genuinely new edit carries a fresh stamp and still wins. Records
+   without stamps (logs, requests, everything else) behave exactly as before. */
+function touchMs(value: Json): number | null {
+    if (!isPlainObject(value)) return null;
+    const raw = value.touchedAt;
+    if (typeof raw !== "string" || !raw) return null;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : null;
+}
+
+function newerByTouch(local: Json, remote: Json): Json | null {
+    const localMs = touchMs(local);
+    const remoteMs = touchMs(remote);
+    if (localMs === null || remoteMs === null || localMs === remoteMs) return null;
+    return localMs > remoteMs ? local : remote;
+}
+
+/* The push-side twin of the merge rule, for the path where NO merge runs:
+   a stale wholesale save whose sync stamp happens to be current is accepted
+   by the server verbatim. Called before every push with the freshest server
+   copy this device has seen: any stamped record about to be sent OLDER than
+   the server's own version is replaced by the server's version, so a stale
+   writer can never drag an account backwards. Unstamped records pass
+   through untouched. */
+export function keepNewestStamped(outgoing: Json, server: Json): Json {
+    if (!isPlainObject(outgoing) || !isPlainObject(server)) return outgoing;
+    const out: JsonObject = { ...outgoing };
+    Object.keys(out).forEach((key) => {
+          const ours = out[key];
+          const theirs = server[key];
+          if (!isKeyedArray(ours) || !isKeyedArray(theirs)) return;
+          const theirsById = indexById(theirs);
+          out[key] = ours.map((row) => {
+                  const other = theirsById.get(idOf(row) ?? "");
+                  if (other === undefined) return row;
+                  return newerByTouch(row, other) === other ? other : row;
+          });
+    });
+    return out;
 }
 
 /* Merge two versions of a list of records against the version they both came
    from. Remote's ordering is kept (it is the copy everyone else already sees)
    and anything this device added is appended. */
 function mergeKeyedArrays(base: Json, local: JsonObject[], remote: JsonObject[]): Json {
-  const baseRows = isKeyedArray(base) ? indexById(base) : new Map<string, JsonObject>();
-  const localRows = indexById(local);
+    const baseRows = isKeyedArray(base) ? indexById(base) : new Map<string, JsonObject>();
+    const localRows = indexById(local);
 
   const merged: Json[] = [];
-  const taken = new Set<string>();
+    const taken = new Set<string>();
 
   remote.forEach((remoteRow) => {
-    const id = idOf(remoteRow);
-    if (id === null || taken.has(id)) return;
-    taken.add(id);
-    const localRow = localRows.get(id);
-    if (localRow === undefined) {
-      /* Missing here. If it existed in the copy we started from, this device
-         deliberately removed it — honour that. If it did not, somebody else
-         has just added it, so keep theirs. */
-      if (!baseRows.has(id)) merged.push(remoteRow);
-      return;
-    }
-    merged.push(mergeValues(baseRows.get(id), localRow, remoteRow));
+        const id = idOf(remoteRow);
+        if (id === null || taken.has(id)) return;
+        taken.add(id);
+        const localRow = localRows.get(id);
+        if (localRow === undefined) {
+                /* Missing here. If it existed in the copy we started from, this device
+                   deliberately removed it — honour that. If it did not, somebody else
+                   has just added it, so keep theirs. */
+          if (!baseRows.has(id)) merged.push(remoteRow);
+                return;
+        }
+        merged.push(mergeValues(baseRows.get(id), localRow, remoteRow));
   });
 
   local.forEach((localRow) => {
-    const id = idOf(localRow);
-    if (id === null || taken.has(id)) return;
-    taken.add(id);
-    /* Not on the server. Either this device just created it — a brand-new
-       account is exactly this case — or somebody else deleted it. */
-    if (!baseRows.has(id)) merged.push(localRow);
+        const id = idOf(localRow);
+        if (id === null || taken.has(id)) return;
+        taken.add(id);
+        /* Not on the server. Either this device just created it — a brand-new
+           account is exactly this case — or somebody else deleted it. */
+                    if (!baseRows.has(id)) merged.push(localRow);
   });
 
   return merged;
@@ -130,47 +180,64 @@ function mergeKeyedArrays(base: Json, local: JsonObject[], remote: JsonObject[])
    the value before, which simply means "no shared history": then any
    difference is treated as this device's own addition. */
 export function mergeValues(base: Json, local: Json, remote: Json): Json {
-  if (deepEqual(local, remote)) return local;
-  // One side left it exactly as it was — the other side's change stands.
+    if (deepEqual(local, remote)) return local;
+    /* Stamped records are settled by recency of EDIT before anything else —
+       including the base shortcuts below. The dangerous case those shortcuts
+       cannot tell apart: remote equals base because the server still holds the
+       freshly-edited copy, while "local" is a STALE write-back that predates
+       it. The stale side's older stamp settles it correctly; a real local edit
+       carries a fresher stamp and still wins. */
+  const stamped = newerByTouch(local, remote);
+    if (stamped !== null) return stamped;
+    // This device left it exactly as it was — the other side's change stands
+  // (and the server side can only carry newer stamps, never older ones).
   if (deepEqual(local, base)) return remote;
-  if (deepEqual(remote, base)) return local;
-
+    /* The mirror shortcut — "remote equals base, so local's change stands" —
+       deliberately does NOT fire for containers. At the document level a stale
+       wholesale write-back is indistinguishable from a deliberate edit, and
+       that shortcut used to hand it the whole store, reverting roles and names
+       that were correct on the server. Containers descend instead, so each
+       stamped record arbitrates for itself; the shortcut survives further down
+       for primitives and unstamped values, where behaviour is unchanged. */
   if (isPlainObject(local) && isPlainObject(remote)) {
-    const baseObject = isPlainObject(base) ? base : {};
-    const out: JsonObject = {};
-    // Remote's keys first so the shared shape keeps a stable order.
-    const keys = [...Object.keys(remote), ...Object.keys(local).filter((key) => !(key in remote))];
-    keys.forEach((key) => {
-      const inLocal = Object.prototype.hasOwnProperty.call(local, key);
-      const inRemote = Object.prototype.hasOwnProperty.call(remote, key);
-      const inBase = Object.prototype.hasOwnProperty.call(baseObject, key);
-      if (!inLocal) {
-        // Dropped here on purpose if we had it; otherwise it is new from them.
-        if (!inBase) out[key] = remote[key];
-        return;
-      }
-      if (!inRemote) {
-        if (!inBase) out[key] = local[key];
-        return;
-      }
-      out[key] = mergeValues(baseObject[key], local[key], remote[key]);
-    });
-    return out;
+        const baseObject = isPlainObject(base) ? base : {};
+        const out: JsonObject = {};
+        // Remote's keys first so the shared shape keeps a stable order.
+      const keys = [...Object.keys(remote), ...Object.keys(local).filter((key) => !(key in remote))];
+        keys.forEach((key) => {
+                const inLocal = Object.prototype.hasOwnProperty.call(local, key);
+                const inRemote = Object.prototype.hasOwnProperty.call(remote, key);
+                const inBase = Object.prototype.hasOwnProperty.call(baseObject, key);
+                if (!inLocal) {
+                          // Dropped here on purpose if we had it; otherwise it is new from them.
+                  if (!inBase) out[key] = remote[key];
+                          return;
+                }
+                if (!inRemote) {
+                          if (!inBase) out[key] = local[key];
+                          return;
+                }
+                out[key] = mergeValues(baseObject[key], local[key], remote[key]);
+        });
+        return out;
   }
 
   if (isKeyedArray(local) && isKeyedArray(remote)) {
-    return mergeKeyedArrays(base, local, remote);
+        return mergeKeyedArrays(base, local, remote);
   }
-  /* An emptied list still has to merge against a populated one — that is a
-     "cleared everything here" edit, and the branches above already proved
-     only one side changed it, so honouring the empty side is correct. */
+    /* An emptied list still has to merge against a populated one — that is a
+       "cleared everything here" edit, and the branches above already proved
+       only one side changed it, so honouring the empty side is correct. */
   if (Array.isArray(local) && Array.isArray(remote) && (isKeyedArray(local) || isKeyedArray(remote))) {
-    return mergeKeyedArrays(base, local as JsonObject[], remote as JsonObject[]);
+        return mergeKeyedArrays(base, local as JsonObject[], remote as JsonObject[]);
   }
 
+  // The other side left this value exactly as it was — our change stands.
+  if (deepEqual(remote, base)) return local;
+
   /* Both sides changed the same plain value. Somebody has to win, and it is
-     the person in front of this browser: their edit is the one being saved
-     right now, and the other copy is still on the device that made it. */
+       the person in front of this browser: their edit is the one being saved
+       right now, and the other copy is still on the device that made it. */
   return local;
 }
 
@@ -178,10 +245,10 @@ export function mergeValues(base: Json, local: Json, remote: Json): Json {
    text to save. Anything unparseable falls back to the remote copy, which is
    the one every other device already agrees on. */
 export function mergeStoreText(baseText: string | null | undefined, localText: string | null | undefined, remoteValue: Json): Json {
-  let base: Json;
-  let local: Json;
-  try { base = baseText ? JSON.parse(baseText) : undefined; } catch { base = undefined; }
-  try { local = localText ? JSON.parse(localText) : undefined; } catch { return remoteValue; }
-  if (local === undefined) return remoteValue;
-  return mergeValues(base, local, remoteValue);
+    let base: Json;
+    let local: Json;
+    try { base = baseText ? JSON.parse(baseText) : undefined; } catch { base = undefined; }
+    try { local = localText ? JSON.parse(localText) : undefined; } catch { return remoteValue; }
+    if (local === undefined) return remoteValue;
+    return mergeValues(base, local, remoteValue);
 }
