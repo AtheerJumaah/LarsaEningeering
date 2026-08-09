@@ -95,11 +95,10 @@ test("the quick-clock panel opens for everyone with clock access, listing exactl
   assert.match(page, /only ever shorter/);
 });
 
-test("managers pick the employee, then the exact session — with its date, times, duration, status, and any earlier adjustment", async () => {
+test("managers pick the employee, then the exact session — with its times, duration, status, and any earlier adjustment", async () => {
   const page = await read("app/page.tsx");
   // The employee picker, scoped to the people the actor manages.
   assert.match(page, /const trimScope = useMemo\(\s*\n\s*\(\) => \(user && mayTrimOthers \? scopedUsers\(user, users\) : \[\]\),/);
-  assert.match(page, /<option value="">All recent sessions/);
   // A live open session is named for what it is, never given a fake out.
   assert.match(page, /"clocked in — active session"/);
   // A session already corrected says so before somebody corrects it again.
@@ -108,6 +107,29 @@ test("managers pick the employee, then the exact session — with its date, time
   assert.match(page, /Show older sessions \(\{trimRows\.length - trimShown\} more\)/);
   // Day-segments of one session fold back into the one record trim keys on.
   assert.match(page, /const key = `\$\{session\.uid\}\|\$\{session\.clockIn\}`;/);
+});
+
+test("the panel opens on the viewer's OWN sessions for everyone — the team is an explicit choice, never the default", async () => {
+  const page = await read("app/page.tsx");
+  // Even a Super Admin lands in their own record first.
+  assert.match(page, /if \(trimUser === ""\) return session\.uid === user\?\.id;/);
+  assert.match(page, /if \(trimUser === "__team__"\) return \(user \? isAdmin\(user\) : false\) \|\| trimScopeIds\.has\(session\.uid\);/);
+  assert.match(page, /<option value="">My sessions<\/option>/);
+  assert.match(page, /<option value="__team__">/);
+  // And names appear on rows only in the deliberate team view — a single
+  // person's list is already named by the picker.
+  assert.match(page, /\{trimUser === "__team__" && <b>\{session\.employee\}<\/b>\}/);
+});
+
+test("sessions are summarised day by day, with per-day and per-period worked totals", async () => {
+  const page = await read("app/page.tsx");
+  // Rows group under their calendar day, newest first, each day carrying
+  // its own count and worked-hours summary.
+  assert.match(page, /if \(last && last\.date === session\.date\) last\.rows\.push\(session\);/);
+  assert.match(page, /className="trim-day-head"/);
+  assert.match(page, /\{day\.rows\.length\} session\{day\.rows\.length === 1 \? "" : "s"\} · \{formatHours\(day\.rows\.reduce\(\(sum, row\) => sum \+ row\.hours, 0\)\)\} worked/);
+  // A chosen period totals what it lists.
+  assert.match(page, /\{formatHours\(trimRows\.reduce\(\(sum, row\) => sum \+ row\.hours, 0\)\)\} worked — all shown, pick any to trim\./);
 });
 
 test("any period's sessions can be laid out in full — a month, all history, or a chosen range — and picked for trimming", async () => {

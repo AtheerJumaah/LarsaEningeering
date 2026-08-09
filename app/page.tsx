@@ -17499,12 +17499,18 @@ function QuickClock({
      summed across its days. */
   const trimRows = useMemo(() => {
     const visible = mayTrimOthers
-      ? sessions.filter((session) =>
-        (trimUser ? session.uid === trimUser
-          /* A Super Admin also sees sessions whose account has since been
-             removed — attendance history outlives accounts here, and those
-             records still need closing. Others see exactly their scope. */
-          : (user ? isAdmin(user) : false) || trimScopeIds.has(session.uid)))
+      ? sessions.filter((session) => {
+        /* Even the people who can trim the whole team live in their OWN
+           record first: the panel opens on "My sessions", and the team is
+           an explicit choice — a mixed team-wide list is where the wrong
+           row gets picked. "__team__" is the deliberate everyone view; a
+           Super Admin's everyone additionally includes sessions whose
+           account has since been removed, because attendance history
+           outlives accounts here and those records still need closing. */
+        if (trimUser === "") return session.uid === user?.id;
+        if (trimUser === "__team__") return (user ? isAdmin(user) : false) || trimScopeIds.has(session.uid);
+        return session.uid === trimUser;
+      })
       : sessions.filter((session) => session.uid === user?.id);
     const folded = new Map<string, ClockSession & { spanDays: number }>();
     visible.forEach((session) => {
@@ -17705,9 +17711,10 @@ function QuickClock({
                   onChange={(event) => { setTrimUser(event.target.value); setTrimming(null); setTrimShown(12); }}
                   aria-label="Whose sessions to show"
                 >
-                  <option value="">All recent sessions{trimScope.length ? ` (${isAdmin(user!) ? "everyone" : "people you manage"})` : ""}</option>
-                  {trimScope.map((row) => (
-                    <option key={row.id} value={row.id}>{row.name}{row.id === user?.id ? " (you)" : ""}</option>
+                  <option value="">My sessions</option>
+                  <option value="__team__">{isAdmin(user!) ? "Everyone — team view" : "People I manage — team view"}</option>
+                  {trimScope.filter((row) => row.id !== user?.id).map((row) => (
+                    <option key={row.id} value={row.id}>{row.name}</option>
                   ))}
                 </select>
               </label>
@@ -17731,18 +17738,40 @@ function QuickClock({
               <p className="trim-range-note">
                 {trimRows.length} session{trimRows.length === 1 ? "" : "s"}
                 {trimFrom ? ` from ${new Date(`${trimFrom}T12:00:00`).toLocaleDateString()}` : ""}
-                {trimTo ? ` to ${new Date(`${trimTo}T12:00:00`).toLocaleDateString()}` : ""} — all shown, pick any to trim.
+                {trimTo ? ` to ${new Date(`${trimTo}T12:00:00`).toLocaleDateString()}` : ""}
+                {" · "}{formatHours(trimRows.reduce((sum, row) => sum + row.hours, 0))} worked — all shown, pick any to trim.
               </p>
             )}
-            {visibleTrimRows.map((session) => {
+            {(() => {
+              /* Sessions read best the way people remember them: day by day.
+                 Every row sits under its calendar day, and the day carries
+                 its own summary — how many sessions, how many hours — so a
+                 chosen month scans like a timesheet, not a jumble of rows. */
+              const days: { date: string; rows: typeof visibleTrimRows }[] = [];
+              visibleTrimRows.forEach((session) => {
+                const last = days[days.length - 1];
+                if (last && last.date === session.date) last.rows.push(session);
+                else days.push({ date: session.date, rows: [session] });
+              });
+              return days.map((day) => (
+                <div className="trim-day" key={day.date}>
+                  <div className="trim-day-head">
+                    <b>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</b>
+                    <small>
+                      {day.rows.length} session{day.rows.length === 1 ? "" : "s"} · {formatHours(day.rows.reduce((sum, row) => sum + row.hours, 0))} worked
+                    </small>
+                  </div>
+                  {day.rows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
               const liveOpen = session.open && !session.stale && !session.unclosed;
               return (
                 <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
                   <div className="trim-who">
-                    <b>{session.employee}</b>
+                    {/* In the deliberate team view every row is named; a
+                        single person's list (mine, or a picked employee) is
+                        already named by the picker, so rows stay clean. */}
+                    {trimUser === "__team__" && <b>{session.employee}</b>}
                     <small>
-                      {new Date(session.clockIn).toLocaleDateString()} ·{" "}
                       {new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       {" – "}
                       {liveOpen
@@ -17801,7 +17830,10 @@ function QuickClock({
                   )}
                 </div>
               );
-            })}
+                  })}
+                </div>
+              ));
+            })()}
             {trimPreset === "recent" && trimRows.length > trimShown && (
               <button type="button" className="btn small trim-more" onClick={() => setTrimShown((count) => count + 12)}>
                 Show older sessions ({trimRows.length - trimShown} more)

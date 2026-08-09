@@ -2948,6 +2948,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
   font: inherit; font-size: 12.5px; font-weight: 650; text-transform: none; letter-spacing: normal; color: var(--ink); }
 .trim-range input:focus { outline: none; border-color: #6d28d9; box-shadow: 0 0 0 4px rgba(109,40,217,.10); }
 .trim-range-note { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+/* Day-by-day summaries: each calendar day carries its sessions under a head
+   with the day's own count and worked total, so a month reads like a
+   timesheet. */
+.trim-day { margin-top: 6px; }
+.trim-day-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: 10px; background: var(--soft); }
+.trim-day-head b { font-size: 12.5px; font-weight: 850; color: var(--ink); }
+.trim-day-head small { font-size: 11.5px; font-weight: 750; color: var(--muted); }
+.trim-day .trim-row { padding-left: 10px; padding-right: 10px; }
+.trim-day .trim-row:last-of-type { border-bottom: 0; }
 
 /* --- Performance week locking --------------------------------------------
    A week is closed by hand, usually on a Saturday, and that state has to be
