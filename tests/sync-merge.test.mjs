@@ -30,7 +30,7 @@ execFileSync("npx", ["tsc", tsPath, "--module", "es2022", "--target", "es2022", 
   cwd: new URL("..", import.meta.url).pathname,
   stdio: "pipe",
 });
-const { mergeValues, mergeStoreText, deepEqual } = await import(join(dir, "merge.js"));
+const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped } = await import(join(dir, "merge.js"));
 
 const user = (id, extra = {}) => ({ id, name: id.toUpperCase(), enabled: true, ...extra });
 
@@ -157,4 +157,70 @@ test("mergeStoreText applies the same rules through the text boundary", () => {
   );
   assert.deepEqual(merged.users.map((row) => row.id).sort(), ["u1", "u9"]);
   assert.equal(merged.logs.length, 1);
+});
+
+/* ---- Recency-of-edit stamps: the role/name revert bugs ------------------ */
+
+test("a role set minutes ago survives a stale write-back arriving through the merge", () => {
+  /* The reported bug. The owner sets Maryam to Admin (stamped). A browser
+     that loaded the document an hour earlier saves its whole in-memory copy
+     back; its Maryam is still Engineer with the OLD stamp. The CAS refuses
+     the stale save, the merge runs — and before this fix the "remote equals
+     base" shortcut handed the win to the stale side, silently reverting the
+     role with no audit trace. Recency of EDIT now settles it. */
+  const admin = user("u3", { access: "Admin", touchedAt: "2026-08-09T16:32:00.000Z" });
+  const staleEngineer = user("u3", { access: "Engineer", touchedAt: "2026-08-09T12:00:00.000Z" });
+  const merged = mergeValues(
+    { users: [admin] },            // base: what the stale device last agreed on… already the new copy
+    { users: [staleEngineer] },    // local: the stale wholesale write-back
+    { users: [admin] },            // remote: the server still holds the fresh edit
+  );
+  assert.equal(merged.users[0].access, "Admin", "the newer edit must win");
+});
+
+test("a genuinely newer edit still beats the server copy", () => {
+  const serverAdmin = user("u3", { access: "Admin", touchedAt: "2026-08-09T16:32:00.000Z" });
+  const freshManager = user("u3", { access: "Manager", name: "Maryam B. Faisal", touchedAt: "2026-08-09T17:05:00.000Z" });
+  const merged = mergeValues(
+    { users: [serverAdmin] },
+    { users: [freshManager] },
+    { users: [serverAdmin] },
+  );
+  assert.equal(merged.users[0].access, "Manager");
+  assert.equal(merged.users[0].name, "Maryam B. Faisal", "name changes ride the same stamp");
+});
+
+test("records without stamps keep the old three-way behaviour exactly", () => {
+  const base = { users: [user("u1", { access: "Engineer" })] };
+  const local = { users: [user("u1", { access: "Admin" })] };
+  const remote = { users: [user("u1", { access: "Engineer" })] };
+  assert.equal(mergeValues(base, local, remote).users[0].access, "Admin");
+});
+
+test("keepNewestStamped stops the no-merge path: an accepted wholesale save cannot drag accounts backwards", () => {
+  /* The second half of the bug: if the stale writer's base stamp happens to
+     be CURRENT, the CAS accepts its document verbatim and no merge ever
+     runs. The push guard re-anchors every stamped record to the freshest
+     server copy before sending. */
+  const outgoing = {
+    users: [
+      user("u3", { access: "Engineer", touchedAt: "2026-08-09T12:00:00.000Z" }), // stale
+      user("u9", { access: "Engineer", touchedAt: "2026-08-09T18:00:00.000Z" }), // genuinely fresh edit
+      user("u7", { access: "Engineer" }),                                        // unstamped: untouched
+    ],
+    logs: [{ id: "l1", uid: "u3", status: "In" }],
+  };
+  const server = {
+    users: [
+      user("u3", { access: "Admin", touchedAt: "2026-08-09T16:32:00.000Z" }),
+      user("u9", { access: "Engineer", touchedAt: "2026-08-09T17:00:00.000Z" }),
+      user("u7", { access: "Team Leader" }),
+    ],
+    logs: [],
+  };
+  const guarded = keepNewestStamped(outgoing, server);
+  assert.equal(guarded.users.find((row) => row.id === "u3").access, "Admin", "stale record re-anchored to the server copy");
+  assert.equal(guarded.users.find((row) => row.id === "u9").touchedAt, "2026-08-09T18:00:00.000Z", "fresher edit still ships");
+  assert.equal(guarded.users.find((row) => row.id === "u7").access, "Engineer", "unstamped records pass through");
+  assert.equal(guarded.logs.length, 1, "unstamped arrays (the punch logs) are never rewritten");
 });
