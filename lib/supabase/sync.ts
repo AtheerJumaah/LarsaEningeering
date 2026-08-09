@@ -21,7 +21,7 @@
  * only, one browser at a time. Nothing about the app breaks either way. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
-import { mergeStoreText } from "./merge";
+import { mergeStoreText, keepNewestStamped } from "./merge";
 
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
    itself reads and writes (see STORE_KEY in public/engines/accounting.html).
@@ -174,12 +174,59 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     for (let attempt = 0; attempt < 5; attempt++) {
       let parsed: unknown = {};
       try { parsed = outgoingText ? JSON.parse(outgoingText) : {}; } catch { return; }
+      /* Never hand the server an account record OLDER than the copy it
+         already holds. The legacy engine iframes save their whole in-memory
+         state; if such a stale save's base stamp happens to be current, the
+         CAS accepts it VERBATIM — no merge ever runs — and a role or name
+         set minutes earlier on another device is silently reverted. Stamped
+         records (staff accounts carry touchedAt from every deliberate edit)
+         are therefore re-anchored to the freshest server copy this device
+         has seen before every send. */
+      const serverText = lastKnown.get(key);
+      if (serverText) {
+        try { parsed = keepNewestStamped(parsed, JSON.parse(serverText)); } catch { /* raw copy stands */ }
+      }
       const { data, error } = await supabase.rpc("app_state_put", {
         p_store_key: key,
         p_data: parsed,
         p_base_updated_at: lastSeenAt.get(key) ?? null,
       });
-      if (error) throw error; // schedulePush's catch: retried on next write
+      if (error) {
+        /* One rejection is deliberate and must NOT poison this device: the
+           database's Super Admin guard refuses any app write that would mint
+           or alter a Super Admin. Left alone, the illegal change sits in
+           localStorage forever, EVERY later push carries it, every push is
+           rejected, and every edit made on this device quietly reverts on
+           the next pull — which is exactly the "my changes keep undoing
+           themselves" report. Heal instead: put the server's copy of the
+           affected accounts back locally (stamped, so it sticks), announce
+           the change, and retry the push with the rest of the edits intact. */
+        if (String((error as { message?: string }).message || "").includes("ACCOUNT_GUARD")) {
+          console.error("[larsa-sync] the database refused this save: Super Admin cannot be granted or altered from the app. Reverting that one change locally so other edits keep saving.");
+          const { data: row } = await supabase
+            .from("app_state").select("data, updated_at").eq("store_key", key).maybeSingle();
+          const serverUsers = (row?.data as { users?: { id?: string; access?: string }[] } | null)?.users;
+          const local = parsed as { users?: { id?: string; access?: string; touchedAt?: string }[] };
+          if (row && Array.isArray(serverUsers) && Array.isArray(local?.users)) {
+            const serverById = new Map(serverUsers.map((user) => [String(user?.id || ""), user]));
+            local.users = local.users.map((user) => {
+              const server = serverById.get(String(user?.id || ""));
+              const mintsSuperAdmin = user?.access === "Super Admin" && server && server.access !== "Super Admin";
+              const altersSuperAdmin = server?.access === "Super Admin" && user?.access !== "Super Admin";
+              return (mintsSuperAdmin || altersSuperAdmin) ? { ...(server as object), touchedAt: serverNowIso() } : user;
+            });
+            outgoingText = JSON.stringify(parsed);
+            lastSeenAt.set(key, String(row.updated_at));
+            if (localStorage.getItem(key) === localBaseline) {
+              originalSetItem(key, outgoingText);
+              localBaseline = outgoingText;
+              options.onRemoteChange?.(key);
+            }
+            continue; // retry the healed copy
+          }
+        }
+        throw error; // schedulePush's catch: retried on next write
+      }
       const row = (Array.isArray(data) ? data[0] : data) as
         { applied: boolean; current_data: unknown; current_updated_at: string } | undefined;
       if (!row) throw new Error("app_state_put returned no row");
