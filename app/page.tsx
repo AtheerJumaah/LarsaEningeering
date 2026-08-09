@@ -17465,6 +17465,33 @@ function QuickClock({
      so a forgotten clock-out still jumps out at a glance. */
   const [trimUser, setTrimUser] = useState("");
   const [trimShown, setTrimShown] = useState(12);
+  /* Every session stays reachable, not just the recent window: pick a month
+     (or any range of days) and EVERY session in it is laid out to choose
+     from — the way an old record is actually found: by when it happened.
+     "Recent" keeps the compact newest-first window; a period lists all of
+     its sessions with no cap, because a cap inside a chosen period is
+     exactly the "which twelve?" guessing the correction rules forbid. */
+  const [trimPreset, setTrimPreset] = useState<"recent" | "this-month" | "last-month" | "all" | "custom">("recent");
+  const [trimFrom, setTrimFrom] = useState("");
+  const [trimTo, setTrimTo] = useState("");
+  const pickTrimPreset = (preset: "recent" | "this-month" | "last-month" | "all") => {
+    setTrimPreset(preset);
+    setTrimming(null);
+    setTrimShown(12);
+    if (preset === "this-month") {
+      setTrimFrom(`${currentMonthKey()}-01`);
+      setTrimTo(dateInputValue(new Date()));
+    } else if (preset === "last-month") {
+      const now = new Date();
+      const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      setTrimFrom(dateInputValue(previous));
+      setTrimTo(monthEnd(currentMonthKey(previous)));
+    } else {
+      // "recent" and "all" carry no date bounds; they differ only in the cap.
+      setTrimFrom("");
+      setTrimTo("");
+    }
+  };
   /* One row per SESSION. The session builder splits a midnight-crossing
      session into per-day segments for the reports; the trim panel corrects
      PUNCHES, so those segments fold back into the one record they came
@@ -17498,9 +17525,13 @@ function QuickClock({
       if (session.date < kept.date) kept.date = session.date;
     });
     return [...folded.values()]
+      /* A session belongs to the day it started; a chosen period keeps every
+         session whose clock-in day falls inside it. */
+      .filter((session) => (!trimFrom || session.date >= trimFrom) && (!trimTo || session.date <= trimTo))
       .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime());
-  }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user]);
-  const visibleTrimRows = trimRows.slice(0, trimShown);
+  }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo]);
+  /* Only the "Recent" window is capped; a chosen period shows everything. */
+  const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
   const [now, setNow] = useState<Date | null>(null);
   const [period, setPeriod] = useState("week");
   const monthStart = new Date(); monthStart.setDate(1);
@@ -17681,7 +17712,28 @@ function QuickClock({
                 </select>
               </label>
             )}
-            {!trimRows.length && <div className="empty compact">No sessions recorded yet.</div>}
+            {/* Which sessions to lay out: the compact recent window, a whole
+                month, all history, or any range of days — so the exact old
+                session can be found by when it happened, then picked. */}
+            <div className="trim-range" role="group" aria-label="Which sessions to show">
+              {([["recent", "Recent"], ["this-month", "This month"], ["last-month", "Last month"], ["all", "All history"]] as const).map(([id, label]) => (
+                <button key={id} type="button" className={trimPreset === id ? "on" : ""} onClick={() => pickTrimPreset(id)}>{label}</button>
+              ))}
+              <label>From<input type="date" value={trimFrom} max={dateInputValue(new Date())} onChange={(event) => { setTrimFrom(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions from" /></label>
+              <label>To<input type="date" value={trimTo} max={dateInputValue(new Date())} onChange={(event) => { setTrimTo(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions up to" /></label>
+            </div>
+            {!trimRows.length && (
+              <div className="empty compact">
+                {trimFrom || trimTo ? "No sessions in this period." : "No sessions recorded yet."}
+              </div>
+            )}
+            {(trimFrom || trimTo) && trimRows.length > 0 && (
+              <p className="trim-range-note">
+                {trimRows.length} session{trimRows.length === 1 ? "" : "s"}
+                {trimFrom ? ` from ${new Date(`${trimFrom}T12:00:00`).toLocaleDateString()}` : ""}
+                {trimTo ? ` to ${new Date(`${trimTo}T12:00:00`).toLocaleDateString()}` : ""} — all shown, pick any to trim.
+              </p>
+            )}
             {visibleTrimRows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
               const liveOpen = session.open && !session.stale && !session.unclosed;
@@ -17750,7 +17802,7 @@ function QuickClock({
                 </div>
               );
             })}
-            {trimRows.length > trimShown && (
+            {trimPreset === "recent" && trimRows.length > trimShown && (
               <button type="button" className="btn small trim-more" onClick={() => setTrimShown((count) => count + 12)}>
                 Show older sessions ({trimRows.length - trimShown} more)
               </button>

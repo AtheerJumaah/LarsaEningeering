@@ -109,3 +109,19 @@ test("managers pick the employee, then the exact session — with its date, time
   // Day-segments of one session fold back into the one record trim keys on.
   assert.match(page, /const key = `\$\{session\.uid\}\|\$\{session\.clockIn\}`;/);
 });
+
+test("any period's sessions can be laid out in full — a month, all history, or a chosen range — and picked for trimming", async () => {
+  const page = await read("app/page.tsx");
+  // The period presets, plus free From/To days.
+  assert.match(page, /\[\["recent", "Recent"\], \["this-month", "This month"\], \["last-month", "Last month"\], \["all", "All history"\]\]/);
+  assert.match(page, /setTrimFrom\(`\$\{currentMonthKey\(\)\}-01`\);/);
+  assert.match(page, /setTrimTo\(monthEnd\(currentMonthKey\(previous\)\)\);/);
+  // A session belongs to the day it started, and the filter says exactly that.
+  assert.match(page, /\.filter\(\(session\) => \(!trimFrom \|\| session\.date >= trimFrom\) && \(!trimTo \|\| session\.date <= trimTo\)\)/);
+  // Only the Recent window is capped; a chosen period shows EVERY session in
+  // it — a cap inside a period would reintroduce the "which twelve?" guess.
+  assert.match(page, /const visibleTrimRows = trimPreset === "recent" \? trimRows\.slice\(0, trimShown\) : trimRows;/);
+  assert.match(page, /\{trimPreset === "recent" && trimRows\.length > trimShown && \(/);
+  // An empty period says so honestly instead of "no sessions recorded yet".
+  assert.match(page, /No sessions in this period\./);
+});

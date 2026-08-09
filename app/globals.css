@@ -2934,6 +2934,20 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .trim-employee select:focus { outline: none; border-color: #6d28d9; box-shadow: 0 0 0 4px rgba(109,40,217,.10); }
 .trim-close-note { flex-basis: 100%; font-size: 11.5px; font-weight: 650; line-height: 1.5; color: var(--muted); }
 .trim-more { margin-top: 10px; }
+/* The period picker: find an old session by when it happened. Presets sit
+   beside two plain date fields; the active preset is inked like the scope
+   switch, and everything reads from the theme variables in both themes. */
+.trim-range { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+.trim-range button { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+  font: inherit; font-size: 12px; font-weight: 750; color: var(--muted); cursor: pointer; }
+.trim-range button:hover { border-color: var(--ink); color: var(--ink); }
+.trim-range button.on { border-color: var(--ink); background: var(--ink); color: var(--panel); }
+.trim-range label { display: grid; gap: 4px; font-size: 10px; font-weight: 950; text-transform: uppercase;
+  letter-spacing: .075em; color: var(--muted); }
+.trim-range input { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+  font: inherit; font-size: 12.5px; font-weight: 650; text-transform: none; letter-spacing: normal; color: var(--ink); }
+.trim-range input:focus { outline: none; border-color: #6d28d9; box-shadow: 0 0 0 4px rgba(109,40,217,.10); }
+.trim-range-note { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
 
 /* --- Performance week locking --------------------------------------------
    A week is closed by hand, usually on a Saturday, and that state has to be
