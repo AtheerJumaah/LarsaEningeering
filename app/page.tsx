@@ -14554,6 +14554,25 @@ function AccessCenter({
     setDraft((current) => current ? { ...current, [field]: value } : current);
   };
 
+  /* Painting an accounting permission IS letting somebody into Accounting.
+     The hard gate (accountingAccessAllowed) is checked before any stored
+     grant, so accounting grants without the gate are dead switches — an
+     editor could tick a page of accounting permissions, save them durably,
+     and the person still saw nothing. Whenever an authorized editor turns
+     any accounting permission ON for an account that does not hold
+     Accounting through its role, the gate now opens in the same draft:
+     one visible state, never two controls that quietly disagree. Turning
+     the switch off afterwards still closes Accounting — and the switch
+     panel says plainly that any ticked grants below it are parked. */
+  const opensAccountingGate = (itemId: string, turnedOn: boolean) => Boolean(
+    turnedOn
+    && (itemId === "accounting-hub" || itemId.startsWith("acc-"))
+    && draft
+    && draft.access !== "Super Admin" && draft.access !== "Accountant"
+    && draft.accountingAccess !== true
+    && (currentUser?.platformAdmin === true || currentUser?.access === "Super Admin"),
+  );
+
   const applyPreset = (preset: string) => {
     if (!draft || draft.access === "Super Admin") return;
     setDraft({
@@ -14603,6 +14622,7 @@ function AccessCenter({
     }
     setDraft({
       ...draft,
+      ...(opensAccountingGate(item.id, checked) ? { accountingAccess: true } : {}),
       permissionProfile: { ...draft.permissionProfile, preset: "Custom", grants },
     });
   };
@@ -14618,6 +14638,7 @@ function AccessCenter({
     });
     setDraft({
       ...draft,
+      ...(opensAccountingGate(item.id, checked) ? { accountingAccess: true } : {}),
       permissionProfile: { ...draft.permissionProfile, preset: "Custom", grants },
     });
   };
@@ -14631,8 +14652,10 @@ function AccessCenter({
         grants[item.id][action] = mode === "full" || (mode === "view" && action === "view");
       });
     });
+    const openGate = mode !== "clear" && group.items.some((row) => opensAccountingGate(row.id, true));
     setDraft({
       ...draft,
+      ...(openGate ? { accountingAccess: true } : {}),
       permissionProfile: { ...draft.permissionProfile, preset: "Custom", grants },
     });
   };
@@ -15018,6 +15041,13 @@ function AccessCenter({
                   </small>
                 </span>
               </label>
+              {!accountingOpen && Object.entries(draft.permissionProfile?.grants || {}).some(([grantId, actions]) =>
+                (grantId === "accounting-hub" || grantId.startsWith("acc-")) && Object.values(actions || {}).some(Boolean)) && (
+                <div className="scope-note">
+                  Accounting permissions are ticked below, but they stay dark while this switch is off — ticking
+                  one turns the switch on for you.
+                </div>
+              )}
               {accountingOpen && !accountingByRole && draft.accountingAccessAt && (
                 <div className="scope-note">
                   Granted {new Date(draft.accountingAccessAt).toLocaleString()}
