@@ -7309,6 +7309,21 @@ export default function Home() {
         return Boolean(row && row.enabled !== false && row.offboarded !== true && rankOf(row) >= rankOf(employee));
       })
       .slice(0, 3);
+    /* A save must never SILENTLY become a deletion. Deleting a chain is what
+       an explicitly EMPTY submission means — nothing else. If steps were
+       picked and the rules above rejected every one of them, the person is
+       told why and the chain is LEFT AS IT WAS; and when some steps survive
+       while others were dropped, the save names what it dropped instead of
+       quietly writing less than what was asked. */
+    const requested = steps.filter(Boolean);
+    if (requested.length && !clean.length) {
+      notify(`None of those approvers can hold ${employee.name}'s ${type} chain — an approver must be an active account, not ${employee.name} themselves, and at or above their rank. The chain was left as it was.`);
+      return false;
+    }
+    const dropped = requested
+      .filter((id, at, all) => all.indexOf(id) === at)
+      .filter((id) => !clean.includes(id))
+      .map((id) => people.find((row) => row.id === id)?.name || id);
     const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
     const own = { ...(flowConfig[employeeId] || {}) };
     if (clean.length) own[type] = clean;
@@ -7324,7 +7339,7 @@ export default function Home() {
     setStorageTick((value) => value + 1);
     const names = clean.map((id) => people.find((row) => row.id === id)?.name || id);
     notify(clean.length
-      ? `${type} approvals for ${employee.name}: ${names.join(" → ")}`
+      ? `${type} approvals for ${employee.name}: ${names.join(" → ")}${dropped.length ? ` · dropped ${dropped.join(", ")} (self, duplicate, inactive, or below their rank)` : ""}`
       : `${employee.name} has no ${type} chain now — their requests go to approvers at or above their rank.`);
     return true;
   }, [notify, refreshStaffEngine]);
