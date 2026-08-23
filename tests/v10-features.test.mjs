@@ -414,7 +414,7 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
      the account ledger and the attendance ledger both wrap
      localStorage.setItem on top of the sync layer's wrapper, so they have to
      come off before it does. */
-  assert.match(page, /return \(\) => \{ cleanupAccounts\(\); cleanupLedger\(\); cleanup\(\); \};\s*\n\s*\}, \[hydrated, refs\]\);/);
+  assert.match(page, /cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);[\s\S]{0,200}?\}, \[hydrated, refs\]\);/);
   // A remote change bumps the same storageTick the rest of the app already
   // reacts to, and reloads the engines, rather than adding a second code path.
   assert.match(page, /setStorageTick\(\(value\) => value \+ 1\);\s*\n\s*\(Object\.keys\(refs\) as Engine\[\]\)\.forEach/);

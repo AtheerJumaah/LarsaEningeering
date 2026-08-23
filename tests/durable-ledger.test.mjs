@@ -26,7 +26,11 @@ test("boot reconciliation restores ledger events the blob lost, honouring delibe
   assert.match(ledger, /if \(!id \|\| present\.has\(id\) \|\| removed\.has\(id\)\) return;/);
   assert.match(ledger, /recovery: "ledger-restore",/);
   // Open shifts are recomputed so a restored open session stays live.
-  assert.match(ledger, /openByUid\.forEach\(\(log\) => \{ if \(log\) log\.active = true; \}\);/);
+  /* The recompute now self-heals the denormalized flags on EVERY reconcile
+     (69 stale active flags were live in production), writing only when a
+     flag or a restore actually changed something. */
+  assert.match(ledger, /openByUid\.forEach\(\(log\) => \{ if \(log\) openLogs\.add\(log\); \}\);/);
+  assert.match(ledger, /if \(restored \|\| flagsChanged\) \{/);
   const page = await read("app/page.tsx");
   assert.match(page, /reconcileStoreFromLedger\(\)\.then\(\(\{ restored \}\) => \{/);
   assert.match(page, /const cleanupLedger = initAttendanceLedger\(\);/);

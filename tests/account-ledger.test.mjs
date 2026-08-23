@@ -65,7 +65,7 @@ test("every blob write delivers its accounts to the ledger, with retry", () => {
 
 test("the app installs both ledgers and restores accounts on every sync settle", () => {
   assert.match(page, /const cleanupLedger = initAttendanceLedger\(\);\s*\n\s*const cleanupAccounts = initAccountLedger\(\);/);
-  assert.match(page, /return \(\) => \{ cleanupAccounts\(\); cleanupLedger\(\); cleanup\(\); \};/);
+  assert.match(page, /cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);/);
   assert.match(page, /reconcileAccountsFromLedger\(\)\.then\(\(\{ restored, names \}\) => \{/);
   // Restoration is reported to the person, not done silently.
   assert.match(page, /account was restored from the durable ledger/);
@@ -75,7 +75,12 @@ test("a permanent delete tombstones on the server as well as locally", () => {
   /* The local list alone would not hold: another browser would restore the
      account from the ledger seconds later. Both halves, or neither works. */
   assert.match(page, /markAccountsRemoved\(store, \[target\.id\]\);/);
-  assert.match(page, /void tombstoneAccount\(target\.id, actor\.email \|\| actor\.name \|\| actor\.id,/);
+  /* The tombstone now lands BEFORE the local save, and a failure refuses the
+     delete outright — under the repair_008 healing rules an account that
+     left the document without a server-side tombstone would simply be put
+     back, so deleting locally first produced a delete that undid itself. */
+  assert.match(page, /await tombstoneAccount\(target\.id, actor\.email \|\| actor\.name \|\| actor\.id,/);
+  assert.match(page, /if \(!recorded\) \{/);
   // And it is still Super-Admin-only, and still refuses the owner account.
   assert.match(page, /if \(!actor \|\| actor\.access !== "Super Admin"\) \{\s*\n\s*notify\("Only the Super Admin can permanently delete an account\."\);/);
   assert.match(page, /if \(existing\.access === "Super Admin"\) \{ notify\("The protected owner account cannot be deleted\."\); return false; \}/);

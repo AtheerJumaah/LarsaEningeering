@@ -201,7 +201,9 @@ test("a forgotten PIN is reset exactly like a forgotten password: emailed code, 
   // The flow: email first, the new PIN only after the code proves the inbox.
   assert.match(access, /"signup" \| "forgot" \| "forgotPin" \| "reset" \| "confirm"/);
   assert.match(access, /\(mode === "forgot" \|\| mode === "forgotPin"\) && !users\.some/);
-  assert.match(access, /if \(mode === "forgotPin"\) \{\s*\n\s*list\[index\] = \{ \.\.\.list\[index\], pin: await hashPin\(pin\), emailVerified: true \};/);
+  /* The reset also stamps touchedAt + pinChangedAt now — the recency marks
+     that keep a stale copy of the record from dragging the old PIN back. */
+  assert.match(access, /if \(mode === "forgotPin"\) \{[\s\S]{0,600}?list\[index\] = \{ \.\.\.list\[index\], pin: await hashPin\(pin\), emailVerified: true, touchedAt: serverNowIso\(\), pinChangedAt: serverNowIso\(\) \};/);
   // Uniqueness holds on this path too, excluding the account being reset.
   assert.match(access, /await pinTakenByOther\(users, pin, owner\?\.id\)/);
 });

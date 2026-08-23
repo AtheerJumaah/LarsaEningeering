@@ -93,6 +93,10 @@ function signatureOf(user: AccountLike): string {
   return JSON.stringify([
     user.id, user.name, normalizeEmail(user.email), user.username, user.access,
     user.enabled, user.offboarded, user.recycled, user.accountingAccess,
+    /* The recency stamps are part of the signature so a stamped edit — a
+       password change, a lifecycle action — re-delivers the record to the
+       ledger, where staff_account_upsert keeps whichever copy is newest. */
+    user.touchedAt, user.passwordChangedAt, user.pinChangedAt, user.emailVerified,
   ]);
 }
 
@@ -282,15 +286,20 @@ export function markAccountsRemoved(store: StaffStoreLike, ids: string[]) {
   store.removedUserIds = removed.slice(-500);
 }
 
-export async function tombstoneAccount(uid: string, by: string, reason: string): Promise<void> {
-  if (!uid || !supabaseConfigured()) return;
+/* Returns whether the tombstone was actually recorded server-side. The
+ * permanent-delete path REQUIRES a true here before it touches the shared
+ * document: under the repair_008 healing rules an account that leaves the
+ * document without a server-side tombstone is put straight back, so deleting
+ * locally first would only produce a delete that undoes itself. */
+export async function tombstoneAccount(uid: string, by: string, reason: string): Promise<boolean> {
+  if (!uid || !supabaseConfigured()) return false;
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return false;
   try {
-    await client.rpc("staff_account_tombstone", { p_uid: uid, p_by: by, p_reason: reason });
+    const { error } = await client.rpc("staff_account_tombstone", { p_uid: uid, p_by: by, p_reason: reason });
+    return !error;
   } catch {
-    /* The local removedUserIds entry still holds on this device; the next
-       successful call from any device settles it for everyone. */
+    return false;
   }
 }
 

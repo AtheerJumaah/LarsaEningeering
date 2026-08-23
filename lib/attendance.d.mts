@@ -8,6 +8,10 @@ export type PunchLogLike = {
   clockedBy?: string;
   lastSeen?: string;
   active?: boolean;
+  /* Recency stamp written at punch time and refreshed by corrections; the
+     merge layer and the repair_008 database guard settle same-id conflicts
+     by it. */
+  touchedAt?: string;
   recovery?: string;
   origUid?: string;
   origId?: string;

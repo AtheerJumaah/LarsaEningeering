@@ -21,7 +21,7 @@
  * only, one browser at a time. Nothing about the app breaks either way. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
-import { mergeStoreText, keepNewestStamped } from "./merge";
+import { mergeStoreText, protectOutgoing } from "./merge";
 
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
    itself reads and writes (see STORE_KEY in public/engines/accounting.html).
@@ -174,17 +174,20 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     for (let attempt = 0; attempt < 5; attempt++) {
       let parsed: unknown = {};
       try { parsed = outgoingText ? JSON.parse(outgoingText) : {}; } catch { return; }
-      /* Never hand the server an account record OLDER than the copy it
-         already holds. The legacy engine iframes save their whole in-memory
-         state; if such a stale save's base stamp happens to be current, the
-         CAS accepts it VERBATIM — no merge ever runs — and a role or name
-         set minutes earlier on another device is silently reverted. Stamped
-         records (staff accounts carry touchedAt from every deliberate edit)
-         are therefore re-anchored to the freshest server copy this device
-         has seen before every send. */
+      /* Never hand the server a document that would drag anything backwards.
+         The legacy engine iframes save their whole in-memory state; if such a
+         stale save's base stamp happens to be current, the CAS accepts it
+         VERBATIM — no merge ever runs — and everything the stale copy lacked
+         is silently destroyed. protectOutgoing() re-anchors stamped records
+         to the freshest server copy this device has seen, puts back any
+         users/logs row the server holds that this copy lost (absence is not
+         deletion), drops tombstoned resurrections, and sends the tombstone
+         lists as an add-only union. The repair_008 database trigger enforces
+         the same rules server-side; this keeps well-behaved clients from
+         even attempting the destructive write. */
       const serverText = lastKnown.get(key);
       if (serverText) {
-        try { parsed = keepNewestStamped(parsed, JSON.parse(serverText)); } catch { /* raw copy stands */ }
+        try { parsed = protectOutgoing(parsed, JSON.parse(serverText)); } catch { /* raw copy stands */ }
       }
       const { data, error } = await supabase.rpc("app_state_put", {
         p_store_key: key,
@@ -452,6 +455,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const onOnline = () => { refreshFromServer("network back"); };
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
+  /* Writes made by the engine iframes land in the same localStorage but do
+     NOT pass through this window's patched setItem — same origin, different
+     window object. They fire a `storage` event here instead, so that event
+     queues the push that keeps engine edits from sitting on one device
+     until the parent app happened to save something itself. */
+  const onStorageWrite = (event: StorageEvent) => {
+    if (!event.key || !(SYNCED_KEYS as readonly string[]).includes(event.key)) return;
+    schedulePush(event.key as SyncedKey);
+  };
+  window.addEventListener("storage", onStorageWrite);
   /* Immediate-push hook for punch-critical writes: a clock event must not
      even wait out the write debounce. */
   pushNowHook = (key: SyncedKey) => {
@@ -467,6 +480,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     clearInterval(clockTimer);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
+    window.removeEventListener("storage", onStorageWrite);
     pushNowHook = null;
     cleanupChannel?.();
   };

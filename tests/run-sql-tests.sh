@@ -69,6 +69,22 @@ end $shim$;
 create or replace view vault.decrypted_secrets as
   select id, name, secret as decrypted_secret, description from vault.secrets;
 create schema if not exists extensions;
+-- pg_net shim: the real extension is a Supabase-managed async HTTP worker
+-- and does not exist on a vanilla local PostgreSQL. The dispatch trigger
+-- only ever fires-and-forgets net.http_post, so a no-op with the same
+-- signature keeps every code path testable.
+create schema if not exists net;
+create or replace function net.http_post(
+  url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+  headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000)
+returns bigint language plpgsql as $shim$ begin return 1; end $shim$;
+-- pg_cron shim, same reasoning: scheduling is Supabase-managed; the
+-- migrations only register jobs.
+create schema if not exists cron;
+create or replace function cron.schedule(job_name text, schedule text, command text)
+returns bigint language plpgsql as $shim$ begin return 1; end $shim$;
+create or replace function cron.unschedule(job_name text)
+returns boolean language plpgsql as $shim$ begin return true; end $shim$;
 create schema if not exists realtime;
 create or replace function realtime.send(payload jsonb, event text, topic text, private boolean default true)
 returns void language plpgsql as $shim$ begin return; end $shim$;
@@ -108,6 +124,23 @@ EOF
 
 for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql "$repo"/supabase/migrations/2026*_sync_*.sql 2>/dev/null | sort); do
   echo "applying $(basename "$f")"
+  # `create extension pg_net` cannot run on a vanilla local server; the shim
+  # above provides net.http_post instead, so the line is dropped here only.
+  sed -E 's/^create extension if not exists pg_(net|cron).*$//' "$f" \
+    | PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q >/dev/null
+done
+
+# The incident-repair migrations that shape schema/behaviour, in production
+# order. repair_001 (a point-in-time backup), repair_003 (alters live
+# verification tables not shimmed here) and repair_004/005 (one-time data
+# recovery against real production rows) are deliberately not replayed.
+for name in repair_002_durable_attendance_ledger_and_write_hardening \
+            repair_002b_ledger_break_statuses \
+            repair_006_pin_trigger_search_path \
+            repair_007_durable_account_ledger \
+            repair_008_server_guard_stale_writes; do
+  f="$repo/supabase/migrations/$name.sql"
+  echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
 done
 
@@ -117,7 +150,7 @@ for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql"
           "$here/accounting-payroll-sql.test.sql" "$here/accounting-admin-role-sql.test.sql" \
           "$here/notifications-sql.test.sql" "$here/app-state-cas-sql.test.sql" \
           "$here/viewer-accounts-sql.test.sql" "$here/notify-email-sql.test.sql" \
-          "$here/qa-spec-sql.test.sql"; do
+          "$here/qa-spec-sql.test.sql" "$here/repair-guard-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"

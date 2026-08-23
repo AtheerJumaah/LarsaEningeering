@@ -30,12 +30,52 @@
  *     and there this device wins, because it is the edit the person in front
  *     of us just made.
  *
+ * ---- The August lesson: absence is not deletion --------------------------
+ *
+ * For the two collections everything depends on — `users` (accounts,
+ * passwords, lifecycle flags) and `logs` (clock punches) — the base-absence
+ * inference above proved catastrophically unsafe. The legacy engine iframes
+ * keep the whole document in memory and save it back wholesale; a copy
+ * loaded an hour ago is missing every row added since, and the merge read
+ * each of those gaps as a deliberate delete. Two thirds of the production
+ * clock log ended up carrying a "ledger-restore" recovery mark from the
+ * resulting lose-and-restore churn.
+ *
+ * So for `users` and `logs` the rules are now:
+ *
+ *   - a row the server has NEVER leaves the merged result because a local
+ *     copy lacks it — the server's document is protected by its own healing
+ *     trigger (repair_008) and is authoritative on existence;
+ *   - a local-only row is kept (it is this device's own addition) UNLESS its
+ *     id appears in a tombstone list — then it is a stale resurrection and
+ *     is dropped before it can be pushed;
+ *   - deletion happens ONLY through the tombstone lists (`removedUserIds`,
+ *     `removedLogIds`), which every deliberate removal path writes, and
+ *     which merge as an add-only UNION so a stale device can never shorten
+ *     them back (that is precisely how repair_005's tombstones were wiped).
+ *
+ * Every other collection keeps the original base-aware behaviour.
+ *
  * Pure and dependency-free on purpose: it is unit-tested directly, which is
  * the only honest way to trust a merge.
  */
 
 type Json = unknown;
 type JsonObject = Record<string, Json>;
+
+/* The collections that may only shrink with evidence, and the tombstone
+   list each one honours. */
+export const GUARDED_COLLECTIONS: Record<string, string> = {
+  users: "removedUserIds",
+  logs: "removedLogIds",
+};
+const TOMBSTONE_KEYS = new Set(Object.values(GUARDED_COLLECTIONS));
+
+type MergeContext = {
+  /* collection key ("users" / "logs") -> union of tombstoned ids across
+     base, local and remote. */
+  tombstones: Map<string, Set<string>>;
+};
 
 function isPlainObject(value: Json): value is JsonObject {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -89,6 +129,36 @@ function indexById(rows: JsonObject[]): Map<string, JsonObject> {
     return map;
 }
 
+function stringList(value: Json): string[] {
+    return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string" && item !== "")
+        : [];
+}
+
+/* Add-only union of two tombstone lists, keeping the first list's order and
+   appending anything only the second one has. */
+export function unionIds(first: Json, second: Json): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    [...stringList(first), ...stringList(second)].forEach((id) => {
+          if (!seen.has(id)) { seen.add(id); out.push(id); }
+    });
+    return out;
+}
+
+function buildContext(...documents: Json[]): MergeContext {
+    const tombstones = new Map<string, Set<string>>();
+    Object.entries(GUARDED_COLLECTIONS).forEach(([collection, listKey]) => {
+          const ids = new Set<string>();
+          documents.forEach((doc) => {
+                  if (!isPlainObject(doc)) return;
+                  stringList(doc[listKey]).forEach((id) => ids.add(id));
+          });
+          tombstones.set(collection, ids);
+    });
+    return { tombstones };
+}
+
 /* ---- Recency of EDIT beats recency of WRITE --------------------------------
    A record that carries a touchedAt stamp (ISO server time, written by every
    deliberate edit — staff accounts get one from the Access Center and the
@@ -139,10 +209,74 @@ export function keepNewestStamped(outgoing: Json, server: Json): Json {
     return out;
 }
 
+/* Everything a push must guarantee, in one place — the client half of the
+ * repair_008 healing trigger, applied BEFORE the document leaves this
+ * device, so even a compare-and-swap that is accepted verbatim cannot
+ * destroy anything:
+ *
+ *   - stamped records are re-anchored to the freshest server copy when the
+ *     outgoing one is older (keepNewestStamped, unchanged);
+ *   - a users/logs row the server holds that the outgoing copy lacks is put
+ *     back, unless a tombstone names it — absence is not deletion;
+ *   - an outgoing users/logs row whose id is tombstoned is dropped — a
+ *     stale device cannot resurrect a deliberately removed record;
+ *   - the tombstone lists themselves go out as the UNION of both sides.
+ */
+export function protectOutgoing(outgoing: Json, server: Json): Json {
+    const anchored = keepNewestStamped(outgoing, server);
+    if (!isPlainObject(anchored)) return anchored;
+    const serverDoc = isPlainObject(server) ? server : {};
+    const out: JsonObject = { ...anchored };
+
+    Object.entries(GUARDED_COLLECTIONS).forEach(([collection, listKey]) => {
+          const removed = new Set(unionIds(out[listKey], serverDoc[listKey]));
+          const ours = Array.isArray(out[collection]) ? (out[collection] as Json[]) : [];
+          const theirs = Array.isArray(serverDoc[collection]) ? (serverDoc[collection] as Json[]) : [];
+          if (!ours.length && !theirs.length) return;
+
+          const kept: Json[] = [];
+          const seen = new Set<string>();
+          ours.forEach((row) => {
+                  const id = idOf(row);
+                  if (id === null) { kept.push(row); return; }
+                  if (seen.has(id)) return;
+                  seen.add(id);
+                  /* A row the server already knows is never dropped for being
+                     tombstoned here — restores are settled server-side, where the
+                     account ledger is visible. Only NEW rows (this device's own
+                     resurrection candidates) are filtered. */
+                  const serverHasIt = theirs.some((other) => idOf(other) === id);
+                  if (!serverHasIt && removed.has(id)) return;
+                  kept.push(row);
+          });
+          theirs.forEach((row) => {
+                  const id = idOf(row);
+                  if (id === null || seen.has(id ?? "")) return;
+                  if (id !== null) seen.add(id);
+                  if (id !== null && removed.has(id)) return;
+                  kept.push(row);
+          });
+          out[collection] = kept;
+          out[listKey] = unionIds(out[listKey], serverDoc[listKey]);
+    });
+    return out;
+}
+
 /* Merge two versions of a list of records against the version they both came
    from. Remote's ordering is kept (it is the copy everyone else already sees)
-   and anything this device added is appended. */
-function mergeKeyedArrays(base: Json, local: JsonObject[], remote: JsonObject[]): Json {
+   and anything this device added is appended.
+
+   `tombstones` is set only for the guarded collections (users/logs): there,
+   absence never deletes — a row leaves the result only when a tombstone
+   names it. For every other collection it is null and the original
+   base-aware inference applies. */
+function mergeKeyedArrays(
+    base: Json,
+    local: JsonObject[],
+    remote: JsonObject[],
+    context: MergeContext | null,
+    tombstones: Set<string> | null,
+): Json {
     const baseRows = isKeyedArray(base) ? indexById(base) : new Map<string, JsonObject>();
     const localRows = indexById(local);
 
@@ -155,19 +289,34 @@ function mergeKeyedArrays(base: Json, local: JsonObject[], remote: JsonObject[])
         taken.add(id);
         const localRow = localRows.get(id);
         if (localRow === undefined) {
+                if (tombstones) {
+                        /* Guarded collection: the server's row stays UNLESS a tombstone
+                           names it — that is the deleting device's own merge honouring
+                           its removal. A stale local copy that simply never saw the row
+                           carries no tombstone for it and cannot delete it. */
+                        if (!tombstones.has(id)) merged.push(remoteRow);
+                        return;
+                }
                 /* Missing here. If it existed in the copy we started from, this device
                    deliberately removed it — honour that. If it did not, somebody else
                    has just added it, so keep theirs. */
           if (!baseRows.has(id)) merged.push(remoteRow);
                 return;
         }
-        merged.push(mergeValues(baseRows.get(id), localRow, remoteRow));
+        merged.push(mergeValues(baseRows.get(id), localRow, remoteRow, context));
   });
 
   local.forEach((localRow) => {
         const id = idOf(localRow);
         if (id === null || taken.has(id)) return;
         taken.add(id);
+        if (tombstones) {
+                /* Local-only row in a guarded collection: this device's own addition
+                   is kept — unless a tombstone names it, in which case it is a stale
+                   resurrection and dies here, before it can be pushed. */
+                if (!tombstones.has(id)) merged.push(localRow);
+                return;
+        }
         /* Not on the server. Either this device just created it — a brand-new
            account is exactly this case — or somebody else deleted it. */
                     if (!baseRows.has(id)) merged.push(localRow);
@@ -179,8 +328,16 @@ function mergeKeyedArrays(base: Json, local: JsonObject[], remote: JsonObject[])
 /* The merge itself. `base` may be undefined when this device has never seen
    the value before, which simply means "no shared history": then any
    difference is treated as this device's own addition. */
-export function mergeValues(base: Json, local: Json, remote: Json): Json {
+export function mergeValues(base: Json, local: Json, remote: Json, context: MergeContext | null = null, key?: string): Json {
     if (deepEqual(local, remote)) return local;
+
+    /* The tombstone lists merge as an add-only union — a stale device saving
+       an older, shorter list must never un-remember a removal. */
+    if (key !== undefined && TOMBSTONE_KEYS.has(key)
+            && (Array.isArray(local) || Array.isArray(remote))) {
+          return unionIds(remote, local);
+    }
+
     /* Stamped records are settled by recency of EDIT before anything else —
        including the base shortcuts below. The dangerous case those shortcuts
        cannot tell apart: remote equals base because the server still holds the
@@ -189,6 +346,11 @@ export function mergeValues(base: Json, local: Json, remote: Json): Json {
        carries a fresher stamp and still wins. */
   const stamped = newerByTouch(local, remote);
     if (stamped !== null) return stamped;
+
+    const guardedTombstones = key !== undefined && context && GUARDED_COLLECTIONS[key]
+        ? context.tombstones.get(key) ?? new Set<string>()
+        : null;
+
     // This device left it exactly as it was — the other side's change stands
   // (and the server side can only carry newer stamps, never older ones).
   if (deepEqual(local, base)) return remote;
@@ -204,32 +366,35 @@ export function mergeValues(base: Json, local: Json, remote: Json): Json {
         const out: JsonObject = {};
         // Remote's keys first so the shared shape keeps a stable order.
       const keys = [...Object.keys(remote), ...Object.keys(local).filter((key) => !(key in remote))];
-        keys.forEach((key) => {
-                const inLocal = Object.prototype.hasOwnProperty.call(local, key);
-                const inRemote = Object.prototype.hasOwnProperty.call(remote, key);
-                const inBase = Object.prototype.hasOwnProperty.call(baseObject, key);
+        keys.forEach((childKey) => {
+                const inLocal = Object.prototype.hasOwnProperty.call(local, childKey);
+                const inRemote = Object.prototype.hasOwnProperty.call(remote, childKey);
+                const inBase = Object.prototype.hasOwnProperty.call(baseObject, childKey);
                 if (!inLocal) {
-                          // Dropped here on purpose if we had it; otherwise it is new from them.
-                  if (!inBase) out[key] = remote[key];
+                          /* Dropped here on purpose if we had it; otherwise it is new from
+                             them. A guarded collection or tombstone list is never dropped
+                             wholesale by local absence. */
+                  if (!inBase || GUARDED_COLLECTIONS[childKey] || TOMBSTONE_KEYS.has(childKey)) out[childKey] = remote[childKey];
                           return;
                 }
                 if (!inRemote) {
-                          if (!inBase) out[key] = local[key];
+                          if (!inBase) out[childKey] = local[childKey];
                           return;
                 }
-                out[key] = mergeValues(baseObject[key], local[key], remote[key]);
+                out[childKey] = mergeValues(baseObject[childKey], local[childKey], remote[childKey], context, childKey);
         });
         return out;
   }
 
   if (isKeyedArray(local) && isKeyedArray(remote)) {
-        return mergeKeyedArrays(base, local, remote);
+        return mergeKeyedArrays(base, local, remote, context, guardedTombstones);
   }
     /* An emptied list still has to merge against a populated one — that is a
        "cleared everything here" edit, and the branches above already proved
-       only one side changed it, so honouring the empty side is correct. */
+       only one side changed it, so honouring the empty side is correct (for
+       the guarded collections the tombstone rules inside decide instead). */
   if (Array.isArray(local) && Array.isArray(remote) && (isKeyedArray(local) || isKeyedArray(remote))) {
-        return mergeKeyedArrays(base, local as JsonObject[], remote as JsonObject[]);
+        return mergeKeyedArrays(base, local as JsonObject[], remote as JsonObject[], context, guardedTombstones);
   }
 
   // The other side left this value exactly as it was — our change stands.
@@ -250,5 +415,6 @@ export function mergeStoreText(baseText: string | null | undefined, localText: s
     try { base = baseText ? JSON.parse(baseText) : undefined; } catch { base = undefined; }
     try { local = localText ? JSON.parse(localText) : undefined; } catch { return remoteValue; }
     if (local === undefined) return remoteValue;
-    return mergeValues(base, local, remoteValue);
+    const context = buildContext(base, local, remoteValue);
+    return mergeValues(base, local, remoteValue, context);
 }

@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, SYNCED_KEYS } from "../lib/supabase/sync";
+import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
@@ -224,6 +225,13 @@ type StaffUser = {
      wholesale write-back can never revert a role, name, or lifecycle
      change. See lib/supabase/merge.ts. */
   touchedAt?: string;
+  /* When each secret was last changed (server time). The repair_008 database
+     trigger refuses to let a hashed password or PIN be replaced by a
+     DIFFERENT hash carrying an older or missing stamp — which is exactly how
+     "my new password stopped working two days later" used to happen: a stale
+     record with a newer wholesale save dragged the old hash back. */
+  passwordChangedAt?: string;
+  pinChangedAt?: string;
   role?: string;
   department?: string;
   email?: string;
@@ -342,6 +350,12 @@ type ClockLog = {
   clockedBy?: string;
   lastSeen?: string;
   active?: boolean;
+  /* Recency stamp (ISO server time), written at punch time and refreshed by
+     every deliberate correction. The merge layer and the repair_008 database
+     trigger use it to refuse a stale copy of this record — it is what makes
+     a trimmed clock-out stay trimmed when an engine iframe or sleeping tab
+     writes back the pre-trim version. */
+  touchedAt?: string;
   /* Incident-recovery provenance: the original record id/uid before a
      reconnection, and how the record was recovered ("incident-20260806",
      "backup-restore", "ledger-restore", or "needs-review" for sessions
@@ -1221,6 +1235,58 @@ const URLS: Record<Engine, string> = {
   hr: "/engines/hr.html",
   accounting: "/engines/accounting.html",
 };
+
+/* Injected into each engine iframe the moment it is ready (same origin, so
+ * the parent may wrap the frame's own localStorage).
+ *
+ * WHY: the engines keep the whole shared store in MEMORY and their save()
+ * writes that memory back wholesale. A save made an hour after the iframe
+ * loaded therefore used to overwrite every punch, account and edit the rest
+ * of the company had made in between — the single biggest source of "old
+ * information keeps coming back" and of clock-outs vanishing (two thirds of
+ * the production clock log carried a ledger-restore recovery mark from
+ * exactly this cycle). The wrapper rebases every engine save onto the text
+ * that is CURRENTLY stored, with the same three-way merge the sync layer
+ * uses (exposed by the parent as __larsaEngineRebase): base is the text the
+ * engine's memory was loaded from, local is the engine's save, remote is
+ * what storage holds now. getItem is hooked too, so whenever engine code
+ * re-reads the store (state=JSON.parse(localStorage.getItem(...))) the base
+ * moves forward with its memory.
+ *
+ * The engines themselves stay byte-for-byte unchanged — this wraps around
+ * them from outside, which is what keeps the legacy modules safe to leave
+ * alone. */
+const ENGINE_REBASE_SRC = `(function () {
+  if (window.__larsaRebaseInstalled) return;
+  window.__larsaRebaseInstalled = true;
+  var KEYS = ${JSON.stringify([...SYNCED_KEYS])};
+  var origin = {};
+  KEYS.forEach(function (key) {
+    try { origin[key] = window.localStorage.getItem(key); } catch (e) { origin[key] = null; }
+  });
+  var storage = window.localStorage;
+  var originalSet = storage.setItem.bind(storage);
+  var originalGet = storage.getItem.bind(storage);
+  window.localStorage.getItem = function (key) {
+    var value = originalGet(key);
+    if (KEYS.indexOf(key) >= 0) origin[key] = value;
+    return value;
+  };
+  window.localStorage.setItem = function (key, value) {
+    if (KEYS.indexOf(key) >= 0) {
+      try {
+        var current = originalGet(key);
+        var rebase = window.parent && window.parent.__larsaEngineRebase;
+        if (typeof rebase === "function" && current !== null && current !== value && current !== origin[key]) {
+          value = rebase(origin[key], String(value), current) || value;
+        }
+      } catch (e) { /* the engine's own copy still saves */ }
+      originalSet(key, value);
+      return;
+    }
+    originalSet(key, value);
+  };
+})();`;
 
 const EMBED_CSS: Record<Engine, string> = {
   staff: `
@@ -4434,6 +4500,21 @@ export default function Home() {
         localStorage.removeItem("larsaSupabaseBridgeV1");
       }
     } catch { /* engine stays local-only */ }
+    /* The rebase the engine-iframe wrapper (ENGINE_REBASE_SRC) calls on
+       every engine save: three-way merge of the engine's copy onto whatever
+       is stored NOW, so a stale wholesale write-back can no longer erase
+       what others wrote in the meantime. Exposed whether or not Supabase is
+       configured — the same hazard exists between the engines and the
+       native pages on a single machine. */
+    (window as Window & {
+      __larsaEngineRebase?: (baseText: string | null, nextText: string, currentText: string) => string;
+    }).__larsaEngineRebase = (baseText, nextText, currentText) => {
+      try {
+        return JSON.stringify(mergeStoreText(baseText, nextText, JSON.parse(currentText)));
+      } catch {
+        return nextText;
+      }
+    };
     const cleanup = initLarsaSync({
       onRemoteChange: () => {
         setStorageTick((value) => value + 1);
@@ -4476,7 +4557,12 @@ export default function Home() {
        initLarsaSync so all three wrappers of localStorage.setItem compose. */
     const cleanupLedger = initAttendanceLedger();
     const cleanupAccounts = initAccountLedger();
-    return () => { cleanupAccounts(); cleanupLedger(); cleanup(); };
+    return () => {
+      cleanupAccounts();
+      cleanupLedger();
+      cleanup();
+      delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
+    };
   }, [hydrated, refs]);
 
   useEffect(() => {
@@ -5986,7 +6072,24 @@ export default function Home() {
     if (loginMode === "email") {
       migrateEmailVerification();
       const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());      if (supabaseConfigured() && refreshed.email && (refreshed.emailVerified !== true || periodicDue)) {
+      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());
+      /* Whether this mailbox has EVER been proved is answered by the server
+         first: user_verification stamps every accepted code and is keyed to
+         the person's email, so it cannot be lost the way a flag inside the
+         shared staff document can. The blob's emailVerified used to be the
+         only witness, and every time a stale save reverted it the app
+         demanded a code at the very next sign-in — regardless of the
+         interval configured in Platform Settings. The flag stays as the
+         offline fallback, and is healed from the server verdict below so
+         the document converges back to the truth. */
+      const initialRequired = periodic
+        ? periodic.policy.enabled !== false && periodic.policy.initial_verification_required !== false
+        : true;
+      const initialProven = refreshed.emailVerified === true || Boolean(periodic?.lastVerifiedAt);
+      if (periodic?.lastVerifiedAt && refreshed.emailVerified !== true) {
+        persistEmailVerified(refreshed.id, true);
+      }
+      if (supabaseConfigured() && refreshed.email && ((initialRequired && !initialProven) || periodicDue)) {
         setVerifyError("");
         setVerifyInfo("Sending your verification code…");
         setVerifyBusy(true);
@@ -6040,7 +6143,7 @@ export default function Home() {
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin) } : { password: await hashPassword(enteredPass) }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(readStaffUsers().find((row) => row.id === user.id) || user, loginMode);
+    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin), pinChangedAt: serverNowIso() } : { password: await hashPassword(enteredPass), passwordChangedAt: serverNowIso() }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(readStaffUsers().find((row) => row.id === user.id) || user, loginMode);
   };
 
   const signOut = useCallback(() => {
@@ -6185,6 +6288,13 @@ export default function Home() {
             return;
           }
           ensureEmbeddedStyle(doc, engine);
+          /* Wrap the engine's own localStorage before anything can save:
+             every engine write is rebased onto the current stored text so a
+             stale in-memory copy can never erase newer work. See
+             ENGINE_REBASE_SRC. */
+          try {
+            (frame.contentWindow as (Window & { eval(code: string): unknown }) | null)?.eval(ENGINE_REBASE_SRC);
+          } catch { /* the engine still saves; the sync guard and repair_008 heal behind it */ }
           applyThemeToFrames(dark);
           const signedInUser = sessionUserRef.current;
           const signedInMethod = sessionMethodRef.current;
@@ -6769,12 +6879,23 @@ export default function Home() {
        used to write that wrong clock straight into the attendance record;
        serverNowIso() applies the measured skew (see lib/supabase/sync.ts). */
     const now = serverNowIso();
+    /* One truthful `active` flag per person. Punches only ever APPENDED, so
+       every past clock-in kept its active=true forever (69 stale flags were
+       live in production when this was written) and anything that rendered
+       from the flag showed people on the clock long after they left. The
+       punch that changes a person's state now also retires every stale flag
+       that state contradicts. */
+    (store.logs as ClockLog[]).forEach((log) => {
+      if (log.uid === user.id && log.active && (log.status === "In" || log.status === "Out")) {
+        log.active = false;
+      }
+    });
     // Same record shape the Timeclock engine writes, so both stay in step.
     store.logs.push({
       // uid + entropy so two people punching in the same millisecond on
       // different devices can never collide into one merged record.
       id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: mode, status,
-      time: now, active: status === "In", lastSeen: now,
+      time: now, active: status === "In", lastSeen: now, touchedAt: now,
       ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
@@ -6819,7 +6940,7 @@ export default function Home() {
     store.logs.push({
       id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: "Break",
       status: ending ? "Break End" : "Break Start",
-      time: now, active: false, lastSeen: now,
+      time: now, active: false, lastSeen: now, touchedAt: now,
       ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
@@ -6895,10 +7016,13 @@ export default function Home() {
     if (outLog) {
       /* This session's own clock-out, corrected in place: same record id,
          earlier time, the adjustment stamped beside any note it carried.
-         Nothing else in the store is touched. */
+         Nothing else in the store is touched. The recency stamp is what
+         keeps the trim final: a stale device still holding the longer
+         pre-trim copy now loses to this record everywhere. */
       outLog.time = nextOutIso;
       outLog.lastSeen = outLog.time;
       outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
+      outLog.touchedAt = serverNowIso();
     } else {
       /* An open (or abandoned) session: closing it counts as trimming to the
          chosen time. planTrim already proved the time sits before the
@@ -6908,9 +7032,10 @@ export default function Home() {
       logs.push({
         id: `l${uid}${Date.now()}${Math.random()}`, uid, type: inLog.type || "Office", status: "Out",
         time: nextOutIso, active: false,
-        lastSeen: nextOutIso, note: stamp, clockedBy: actor.name,
+        lastSeen: nextOutIso, note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
       });
       inLog.active = false;
+      inLog.touchedAt = serverNowIso();
     }
     /* The correction itself becomes part of the durable audit trail: who
        trimmed whose session, and both the before and after clock-outs. The
@@ -7151,15 +7276,17 @@ export default function Home() {
     inLog.time = new Date(inAt).toISOString();
     inLog.lastSeen = inLog.time;
     inLog.note = inLog.note ? `${inLog.note} · ${stamp}` : stamp;
+    inLog.touchedAt = serverNowIso();
     if (outLog && outAt !== null) {
       outLog.time = new Date(outAt).toISOString();
       outLog.lastSeen = outLog.time;
       outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
+      outLog.touchedAt = serverNowIso();
     } else if (!outLog && outAt !== null) {
       logs.push({
         id: `l${uid}${Date.now()}${Math.random()}`, uid, type: inLog.type || "Office", status: "Out",
         time: new Date(outAt).toISOString(), active: false,
-        lastSeen: new Date(outAt).toISOString(), note: stamp, clockedBy: actor.name,
+        lastSeen: new Date(outAt).toISOString(), note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
       });
       inLog.active = false;
     }
@@ -7209,7 +7336,7 @@ export default function Home() {
       (store.logs as ClockLog[]).push({
         id: `l${Date.now()}${position}`, uid, type: mode || "Office", status,
         time: when.toISOString(), active: false, lastSeen: when.toISOString(),
-        note: stamp, clockedBy: actor.name,
+        note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
       });
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
@@ -8488,16 +8615,28 @@ export default function Home() {
     const existing = (store.users as StaffUser[]).find((row) => row.id === target.id);
     if (!existing) { notify("That user could not be found."); return false; }
     if (existing.access === "Super Admin") { notify("The protected owner account cannot be deleted."); return false; }
-    store.users = (store.users as StaffUser[]).filter((row) => row.id !== target.id);
     /* The ONLY deliberate account removal in the app, so the only place a
-       tombstone is written. Both halves are needed: the local list stops this
-       device restoring the account from the ledger, and the server-side
-       tombstone stops every OTHER device doing so a moment later. Without
-       the second, a permanent delete would simply undo itself. */
+       tombstone is written. The server-side tombstone lands FIRST, before the
+       local save: the repair_008 healing trigger re-adds any account that
+       leaves the shared document without server-side evidence of deliberate
+       removal, so a save that raced ahead of its own tombstone would simply
+       be healed back. If the tombstone cannot be recorded, the delete is
+       refused rather than left half-done — the failure direction this app
+       always chooses is "the account survives". */
+    const recorded = supabaseConfigured()
+      ? await tombstoneAccount(target.id, actor.email || actor.name || actor.id,
+        `Permanently deleted by ${actor.name || actor.email || actor.id}`)
+      : true;
+    if (!recorded) {
+      notify("The deletion could not be recorded on the server. Check the connection and try again — nothing was changed.");
+      return false;
+    }
+    store.users = (store.users as StaffUser[]).filter((row) => row.id !== target.id);
+    /* The local list stops THIS device restoring the account from the ledger
+       before the tombstone has been observed. */
     markAccountsRemoved(store, [target.id]);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    void tombstoneAccount(target.id, actor.email || actor.name || actor.id,
-      `Permanently deleted by ${actor.name || actor.email || actor.id}`);
+    pushSyncedKeyNow("larsaStaffV8");
     logAccountEvent(actor, "account.permanent_delete", target.id, target.name, {
       snapshot: { id: existing.id, name: existing.name, email: (existing.email || "").trim().toLowerCase(), access: existing.access || "", offboardedAt: existing.offboardedAt || null, recycledAt: existing.recycledAt || null },
     });
@@ -8947,6 +9086,13 @@ export default function Home() {
     (["email", "phone", "location", "photo", "password", "pin", "notifyPrefs"] as const).forEach((key) => {
       if (patch[key] !== undefined) (safe as Record<string, unknown>)[key] = patch[key];
     });
+    /* The change stamps travel WITH their secrets — and only with them. The
+       repair_008 database guard refuses a different hash whose stamp is not
+       strictly newer, so a password change that arrived without its stamp
+       would be healed straight back to the old hash: the change would look
+       saved here and quietly not be. (Found by the durability battery.) */
+    if (safe.password !== undefined && patch.passwordChangedAt) safe.passwordChangedAt = patch.passwordChangedAt;
+    if (safe.pin !== undefined && patch.pinChangedAt) safe.pinChangedAt = patch.pinChangedAt;
     if (safe.email) {
       const taken = store.users.some((row: StaffUser) =>
         row.id !== actor.id && row.email?.trim().toLowerCase() === String(safe.email).trim().toLowerCase());
@@ -14347,7 +14493,7 @@ function AccessCenter({
       permissions: staffPermissionsForUser(draft),
     };
     const previousUser = users.find((user) => user.id === draft.id);
-    const securedUser: StaffUser = { ...nextUser, password: !nextUser.password ? "" : isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password)), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin) }; if (saveUser(securedUser, isNew)) {
+    const securedUser: StaffUser = { ...nextUser, password: !nextUser.password ? "" : isHashed(nextUser.password) ? nextUser.password : await hashPassword(String(nextUser.password)), pin: !pin ? "" : pinAlreadyStored ? pin : await hashPin(pin), ...(!nextUser.password || isHashed(nextUser.password) ? {} : { passwordChangedAt: serverNowIso() }), ...(!pin || pinAlreadyStored ? {} : { pinChangedAt: serverNowIso() }) }; if (saveUser(securedUser, isNew)) {
       logAccountChanges(currentUser, previousUser, securedUser, isNew);
       if (skipInitialVerify && currentUser && currentUser.email) { void (async () => { const client = getSupabaseClient(); if (!client) return; try { await client.functions.invoke("auth-code", { body: { op: "send", email: currentUser.email, purpose: "verify", name: currentUser.name } }); const code = await dialog.prompt("Skipping email verification is a platform change. Enter the code just sent to " + currentUser.email + " to confirm."); if (!code) { setFormError("Not confirmed - " + nextUser.name + " will verify their own email at first sign-in."); return; } const { data } = await client.functions.invoke("auth-policy", { body: { op: "approveUser", actorEmail: currentUser.email, code: code.trim(), userId: nextUser.id, userEmail: nextUser.email, role: nextUser.access } }); if (!data || !(data as { ok?: boolean }).ok) { setFormError("That code was not accepted - " + nextUser.name + " will verify their own email at first sign-in."); } } catch { setFormError("Could not confirm the skip. " + nextUser.name + " will verify their own email at first sign-in."); } })(); } setSkipInitialVerify(false);      setSelectedId(nextUser.id);
       setDraft(securedUser);
@@ -16662,7 +16808,7 @@ function MySettings({
   const [guardCode, setGuardCode] = useState("");
   const [guardBusy, setGuardBusy] = useState(false);
 
-  const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => { if (patch.password) patch = { ...patch, password: await hashPassword(patch.password) }; if (patch.pin) patch = { ...patch, pin: await hashPin(patch.pin) };
+  const guardedSave = async (patch: Partial<StaffUser>, label: string, done: () => void) => { if (patch.password) patch = { ...patch, password: await hashPassword(patch.password), passwordChangedAt: serverNowIso() }; if (patch.pin) patch = { ...patch, pin: await hashPin(patch.pin), pinChangedAt: serverNowIso() };
     const address = user?.email?.trim();
     if (!supabaseConfigured() || !address || mayManageAccess) {
       if (saveProfile(patch)) { setMessage(`${label} updated.`); done(); }
