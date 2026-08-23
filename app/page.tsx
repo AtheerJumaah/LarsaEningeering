@@ -4478,6 +4478,11 @@ export default function Home() {
   /* One pending in-place engine refresh per synced store (see
      onRemoteChange below), so bursts of remote saves repaint once. */
   const remoteRefreshTimers = useRef<Partial<Record<string, number>>>({});
+  /* The exact store text each engine was last refreshed with. A push's own
+     server echo (jsonb re-serialisation) and save/echo cycles arrive as
+     "changes" whose text this device has already handled — skipping them
+     here is what stops refresh feedback loops. */
+  const remoteRefreshLastText = useRef<Partial<Record<string, string | null>>>({});
   useEffect(() => {
     if (!hydrated) return;
     console.log("[larsa-sync] effect fired, hydrated =", hydrated);
@@ -4528,6 +4533,9 @@ export default function Home() {
         if (pending !== undefined) window.clearTimeout(pending);
         timers[key] = window.setTimeout(() => {
           delete timers[key];
+          const nowText = (() => { try { return localStorage.getItem(key); } catch { return null; } })();
+          if (nowText !== null && nowText === remoteRefreshLastText.current[key]) return;
+          remoteRefreshLastText.current[key] = nowText;
           try {
             if (key === "larsaStaffV8") {
               staffRef.current?.contentWindow?.eval(`
@@ -4546,6 +4554,12 @@ export default function Home() {
                   for(var i=0;i<localStorage.length;i+=1){var k=localStorage.key(i);if(k&&k.lastIndexOf("_v34_clean")===k.length-10){storeKey=k;break}}
                   if(!storeKey)return;
                   try{ state=JSON.parse(localStorage.getItem(storeKey))||state; }catch(e){ return; }
+                  /* When the cloud accounting layer is live, the entry
+                     ledgers and project decorations in memory are DERIVED
+                     from the acct_* tables — re-project them over the
+                     re-read blob or the charts flip to zero until the next
+                     cloud event. */
+                  try{ if(window.ACCT&&window.ACCT.on&&typeof window.ACCT.applyMirrors==="function")window.ACCT.applyMirrors(); }catch(e){ /* mirrors reapply on the next cloud event */ }
                   if(typeof render==="function")render();
                 })();
               `);
