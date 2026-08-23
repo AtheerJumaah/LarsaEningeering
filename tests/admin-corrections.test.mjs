@@ -18,7 +18,7 @@ test("Corrections is its own grantable item under Administration, closed until t
   assert.match(page, /"admin-corrections": \["view", "edit", "delete"\]/);
   // Listed in the Administration group and routed to the admin channel.
   assert.match(page, /CORRECTIONS_ITEM,\s*\n\s*\{\s*\n\s*id: "platform-settings"/);
-  assert.match(page, /item\.id === "admin-corrections"\s*\n\s*\|\| \["staff-people", "staff-rules", "staff-backup"\]/);
+  assert.match(page, /item\.id === "admin-corrections"\s*\n\s*\|\| \["staff-rules", "staff-backup"\]/);
 });
 
 test("every correction handler gates on its own permission before touching anything", () => {
