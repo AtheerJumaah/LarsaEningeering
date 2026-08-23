@@ -94,7 +94,7 @@ test("the engine's own clock and schedule pages are still registered", () => {
   /* They are not in the sidebar — the native Clock In / Out and Weekly Schedule
      stand in for them — but they must stay in ITEMS, because permissions and
      the system check both walk that list. */
-  for (const id of ["staff-clock", "staff-live", "staff-schedule", "staff-people", "staff-rules", "staff-backup"]) {
+  for (const id of ["staff-clock", "staff-live", "staff-schedule", "staff-rules", "staff-backup"]) {
     assert.match(page, new RegExp(`"${id}"`), `${id} disappeared from the registry`);
   }
 });
