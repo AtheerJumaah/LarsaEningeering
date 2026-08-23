@@ -260,19 +260,29 @@ export async function reconcileStoreFromLedger(): Promise<ReconcileResult> {
     restored++;
   });
 
-  if (restored) {
-    /* Recompute which sessions are open: for each uid, an In newer than any
-       later Out is an open shift again. Keeps restored open sessions live
-       instead of freezing them as closed. */
-    const logs = store.logs!;
-    logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-    const openByUid = new Map<string, ClockLogLike | null>();
-    logs.forEach((log) => {
-      if (log.status === "In") openByUid.set(String(log.uid), log);
-      if (log.status === "Out") openByUid.set(String(log.uid), null);
-      if (log.status === "In" || log.status === "Out") log.active = false;
-    });
-    openByUid.forEach((log) => { if (log) log.active = true; });
+  /* Recompute which sessions are open: for each uid, an In newer than any
+     later Out is an open shift. This used to run only when something was
+     restored, so the denormalized `active` flags drifted for everyone else —
+     69 stale flags were live in production, each one somebody who looked
+     clocked in long after leaving. It now self-heals on every reconcile,
+     and the store is only re-written when a flag (or a restore) actually
+     changed. */
+  const logs = store.logs!;
+  logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+  const openByUid = new Map<string, ClockLogLike | null>();
+  logs.forEach((log) => {
+    if (log.status === "In") openByUid.set(String(log.uid), log);
+    if (log.status === "Out") openByUid.set(String(log.uid), null);
+  });
+  const openLogs = new Set<ClockLogLike>();
+  openByUid.forEach((log) => { if (log) openLogs.add(log); });
+  let flagsChanged = false;
+  logs.forEach((log) => {
+    if (log.status !== "In" && log.status !== "Out") return;
+    const next = openLogs.has(log);
+    if (Boolean(log.active) !== next) { log.active = next; flagsChanged = true; }
+  });
+  if (restored || flagsChanged) {
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
   }
   return { restored };
