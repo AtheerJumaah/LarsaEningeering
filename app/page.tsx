@@ -4475,6 +4475,9 @@ export default function Home() {
      declared, so the ledger-restore toast goes through a ref that the
      declaration below fills in. */
   const notifyRef = useRef<(message: string) => void>(() => {});
+  /* One pending in-place engine refresh per synced store (see
+     onRemoteChange below), so bursts of remote saves repaint once. */
+  const remoteRefreshTimers = useRef<Partial<Record<string, number>>>({});
   useEffect(() => {
     if (!hydrated) return;
     console.log("[larsa-sync] effect fired, hydrated =", hydrated);
@@ -4509,11 +4512,46 @@ export default function Home() {
       }
     };
     const cleanup = initLarsaSync({
-      onRemoteChange: () => {
+      onRemoteChange: (key) => {
         setStorageTick((value) => value + 1);
-        (Object.keys(refs) as Engine[]).forEach((engine) => {
-          try { refs[engine].current?.contentWindow?.location.reload(); } catch { /* iframe not ready yet */ }
-        });
+        /* Refresh the affected engine IN PLACE instead of reloading its
+           iframe. The old blanket iframe reload blanked all three
+           engines every time any other device saved anything — including
+           the per-key catch-up that runs each time the app regains focus —
+           which is the "pages keep blinking" report. Every engine exposes
+           render() over an in-memory copy of exactly one synced store, so
+           only the store that actually changed is re-read and re-rendered:
+           no navigation, no white flash, no lost scroll or half-typed form.
+           Coalesced per store so a burst of remote saves repaints once. */
+        const timers = remoteRefreshTimers.current;
+        const pending = timers[key];
+        if (pending !== undefined) window.clearTimeout(pending);
+        timers[key] = window.setTimeout(() => {
+          delete timers[key];
+          try {
+            if (key === "larsaStaffV8") {
+              staffRef.current?.contentWindow?.eval(`
+                state=JSON.parse(localStorage.getItem("larsaStaffV8"))||state;
+                if(currentUser)currentUser=state.users.find(function(user){return user.id===currentUser.id})||currentUser;
+                if(typeof render==="function"&&currentUser)render();
+              `);
+            } else if (key === "larsa_hr_visual_counts_v5") {
+              hrRef.current?.contentWindow?.eval(`
+                if(typeof loadState==="function"){state=loadState();if(typeof render==="function")render();}
+              `);
+            } else {
+              accountingRef.current?.contentWindow?.eval(`
+                (function(){
+                  var storeKey="";
+                  for(var i=0;i<localStorage.length;i+=1){var k=localStorage.key(i);if(k&&k.lastIndexOf("_v34_clean")===k.length-10){storeKey=k;break}}
+                  if(!storeKey)return;
+                  try{ state=JSON.parse(localStorage.getItem(storeKey))||state; }catch(e){ return; }
+                  if(typeof render==="function")render();
+                })();
+              `);
+            }
+          } catch { /* engine still booting; it reads the fresh store on its own first render */ }
+        }, 350);
       },
       onStatusChange: (status) => {
         /* Once the shared blob has been pulled, restore anything the durable
@@ -4554,6 +4592,12 @@ export default function Home() {
       cleanupAccounts();
       cleanupLedger();
       cleanup();
+      const timers = remoteRefreshTimers.current;
+      Object.keys(timers).forEach((key) => {
+        const pending = timers[key];
+        if (pending !== undefined) window.clearTimeout(pending);
+        delete timers[key];
+      });
       delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
     };
   }, [hydrated, refs]);
