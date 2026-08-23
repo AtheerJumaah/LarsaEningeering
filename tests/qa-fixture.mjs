@@ -233,7 +233,7 @@ export function qaSeedShell(cfg) {
     approvals,
     schedule: { "zz-qa-emp": { Monday: [{ start: "09:00", end: "17:00", code: "M", instance: "zz-qa-shift1" }] } },
     weekLocks: { [lastWeek]: { week: lastWeek, lockedBy: "QA Super Admin", lockedAt: iso(2026, 7, 27, 8, 0), note: "QA locked week" } },
-    flowConfig: { "zz-qa-emp": { Leave: ["zz-qa-mgr"], Schedule: ["zz-qa-mgr"], Performance: ["zz-qa-mgr"] } },
+    flowConfig: { "zz-qa-emp": { Leave: ["zz-qa-mgr"], Schedule: ["zz-qa-mgr"], Points: ["zz-qa-mgr"] } },
   };
   localStorage.setItem("larsaStaffV8", JSON.stringify(store));
   localStorage.setItem("larsaStaffGrowthV1", JSON.stringify({ version: 1, pointTargets: { "zz-qa-emp": 50 }, development: [] }));
