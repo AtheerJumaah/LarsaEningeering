@@ -71,7 +71,7 @@ export function qaSeedShell(cfg) {
   const PROFILES = {
     "Super Admin": profile("Super Admin", "company", []),
     Admin: profile("Admin", "company", [
-      ["access", FULL], ["staff-people", FULL], ["staff-rules", FULL], ["staff-backup", FULL],
+      ["access", FULL], ["staff-rules", FULL], ["staff-backup", FULL],
       ["admin-notifications", FULL], ["data", FULL], ["staff-dashboard", FULL],
       ["staff-approvals", ["view", "approve", "manage"]], ["performance-center", VE],
       ["staff-development", FULL], ["performance-history", VE], ["hr-dashboard", VE],
@@ -91,7 +91,7 @@ export function qaSeedShell(cfg) {
     ]),
     "Admin HR": profile("Admin HR", "department", [
       ["hr-dashboard", FULL], ["hr-people", FULL], ["hr-matrix", FULL], ["hr-reports", FULL],
-      ["access", FULL], ["staff-people", FULL], ["staff-rules", FULL], ["admin-notifications", FULL],
+      ["access", FULL], ["staff-rules", FULL], ["admin-notifications", FULL],
       ["staff-approvals", ["view", "approve", "manage"]], ["staff-dashboard", FULL],
       ["staff-clock", BASIC], ["staff-live", FULL], ["staff-schedule", ["view", "add", "edit", "approve"]],
       ["staff-performance", ["view", "approve", "export"]], ["performance-center", VE],
