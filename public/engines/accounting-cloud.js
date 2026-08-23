@@ -522,6 +522,12 @@
       .catch(function (e) { console.warn("[acct-cloud] financials:", e); });
   }
   ACCT.reloadFinancials = loadFinancials;
+  /* Exposed so the parent app can re-project the cloud ledgers into the
+     in-memory state after it re-reads the shared blob on a remote change —
+     replacing `state` wholesale would otherwise wipe these derived rows
+     until the next cloud event, which showed as chart bars flipping
+     between real values and zero. */
+  ACCT.applyMirrors = applyMirrors;
 
   function finFor(pid) { return FIN.byProject[pid] || null; }
   /* The engine holds money in USD internally. Each *_usd figure is the
