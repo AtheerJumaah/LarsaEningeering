@@ -85,11 +85,17 @@ test("an administrator can still act, and it is written down as an override", ()
 });
 
 // ------------------------------------------------------- existing requests
-test("a request with no chain keeps the old behaviour", () => {
-  /* Every request created before flows existed has no flow. Enforcing a chain
-     that is not there would strand all of them as undecidable. */
+test("a request with no chain stays decidable — by rank, not by anybody", () => {
+  /* Every request created before flows existed has no flow, and chains are
+     now optional besides. Chainless requests must stay decidable (an approver
+     at or above the requester's rank, Super Admin always), and the screen
+     mirrors that rule instead of offering everyone a button. */
   assert.match(page, /if \(!flow\.length\) return \{ holder: null, step: 0, total: 0 \};/);
-  assert.match(page, /const mine = !holder \|\| holder === viewer\?\.id;/);
+  assert.match(page, /const mine = holder\s*\n\s*\? holder === viewer\?\.id\s*\n\s*: Boolean\(viewer && \(!person \|\| rankOf\(viewer\) >= rankOf\(person\)\)\);/);
+  // And the handler itself refuses a decision from below the requester's rank.
+  const decideBody = page.slice(page.indexOf("const decideRequest = useCallback"), page.indexOf("const saveGrowthStore"));
+  assert.match(decideBody, /if \(!waitingOn && !isAdmin\(actor\)\) \{/);
+  assert.match(decideBody, /if \(requester && rankOf\(actor\) < rankOf\(requester\)\) \{/);
 });
 
 test("a corrupt step index cannot point outside the chain", () => {
@@ -120,8 +126,9 @@ test("late points and attendance corrections skip the chain: one authorized revi
   // …and notify exactly the people granted approve access, never a chain.
   const reviewerGate = /hasItemPermission\((?:entry|row), approvalsGate, "approve"\)/g;
   assert.ok((page.match(reviewerGate) || []).length >= 2, "reviewers must be selected by the approve grant");
-  // Leave and schedule requests still read the configured chain.
-  assert.match(page, /const configured = flowConfig\[actor\.id\]\?\.\[draft\.type\];/);
+  // Leave and schedule requests still read the configured chain — through
+  // chainFor, the one reader that also understands the legacy Points key.
+  assert.match(page, /const configured = chainFor\(store, actor\.id, draft\.type\);/);
 });
 
 test("a request is only announced to the approver it is actually with", () => {
@@ -131,8 +138,11 @@ test("a request is only announced to the approver it is actually with", () => {
      may decide. The later steps are told when the request reaches them, which
      decideRequest already does when it advances. */
   const submit = page.slice(page.indexOf("const submitRequest = useCallback"), page.indexOf("Attendance corrections: a forgotten clock"));
-  assert.match(submit, /const approvers = \(store\.users as StaffUser\[\]\)\.filter\(\(row\) => row\.id === flow\[0\]\);/);
+  assert.match(submit, /const approvers = flow\.length\s*\n\s*\? \(store\.users as StaffUser\[\]\)\.filter\(\(row\) => row\.id === flow\[0\]\)\s*\n\s*: eligible;/);
   assert.doesNotMatch(submit, /filter\(\(row\) => flow\.includes\(row\.id\)\)/);
+  // The forced default chain is gone: no manager fallback, no hardwired id.
+  assert.doesNotMatch(submit, /\[managerId \|\| "u1"\]/);
+  assert.doesNotMatch(submit, /"u1"/);
   // The hand-off to the next approver still happens inside the decision.
   assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[step \+ 1\]\);/);
 });
@@ -145,7 +155,7 @@ test('"need attention" counts only what is genuinely waiting on this person', ()
      holds it, nobody else. */
   const summary = page.slice(page.indexOf("const queue = !mayApprove"), page.indexOf("const queue = !mayApprove") + 700);
   assert.match(summary, /if \(request\.status !== "Pending" \|\| request\.uid === viewer\.id\) return false;/);
-  assert.match(summary, /if \(!chain\.length\) return true;/);
+  assert.match(summary, /if \(!chain\.length\) \{\s*\n\s*const requester = users\.find\(\(user\) => user\.id === request\.uid\);\s*\n\s*return !requester \|\| rankOf\(viewer\) >= rankOf\(requester\);/);
   assert.match(summary, /return chain\[at\] === viewer\.id;/);
   assert.match(page, /const mayApprove = Boolean\(approvalsGate && hasItemPermission\(viewer, approvalsGate, "approve"\)\);/);
   // The old "anywhere in the chain" test is gone for good.
