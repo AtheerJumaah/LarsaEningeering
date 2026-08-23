@@ -1564,6 +1564,36 @@ function isAdmin(user: StaffUser) {
   return user.access === "Super Admin";
 }
 
+/* Seniority, for routing approvals. ROLE_PRESETS is already written in rank
+   order -- it is the order every role picker in the app shows -- so the ladder
+   is read from it instead of being maintained twice. Bigger is more senior.
+   An access value the list does not know ranks lowest, which fails safe: that
+   account can decide nothing above itself, and anybody may decide for it.
+   The engine keeps a copy of this ladder (RANK_LADDER in timeclock.html);
+   the two must list the same roles in the same order. */
+function rankOf(user: Pick<StaffUser, "access"> | null | undefined): number {
+  const at = ROLE_PRESETS.indexOf(String(user?.access || ""));
+  return at < 0 ? 0 : ROLE_PRESETS.length - at;
+}
+
+/* One person's configured approval chain for one request type, read from the
+   same flowConfig both the native screens and the Timeclock engine write. A
+   chain is OPTIONAL -- an empty answer means requests of that type travel
+   chainless, decided by any authorized approver at or above the requester's
+   rank. Points chains briefly lived under the tab's old name, "Performance",
+   so that key is still read as a fallback: records must keep meaning what
+   they meant when they were written. */
+function chainFor(
+  store: Record<string, unknown> | null,
+  employeeId: string,
+  type: string,
+): string[] {
+  const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
+  const own = flowConfig[employeeId] || {};
+  const steps = own[type] || (type === "Points" ? own.Performance : undefined) || [];
+  return Array.isArray(steps) ? steps.filter(Boolean) : [];
+}
+
 // Maps detailed area/action grants onto the capability names the Timeclock
 // engine understands. Shared so the live check and the preset fallback agree.
 function mapStaffPermissions(can: (itemId: string, action: PermissionAction) => boolean) {
@@ -2442,7 +2472,10 @@ function buildHomeSummary(
   const queue = !mayApprove ? 0 : approvals.filter((request) => {
     if (request.status !== "Pending" || request.uid === viewer.id) return false;
     const chain = Array.isArray(request.flow) ? request.flow.filter(Boolean) : [];
-    if (!chain.length) return true;
+    if (!chain.length) {
+      const requester = users.find((user) => user.id === request.uid);
+      return !requester || rankOf(viewer) >= rankOf(requester);
+    }
     const at = Math.max(0, Math.min(Number(request.step) || 0, chain.length - 1));
     return chain[at] === viewer.id;
   }).length;
@@ -6828,13 +6861,15 @@ export default function Home() {
       if (!Array.isArray(store.approvals)) store.approvals = [];
       /* Late points do NOT walk an approval chain. A points figure is a
          records question, not a leave question: it goes straight to the
-         reviewers — anyone GRANTED approve access on Leave & Requests — and a
-         single decision settles it. An empty flow is exactly the single-step
-         path decideRequest has always enforced: whoever may approve, may
-         approve, and the first decision is final. */
+         reviewers — anyone GRANTED approve access on Leave & Requests, at or
+         above the requester's rank — and a single decision settles it. An
+         empty flow is exactly the single-step path decideRequest enforces for
+         chainless requests: whoever may approve at that rank, may approve,
+         and the first decision is final. */
       const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
       const reviewers = (store.users as StaffUser[]).filter((entry) =>
-        entry.enabled !== false && entry.id !== user.id && approvalsGate && hasItemPermission(entry, approvalsGate, "approve"));
+        entry.enabled !== false && entry.id !== user.id && approvalsGate && hasItemPermission(entry, approvalsGate, "approve")
+        && rankOf(entry) >= rankOf(user));
       const flow: string[] = [];
       const bounds = weekBounds(week);
       const record: LeaveRequest = {
@@ -6869,6 +6904,29 @@ export default function Home() {
       return true;
     }
 
+    /* Who reviews this entry: the person's Points chain if one is set,
+       otherwise any Performance Review approve-holder at or above their rank.
+       At the very top of the ladder that set can be empty -- then a submitted
+       entry approves itself on the spot and says so, because "waiting for a
+       reviewer who cannot exist" is not a state. Entries are decided one by
+       one as they are added, so daily, weekly, or ad-hoc submissions all
+       travel the same way. */
+    const roster = store && Array.isArray(store.users) ? store.users as StaffUser[] : null;
+    const pointsChain = chainFor(store, user.id, "Points");
+    const deciders = !roster ? [] : pointsChain.length
+      ? roster.filter((entry) => pointsChain.includes(entry.id))
+      : roster.filter((entry) =>
+        entry.enabled !== false && entry.offboarded !== true && entry.id !== user.id
+        && hasItemPermission(entry, PERFORMANCE_REVIEW_ITEM, "approve") && rankOf(entry) >= rankOf(user));
+    const autoApproved = submit && roster !== null && !pointsChain.length && !deciders.length;
+    const finalRow = autoApproved ? {
+      ...row,
+      Status: "Approved",
+      "Approved Points": Math.max(0, finiteNumber(row["Submitted Points"])),
+      "Reviewed By": `${user.name} (auto — top of the ladder)`,
+      "Reviewed At": new Date().toISOString(),
+    } : row;
+
     try {
       win.eval(`
         (function(){
@@ -6878,14 +6936,24 @@ export default function Home() {
              everything saved since -- including the week lock that was just
              checked. So re-read first, then add. */
           try{ state=JSON.parse(localStorage.getItem("larsaStaffV8"))||state; }catch(e){ /* keep the loaded state */ }
-          var row=${JSON.stringify(row)};
+          var row=${JSON.stringify(finalRow)};
           if(!Array.isArray(state.performance))state.performance=[];
           state.performance.unshift(row);
           if(typeof save==="function")save();
-          if(${submit ? "true" : "false"}&&typeof submitPerformance==="function")submitPerformance();
+          if(${submit && !autoApproved ? "true" : "false"}&&typeof submitPerformance==="function")submitPerformance();
         })();
       `);
-      notify(submit ? "Your points were submitted for approval." : "Your points were saved as a draft.");
+      if (submit && !autoApproved && deciders.length) {
+        raiseNotification({
+          event: "points.submitted",
+          title: `${user.name} submitted points to review`,
+          body: `${row["Job Number"] || "Entry"} · ${row["Work Category"]} · ${row["Submitted Points"]} points · week ${week}`,
+          itemId: "performance-center", fromName: user.name, recipients: deciders,
+        });
+      }
+      notify(autoApproved
+        ? "Points recorded and approved — nobody outranks your account, so there is no reviewer to wait for."
+        : submit ? "Your points were submitted for approval." : "Your points were saved as a draft.");
       return true;
     } catch {
       notify("The performance area is still loading. Please try again.");
@@ -7207,7 +7275,13 @@ export default function Home() {
      flowConfig the Timeclock engine's own setup card writes, so the two views
      can never disagree; requests already in flight keep the chain they were
      raised with, which is the only honest thing to do with a decision that is
-     already part-made (Corrections can reroute an individual one). */
+     already part-made (Corrections can reroute an individual one).
+
+     A chain is OPTIONAL. Saving an empty one deletes it rather than refusing:
+     "no chain" is a legitimate standing answer, and it means requests travel
+     to any authorized approver at or above the person's rank — approving
+     themselves automatically at the very top of the ladder, where that
+     audience is empty. */
   const saveApprovalFlow = useCallback((employeeId: string, type: string, steps: string[]) => {
     const actor = sessionUserRef.current;
     const item = ITEMS.find((row) => row.id === "hr-approval-flow");
@@ -7218,26 +7292,40 @@ export default function Home() {
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.users)) { notify("The staff directory is still loading."); return false; }
     const people = store.users as StaffUser[];
-    if (!people.some((row) => row.id === employeeId)) { notify("Choose an employee."); return false; }
+    const employee = people.find((row) => row.id === employeeId);
+    if (!employee) { notify("Choose an employee."); return false; }
     /* An approver has to be somebody who can actually act: a real, enabled
-       account, never the requester themselves, and never the same person
-       twice — a chain that asks one person twice is a chain with a step that
-       can never be reached. */
+       account, never the requester themselves, never the same person twice —
+       a chain that asks one person twice has a step that can never be
+       reached — and never somebody the requester outranks: a chain that
+       routes a senior person's request downhill is the thing the rank rule
+       exists to prevent. */
     const clean = steps
       .filter(Boolean)
       .filter((id, at, all) => all.indexOf(id) === at)
       .filter((id) => id !== employeeId)
-      .filter((id) => people.some((row) => row.id === id && row.enabled !== false && row.offboarded !== true))
+      .filter((id) => {
+        const row = people.find((entry) => entry.id === id);
+        return Boolean(row && row.enabled !== false && row.offboarded !== true && rankOf(row) >= rankOf(employee));
+      })
       .slice(0, 3);
-    if (!clean.length) { notify("An approval flow needs at least one approver."); return false; }
     const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
-    flowConfig[employeeId] = { ...(flowConfig[employeeId] || {}), [type]: clean };
+    const own = { ...(flowConfig[employeeId] || {}) };
+    if (clean.length) own[type] = clean;
+    else delete own[type];
+    /* Points chains briefly lived under the tab's old name. Whether saving or
+       clearing, the record is settled under the one current key so the legacy
+       fallback in chainFor can never resurrect a cleared chain. */
+    if (type === "Points") delete own.Performance;
+    flowConfig[employeeId] = own;
     store.flowConfig = flowConfig;
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     const names = clean.map((id) => people.find((row) => row.id === id)?.name || id);
-    notify(`${type} approvals for ${people.find((row) => row.id === employeeId)?.name || "this person"}: ${names.join(" → ")}`);
+    notify(clean.length
+      ? `${type} approvals for ${employee.name}: ${names.join(" → ")}`
+      : `${employee.name} has no ${type} chain now — their requests go to approvers at or above their rank.`);
     return true;
   }, [notify, refreshStaffEngine]);
 
@@ -7653,12 +7741,25 @@ export default function Home() {
     if (!draft.from || !draft.to) { notify("Choose a start and end date."); return false; }
     if (draft.to < draft.from) { notify("The end date cannot be before the start date."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
-    // Route to the configured approvers, falling back to this person's manager.
-    const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
-    const configured = flowConfig[actor.id]?.[draft.type];
-    const managerId = (store.users as StaffUser[])
-      .find((row) => row.name && actor.manager && row.name.toLowerCase() === actor.manager.toLowerCase())?.id;
-    const flow = configured?.length ? configured : [managerId || "u1"];
+    /* Route to the configured approvers, when a chain is set. A chain is
+       OPTIONAL: without one the request travels chainless, open to any
+       Leave & Requests approve-holder AT OR ABOVE the requester's rank — the
+       rule decideRequest enforces. The old fallback here ("no chain means
+       your manager, or failing that one hardwired account") forced a chain
+       onto everybody and could route a senior person's request to somebody
+       junior, which is backwards. And when nobody at all outranks the
+       requester — the top of the ladder — the request approves itself on the
+       spot and says so, because a request that can never be decided is not a
+       request. */
+    const configured = chainFor(store, actor.id, draft.type);
+    const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+    const eligible = (store.users as StaffUser[]).filter((row) =>
+      row.enabled !== false && row.offboarded !== true && row.id !== actor.id
+      && approvalsGate && hasItemPermission(row, approvalsGate, "approve")
+      && rankOf(row) >= rankOf(actor));
+    const flow = configured.length ? configured : [];
+    const autoApproved = !flow.length && !eligible.length;
+    const stamp = new Date().toISOString();
     const record: LeaveRequest = {
       id: `r${Date.now()}`,
       type: draft.type,
@@ -7668,29 +7769,42 @@ export default function Home() {
       from: draft.from,
       to: draft.to,
       reason: draft.reason.trim() || `${draft.type} request`,
-      status: "Pending",
+      status: autoApproved ? "Approved" : "Pending",
       flow,
       step: 0,
-      history: [],
-      createdAt: new Date().toISOString(),
+      history: autoApproved ? [{
+        by: "Larsa Control",
+        action: "Approved",
+        at: stamp,
+        note: "Auto-approved — nobody outranks this account, so there is no one to send it to.",
+      }] : [],
+      createdAt: stamp,
+      ...(autoApproved ? { decidedBy: "Larsa Control", decidedAt: stamp } : {}),
     };
     store.approvals.unshift(record);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    /* Only the approver it is actually WITH is told — the first step of the
-       chain. Telling everybody in the chain at once meant the second and third
-       approvers were asked to act on something that was not theirs yet, and
-       they cannot act on it: decideRequest refuses anyone but the current
-       holder. Each later approver is notified by decideRequest at the moment
-       the request reaches them. */
-    const approvers = (store.users as StaffUser[]).filter((row) => row.id === flow[0]);
-    raiseNotification({
-      event: "leave.requested",
-      title: `${draft.type} request from ${actor.name}`,
-      body: `${draft.requestType} · ${draft.from} to ${draft.to} · ${requestDays(record)} day(s)`,
-      itemId: "my-requests", fromName: actor.name, recipients: approvers,
-    });
+    /* Only whoever can actually act NOW is told — the first step of a
+       configured chain, or, chainless, the rank-eligible approve-holders any
+       one of whom may settle it. Telling later chain steps at once meant
+       asking them to act on something decideRequest would refuse them; each
+       later approver is notified by decideRequest when the request reaches
+       them. An auto-approved request notifies nobody: there is nothing for
+       anybody to do. */
+    if (!autoApproved) {
+      const approvers = flow.length
+        ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
+        : eligible;
+      raiseNotification({
+        event: "leave.requested",
+        title: `${draft.type} request from ${actor.name}`,
+        body: `${draft.requestType} · ${draft.from} to ${draft.to} · ${requestDays(record)} day(s)`,
+        itemId: "my-requests", fromName: actor.name, recipients: approvers,
+      });
+    }
     setStorageTick((value) => value + 1);
-    notify(`${draft.type} request submitted for approval.`);
+    notify(autoApproved
+      ? `${draft.type} request recorded and auto-approved — nobody outranks your account.`
+      : `${draft.type} request submitted for approval.`);
     return true;
   }, [notify]);
 
@@ -7712,11 +7826,13 @@ export default function Home() {
     if (!Array.isArray(store.approvals)) store.approvals = [];
     /* Attendance corrections do NOT walk an approval chain either. A wrong
        clock-in is a records question: it goes straight to the reviewers —
-       anyone GRANTED approve access on Leave & Requests — and one decision
-       settles and materialises it. Same single-step path as late points. */
+       anyone GRANTED approve access on Leave & Requests, at or above the
+       requester's rank — and one decision settles and materialises it. Same
+       single-step path as late points. */
     const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
     const approvers = (store.users as StaffUser[]).filter((row) =>
-      row.enabled !== false && row.id !== actor.id && approvalsGate && hasItemPermission(row, approvalsGate, "approve"));
+      row.enabled !== false && row.id !== actor.id && approvalsGate && hasItemPermission(row, approvalsGate, "approve")
+      && rankOf(row) >= rankOf(actor));
     const record: LeaveRequest = {
       id: `r${Date.now()}`,
       type: draft.kind,
@@ -7831,6 +7947,19 @@ export default function Home() {
         ? `This request is with ${holder.name} at the moment.`
         : "This request is with another approver at the moment.");
       return false;
+    }
+
+    /* A chainless request is not a free-for-all: it may be decided by any
+       approve-holder AT OR ABOVE the requester's rank — the same audience
+       submitRequest routed it to. A decision from below would let a junior
+       settle a senior's request, which is exactly what a missing chain must
+       not mean. A Super Admin may still act, as everywhere in this handler. */
+    if (!waitingOn && !isAdmin(actor)) {
+      const requester = (store.users as StaffUser[]).find((row) => row.id === record.uid);
+      if (requester && rankOf(actor) < rankOf(requester)) {
+        notify(`${requester.name}'s requests need a decision from someone at or above their rank.`);
+        return false;
+      }
     }
 
     /* Approving at a step that is not the last advances the request instead of
@@ -7992,6 +8121,25 @@ export default function Home() {
     if (!scopedUsers(actor, accessUsers).some((user) => user.id === employeeId)) {
       notify("That employee is outside your data scope.");
       return false;
+    }
+    /* The Points chain, where one is set, is who reviews this person's
+       points — the same contract Leave and Schedule chains carry. Points are
+       decided entry by entry rather than walking flow/step, so the chain
+       reads as a set: any member may decide. Chainless keeps the rank rule —
+       a reviewer at or above the entry owner's rank — and a Super Admin may
+       always act, same as decideRequest. */
+    if (!isAdmin(actor)) {
+      const owner = accessUsers.find((user) => user.id === employeeId) || null;
+      const pointsChain = chainFor(store, employeeId, "Points");
+      const allowed = pointsChain.length
+        ? pointsChain.includes(actor.id)
+        : (!owner || rankOf(actor) >= rankOf(owner));
+      if (!allowed) {
+        notify(pointsChain.length
+          ? "These points are reviewed by this person's configured Points chain."
+          : "These points need a reviewer at or above this person's rank.");
+        return false;
+      }
     }
     store.performance[index] = {
       ...row,
@@ -8381,11 +8529,13 @@ export default function Home() {
         store.schedule[prepared.id][day] ||= [];
       });
       store.flowConfig ||= {};
-      store.flowConfig[prepared.id] ||= {
-        Leave: ["u1"],
-        Schedule: ["u1"],
-        Performance: ["u1"],
-      };
+      /* Deliberately NO seeded chain. A chain is a routing decision somebody
+         makes, not a default: without one, this person's requests go to any
+         authorized approver at or above their rank, which is already the
+         right audience on day one. The old seed hardwired one account id as
+         everybody's approver — the exact thing an id must never be used
+         for — and made every chain look deliberately configured when it was
+         not. */
     } else if (existingIndex >= 0) {
       const existing = store.users[existingIndex] as StaffUser;
       if (existing.access === "Super Admin") {
@@ -11294,25 +11444,45 @@ function PerformanceCenter({
                     <td>{finiteNumber(row["Approved Points"])}</td>
                     <td><span className={`record-status ${status.toLowerCase().replace(/\s+/g, "-")}`}>{status}</span></td>
                     {canApprove && <td>
-                      {status === "Approved" ? <span className="review-complete"><CheckCircle2 size={15} /> Reviewed</span> : (
-                        <div className="review-actions">
-                          <input
-                            type="number"
-                            min="0"
-                            value={approvalDrafts[row.id] ?? String(submitted)}
-                            onChange={(event) => setApprovalDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
-                            aria-label={`Approved points for ${row.Engineer || "employee"}`}
-                          />
-                          <button type="button" className="approve" onClick={() => {
-                            const entered = approvalDrafts[row.id];
-                            const points = entered === undefined || entered.trim() === ""
-                              ? submitted
-                              : finiteNumber(entered);
-                            reviewRow(row.id, "Approved", points);
-                          }}>Approve</button>
-                          <button type="button" onClick={() => reviewRow(row.id, "Returned")}>Return</button>
-                        </div>
-                      )}
+                      {(() => {
+                        /* Per-row: the row owner's Points chain, where one is
+                           set, says who reviews it; chainless rows need a
+                           reviewer at or above the owner's rank. The cell
+                           says WHO instead of offering buttons the handler
+                           would refuse. */
+                        if (status === "Approved") {
+                          return <span className="review-complete"><CheckCircle2 size={15} /> Reviewed</span>;
+                        }
+                        const ownerId = rowUserId(row, users);
+                        const owner = users.find((user) => user.id === ownerId) || null;
+                        const chain = chainFor(store, ownerId, "Points");
+                        const mayReview = Boolean(viewer && (isAdmin(viewer)
+                          || (chain.length ? chain.includes(viewer.id) : (!owner || rankOf(viewer) >= rankOf(owner)))));
+                        if (!mayReview) {
+                          return <small>{chain.length
+                            ? `With ${chain.map((id) => users.find((user) => user.id === id)?.name || id).join(", ")}`
+                            : `Needs ${owner?.name || "this person"}'s rank or above`}</small>;
+                        }
+                        return (
+                          <div className="review-actions">
+                            <input
+                              type="number"
+                              min="0"
+                              value={approvalDrafts[row.id] ?? String(submitted)}
+                              onChange={(event) => setApprovalDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                              aria-label={`Approved points for ${row.Engineer || "employee"}`}
+                            />
+                            <button type="button" className="approve" onClick={() => {
+                              const entered = approvalDrafts[row.id];
+                              const points = entered === undefined || entered.trim() === ""
+                                ? submitted
+                                : finiteNumber(entered);
+                              reviewRow(row.id, "Approved", points);
+                            }}>Approve</button>
+                            <button type="button" onClick={() => reviewRow(row.id, "Returned")}>Return</button>
+                          </div>
+                        );
+                      })()}
                     </td>}
                   </tr>
                 );
@@ -15859,8 +16029,16 @@ function RequestsCentre({
                     <td><div className="review-actions">
                       {(() => {
                         const { holder, step, total } = requestStage(row);
-                        const mine = !holder || holder === viewer?.id;
+                        /* Chainless requests follow the rank rule decideRequest
+                           enforces: open to approvers at or above the
+                           requester's rank, not to everybody. */
+                        const mine = holder
+                          ? holder === viewer?.id
+                          : Boolean(viewer && (!person || rankOf(viewer) >= rankOf(person)));
                         if (!mine && !(viewer && isAdmin(viewer))) {
+                          if (!holder) {
+                            return <small>Needs {person?.name || "the requester"}&apos;s rank or above</small>;
+                          }
                           const who = users.find((user) => user.id === holder);
                           return <small>With {who?.name || "another approver"}{total > 1 ? ` · step ${step + 1} of ${total}` : ""}</small>;
                         }
@@ -15925,8 +16103,21 @@ function RequestsCentre({
  * really rearranged: three fixed dropdowns and no way to move a step. This is
  * the same flowConfig, edited where the people are, with steps you can add,
  * remove, and move up or down — so A → B → C becomes A → D → B in the order
- * you actually want, rather than by retyping every box. */
-const FLOW_TYPES = ["Leave", "Schedule", "Performance"] as const;
+ * you actually want, rather than by retyping every box.
+ *
+ * Three request types, and the third is POINTS, not "Performance": the chain
+ * governs who accepts a person's submitted points — each entry is decided as
+ * it is added, so daily, weekly, and ad-hoc submissions all travel the same
+ * way. (The old "Performance" tab configured a ghost weekly request that
+ * decided nothing; saved chains under that key are still read, and are
+ * migrated to Points the next time they are saved.)
+ *
+ * Every chain is OPTIONAL. No chain means requests go to any authorized
+ * approver at or above the person's rank, and approve automatically at the
+ * very top of the ladder, where that audience is empty. Chain steps can only
+ * be people at or above the person's rank — a chain must never route a
+ * request downhill. */
+const FLOW_TYPES = ["Leave", "Schedule", "Points"] as const;
 
 function ApprovalFlowCentre({
   viewer, users, store, save,
@@ -15938,7 +16129,7 @@ function ApprovalFlowCentre({
 }) {
   const item = ITEMS.find((row) => row.id === "hr-approval-flow");
   const canEdit = Boolean(viewer && item && hasItemPermission(viewer, item, "edit"));
-  const scope = scopedUsers(viewer, users).filter((user) => user.offboarded !== true);
+  const scope = scopedUsers(viewer, users).filter((user) => user.enabled !== false && user.offboarded !== true);
   const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
 
   const [query, setQuery] = useState("");
@@ -15951,7 +16142,7 @@ function ApprovalFlowCentre({
   /* Read straight from the store rather than memoised: it is a lookup and a
      filter over at most three ids, and the store object is rebuilt on every
      sync tick anyway, so caching it would cost more than it saves. */
-  const saved = person ? (flowConfig[person.id]?.[type] || []).filter(Boolean) : [];
+  const saved = person ? chainFor(store, person.id, type) : [];
   /* The editor follows the person and the request type until somebody starts
      changing it; only then does it hold its own state. */
   const steps = touched ? draft : saved;
@@ -15969,7 +16160,8 @@ function ApprovalFlowCentre({
   const reset = () => { setDraft([]); setTouched(false); };
 
   const candidates = users.filter((user) =>
-    user.enabled !== false && user.offboarded !== true && user.id !== person?.id);
+    user.enabled !== false && user.offboarded !== true && user.id !== person?.id
+    && (!person || rankOf(user) >= rankOf(person)));
   const listed = scope.filter((user) =>
     `${user.name} ${user.department || ""} ${user.access || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
 
@@ -16049,7 +16241,7 @@ function ApprovalFlowCentre({
                 <span className="chain-state">approves {index === steps.length - 1 ? "last" : `step ${index + 1}`}</span>
               </div>
             ))}
-            {!steps.length && <span className="chain-none">No approvers yet — add one below.</span>}
+            {!steps.length && <span className="chain-none">No chain — requests go to any approver at or above their rank{person && rankOf(person) >= Math.max(...users.filter((user) => user.enabled !== false && user.offboarded !== true).map((user) => rankOf(user))) ? ", and approve automatically because nobody outranks them" : ""}.</span>}
           </div>
 
           {steps.map((id, index) => (
@@ -16073,7 +16265,7 @@ function ApprovalFlowCentre({
 
           {canEdit && (
             <div className="form-actions">
-              {steps.length < 3 && (
+              {steps.length < 3 && candidates.some((user) => !steps.includes(user.id)) && (
                 <button type="button" className="secondary" onClick={() => {
                   const next = candidates.find((user) => !steps.includes(user.id));
                   if (next) change([...steps, next.id]);
@@ -16086,8 +16278,12 @@ function ApprovalFlowCentre({
             </div>
           )}
           <p className="builder-note">
-            Up to three approvers. A person can never approve their own request, and the same
-            person cannot appear twice. Changing this affects requests raised from now on —
+            Chains are optional — save with no steps to clear one, and requests then go to any
+            authorized approver at or above the person&apos;s rank (auto-approving at the very top
+            of the ladder, where nobody outranks them). Up to three approvers, each at or above
+            the person&apos;s rank; nobody approves their own request, and the same person cannot
+            appear twice. The Points chain decides who accepts submitted points, entry by entry,
+            however often they are added. Changing this affects requests raised from now on —
             anything already waiting keeps its own chain, which Corrections can reroute.
           </p>
         </section>
