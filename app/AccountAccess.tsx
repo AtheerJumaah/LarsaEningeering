@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { sendMail } from "../lib/supabase/mail"; import { hashPassword, hashPin, pinTakenByOther } from "../lib/password"; import { loadPolicy, DEFAULT_POLICY } from "../lib/verification";
+import { sendMail } from "../lib/supabase/mail"; import { hashPassword, hashPin, pinTakenByOther } from "../lib/password"; import { loadPolicy, DEFAULT_POLICY } from "../lib/verification"; import { serverNowIso } from "../lib/supabase/sync";
 
 /* Only the fields these flows actually touch. page.tsx owns the full StaffUser
    shape; duplicating all of it here would just be a second copy to keep in
@@ -41,6 +41,10 @@ export type AccessUser = {
   enabled?: boolean;
   emailVerified?: boolean;
   mustResetPassword?: boolean;
+  /* Recency stamps — see StaffUser in app/page.tsx and lib/supabase/merge.ts. */
+  touchedAt?: string;
+  passwordChangedAt?: string;
+  pinChangedAt?: string;
   pendingApproval?: boolean;
   projectAccessMode?: string;
   projectIds?: string[];
@@ -384,6 +388,13 @@ export function AccountAccess({
         phone: phone.trim(),
         password: await hashPassword(password),
         pin: await hashPin(pin),
+        /* Recency stamps: the merge layer and the repair_008 database guard
+           settle every conflict about this record — and its secrets — by
+           these, so a stale device can never quietly undo a brand-new
+           account or drag an old password back. */
+        touchedAt: serverNowIso(),
+        passwordChangedAt: serverNowIso(),
+        pinChangedAt: serverNowIso(),
         access: NEW_ACCOUNT_ACCESS,
         role: "Staff",
         department: "Unassigned",
@@ -423,9 +434,14 @@ export function AccountAccess({
       return;
     }
     if (mode === "forgotPin") {
-      list[index] = { ...list[index], pin: await hashPin(pin), emailVerified: true };
+      /* The stamps are the fix for "I reset it and days later it stopped
+         working": without them, any stale copy of this record saved later
+         from another device carried the OLD secret forward and won. Now the
+         freshest change stamp wins everywhere — client merge and database
+         guard alike. */
+      list[index] = { ...list[index], pin: await hashPin(pin), emailVerified: true, touchedAt: serverNowIso(), pinChangedAt: serverNowIso() };
     } else {
-      list[index] = { ...list[index], password: await hashPassword(password), emailVerified: true, mustResetPassword: false };
+      list[index] = { ...list[index], password: await hashPassword(password), emailVerified: true, mustResetPassword: false, touchedAt: serverNowIso(), passwordChangedAt: serverNowIso() };
     }
     writeStore(store);
     setBusy(false);
