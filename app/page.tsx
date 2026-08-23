@@ -768,7 +768,6 @@ const GROUPS: Group[] = [
       engineItem("staff", "staff-performance", "Performance Workboard", "Weekly points, targets, and analytics", "PF", "performance"),
       engineItem("staff", "staff-timesheet", "Timesheet", "Sessions, hours, and timezone views", "TS", "timesheet"),
       engineItem("staff", "staff-approvals", "Leave & Requests", "Leave and schedule requests, approvals, and workflows", "LR", "approvals"),
-      engineItem("staff", "staff-people", "Employee Details", "Staff profiles, roles, departments, and notes", "ED", "people"),
       engineItem("staff", "staff-rules", "Rules & Constraints", "Rules, constraints, and enforcement", "RC", "rules"),
       PERFORMANCE_HISTORY_ITEM,
       engineItem("staff", "staff-reports", "Performance Reports", "Employee, department, hours, and points", "SR", "reports"),
@@ -1012,7 +1011,6 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
      until the row is explicitly ticked in Users & Access. */
   "admin-corrections": ["view", "edit", "delete"],
   "staff-reports": VIEW_EXPORT,
-  "staff-people": FULL_EDIT,
   "staff-rules": FULL_EDIT,
   "staff-backup": ["view", "add", "export", "manage"],
   "hr-dashboard": VIEW_EXPORT,
@@ -1069,7 +1067,6 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
     label: "Administration",
     items: [
       ACCESS_ITEM,
-      ITEMS.find((item) => item.id === "staff-people")!,
       ITEMS.find((item) => item.id === "staff-rules")!,
       {
         ...ITEMS.find((item) => item.id === "staff-backup")!,
@@ -1192,7 +1189,6 @@ const ICONS: Record<string, LucideIcon> = {
   "staff-timesheet": FileClock,
   "staff-approvals": CheckCircle2,
   "hr-approval-flow": CheckCircle2,
-  "staff-people": UsersRound,
   "staff-rules": SlidersHorizontal,
   "admin-corrections": SlidersHorizontal,
   "staff-reports": FileBarChart,
@@ -1450,7 +1446,6 @@ function presetPermissionProfile(preset: string): PermissionProfile {
     ACCESS_GROUPS.forEach((group) => allowGroup(group.label));
   } else if (preset === "Admin") {
     allow("access");
-    allow("staff-people");
     allow("staff-rules");
     allow("staff-backup");
     allow("admin-notifications");
@@ -1485,7 +1480,6 @@ function presetPermissionProfile(preset: string): PermissionProfile {
   } else if (preset === "Admin HR") {
     allowGroup("HR & Skills");
     allow("access");
-    allow("staff-people");
     allow("staff-rules");
     allow("admin-notifications");
     allow("staff-approvals", ["view", "approve", "manage"]);
@@ -1586,7 +1580,7 @@ function mapStaffPermissions(can: (itemId: string, action: PermissionAction) => 
   if (can("staff-approvals", "add") || can("staff-schedule", "add")) permissions.add("Schedule Change Request");
   if (can("staff-performance", "view")) permissions.add("Submit Performance");
   if (can("staff-performance", "approve") || can("staff-performance-review", "approve")) permissions.add("Approve Performance");
-  if (can("access", "view") || can("staff-people", "view")) permissions.add("People Manage");
+  if (can("access", "view")) permissions.add("People Manage");
   if (can("staff-rules", "view")) permissions.add("Rules Manage");
   if (can("staff-approvals", "manage")) permissions.add("Approval Flow Manage");
   if (can("staff-timesheet", "view") || can("staff-reports", "view")) permissions.add("Reports View");
@@ -1731,7 +1725,7 @@ function legacyCanAct(user: StaffUser, item: Item, action: PermissionAction) {
     if (action === "edit") return ["Manager", "Team Leader", "Construction Engineer"].includes(user.access || "");
     return action === "export";
   }
-  if (item.id === "access" || item.id === "staff-people") return hasStaffPermission(user, "People Manage");
+  if (item.id === "access") return hasStaffPermission(user, "People Manage");
   if (item.id === "staff-performance-review") {
     return ["edit", "approve", "export", "manage"].includes(action) && hasStaffPermission(user, "Approve Performance");
   }
@@ -1872,7 +1866,6 @@ function isAdministrationUser(user: StaffUser) {
   if (isAdmin(user)) return true;
   const administrativeIds = [
     "access",
-    "staff-people",
     "staff-rules",
     "admin-notifications",
     "staff-backup",
@@ -1998,7 +1991,7 @@ function channelForItem(item: Item): NavChannel {
     || item.id === "access"
     || item.id === "data"
     || item.id === "admin-corrections"
-    || ["staff-people", "staff-rules", "staff-backup"].includes(item.id)
+    || ["staff-rules", "staff-backup"].includes(item.id)
   ) return "admin";
   // Sits with payroll, because that is the permission it follows.
   if (item.id === "sales-commissions" || item.id === "payroll-portal") return "accounting";
@@ -9274,7 +9267,6 @@ export default function Home() {
   const adminNavItems: Item[] = [
     adminItem,
     ACCESS_ITEM,
-    { ...ITEMS.find((item) => item.id === "staff-people")!, label: "Employee Details", description: "Profiles, roles, departments, and notes" },
     { ...ITEMS.find((item) => item.id === "staff-rules")!, label: "Rules & Constraints" },
     ITEMS.find((item) => item.id === "data")!,
     { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" }, ITEMS.find((item) => item.id === "platform-settings")!,
@@ -9578,10 +9570,6 @@ export default function Home() {
               canCreate={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "add"))}
               canEdit={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "edit"))}
               canDelete={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "delete"))}
-              openEmployeeDetails={() => {
-                const item = ITEMS.find((row) => row.id === "staff-people");
-                if (item) choose(item, "admin");
-              }}
             />
           </div>
           <div className={active.native === "notifications" ? "native active" : "native"}>
@@ -10338,13 +10326,6 @@ function AdminCenter({
       text: "Add users and set email, PIN, scope, and custom permissions",
       icon: UserCog,
       color: "blue",
-    },
-    {
-      id: "staff-people",
-      title: "Employee Details",
-      text: "Review staff profiles and manage employee notes",
-      icon: UsersRound,
-      color: "slate",
     },
     {
       id: "staff-rules",
@@ -14160,7 +14141,6 @@ function AccessCenter({
   canCreate,
   canEdit,
   canDelete,
-  openEmployeeDetails,
 }: {
   users: StaffUser[];
   projects: AccountingProject[];
@@ -14178,7 +14158,6 @@ function AccessCenter({
   canCreate: boolean;
   canEdit: boolean;
   canDelete: boolean;
-  openEmployeeDetails: () => void;
 }) {
   const dialog = useDialog();
   const [selectedId, setSelectedId] = useState("");
@@ -14629,9 +14608,6 @@ function AccessCenter({
               </button>
             ))}
           </div>
-          <button type="button" className="directory-link" onClick={openEmployeeDetails}>
-            <span><UsersRound size={17} /> Employee details & notes</span><ArrowRight size={16} />
-          </button>
         </aside>
 
         {draft ? (
