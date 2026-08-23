@@ -68,7 +68,7 @@ test("sync.ts measures device clock skew against server_now() and shares it via 
 
 test("punchClock and punchBreak stamp with the server-corrected clock, not the device's", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /import \{ initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow \} from "\.\.\/lib\/supabase\/sync";/);
+  assert.match(page, /import \{ initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow(?:, [A-Za-z0-9_, ]+)? \} from "\.\.\/lib\/supabase\/sync";/);
   const punchClock = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
   const punchBreak = page.slice(page.indexOf("const punchBreak = useCallback"), page.indexOf("const trimSession = useCallback"));
   assert.match(punchClock, /const now = serverNowIso\(\);/);
