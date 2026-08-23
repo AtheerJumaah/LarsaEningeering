@@ -91,6 +91,32 @@ test("saving an empty chain clears it instead of being refused", () => {
   assert.match(engine, /rankOf\(u\)>=rankOf\(emp\)/);
 });
 
+test("a save can never SILENTLY become a deletion", () => {
+  /* The validity filters (self, duplicate, inactive, below rank) used to be
+     able to reduce a picked chain to nothing, and the save then deleted the
+     chain with a cheerful toast — "we tried to update the approval flow and
+     it got deleted." Deleting is now only what an explicitly EMPTY submission
+     means; a non-empty submission that filters to nothing is refused with the
+     reason, and partial drops are named in the confirmation. */
+  const save = page.slice(page.indexOf("const saveApprovalFlow = useCallback"), page.indexOf("Fix the figures on a points entry"));
+  assert.match(save, /const requested = steps\.filter\(Boolean\);/);
+  assert.match(save, /if \(requested\.length && !clean\.length\) \{/);
+  assert.match(save, /The chain was left as it was\./);
+  assert.match(save, /left as it was\.`\);\s*\n\s*return false;/);
+  assert.match(save, /const dropped = requested/);
+  // The engine's setup card follows the same rule…
+  assert.match(engine, /if\(picked\.length&&!steps\.length\)\{toast\(/);
+  assert.match(engine, /Nothing was changed\./);
+  // …and no longer opens blank over an existing chain: it loads the saved
+  // steps (Points reads the legacy 'Performance' key too), re-syncs when the
+  // person or type changes, and only offers approvers the save would accept.
+  assert.match(engine, /function flowChainOf\(uid,typ\)\{let own=\(state\.flowConfig\|\|\{\}\)\[uid\]\|\|\{\};let c=own\[typ\]\|\|\(typ==='Points'\?own\.Performance:null\)\|\|\[\];/);
+  assert.match(engine, /function syncFlowEditor\(\)\{/);
+  assert.match(engine, /id="flowEmp" onchange="syncFlowEditor\(\)"/);
+  assert.match(engine, /id="flowType" onchange="syncFlowEditor\(\)"/);
+  assert.match(engine, /\$\{flowEditor\(\)\}<\/div>\n <\/div>`;syncFlowEditor\(\)\}/);
+});
+
 // ------------------------------------------------------- rank-based routing
 test("chainless requests route to approvers at or above the requester's rank", () => {
   const submit = page.slice(page.indexOf("const submitRequest = useCallback"), page.indexOf("Attendance corrections: a forgotten clock"));
