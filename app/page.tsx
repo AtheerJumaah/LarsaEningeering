@@ -6961,7 +6961,19 @@ export default function Home() {
     }
   };
 
-  const punchClock = useCallback((mode: string, note = "") => {
+  /* `intent` is what the button the person actually pressed was offering.
+     The direction was previously derived ONLY from this device's copy of the
+     log, and written whatever it came out as — so a copy that was stale,
+     half-synced, or carrying a punch this device had not yet dropped turned
+     one press into the SILENT OPPOSITE of what the screen promised. That is
+     what "clocked in and out without knowing" was.
+
+     The read still decides what is true; the intent decides whether we are
+     allowed to act on it. When they disagree the punch is REFUSED — nobody's
+     status changes — and the person is told what the record actually says
+     while the screen redraws from it. The next press is then a deliberate one
+     against the truth, and goes through. */
+  const punchClock = useCallback((mode: string, note = "", intent?: "In" | "Out") => {
     const user = sessionUserRef.current;
     if (!user) return false;
     const store = parseStore("larsaStaffV8");
@@ -6994,6 +7006,13 @@ export default function Home() {
       return false;
     }
     const status = latest && latest.status === "In" ? "Out" : "In";
+    if (intent && intent !== status) {
+      notify(status === "Out"
+        ? `The record says you are already clocked in${latest?.time ? ` since ${new Date(latest.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}. Nothing was changed — this screen was out of date and has been refreshed.`
+        : "The record says you are already clocked out. Nothing was changed — this screen was out of date and has been refreshed.");
+      setStorageTick((value) => value + 1);
+      return false;
+    }
     /* Server-corrected time, not the device's. A phone with a wrong clock
        used to write that wrong clock straight into the attendance record;
        serverNowIso() applies the measured skew (see lib/supabase/sync.ts). */
@@ -17832,7 +17851,7 @@ function QuickClock({
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
-  punch: (mode: string, note?: string) => boolean;
+  punch: (mode: string, note?: string, intent?: "In" | "Out") => boolean;
   punchBreak: (note?: string) => boolean;
   submitCorrection: (draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
@@ -18080,7 +18099,7 @@ function QuickClock({
         <button
           type="button"
           className={`clock-punch ${open ? "out" : `in tone-${modeTone(mode)}`}`}
-          onClick={() => { if (punch(open ? open.mode : mode, note)) setNote(""); }}
+          onClick={() => { if (punch(open ? open.mode : mode, note, open ? "Out" : "In")) setNote(""); }}
         >
           <Timer size={22} />
           {open ? "Clock Out" : "Clock In"}
