@@ -64,8 +64,11 @@ test("the clock decides from the last CLOCK punch, not the last log", () => {
   /* A Break End is the newest log but says nothing about being on shift.
      Reading it as "not clocked in" made the button and the record disagree:
      the screen offered Clock In and the write was an Out. */
+  /* The write itself now goes through the shared lastPunchOf() helper (see
+     tests/clock-intent.test.mjs); the clock screens still filter inline. */
+  assert.match(engine, /function lastPunchOf\(uid\)\{return \(state\.logs\|\|\[\]\)\.filter\(function\(l\)\{return l\.uid===uid&&\(l\.status==='In'\|\|l\.status==='Out'\)\}\)/);
   const decisions = engine.match(/l\.uid===currentUser\.id&&\(l\.status==='In'\|\|l\.status==='Out'\)/g) || [];
-  assert.ok(decisions.length >= 3, "toggle and both clock screens must filter to In/Out");
+  assert.ok(decisions.length >= 2, "both clock screens must filter to In/Out");
   assert.match(engine, /function clockStatusForUser\(uid\)\{return state\.logs\.filter\(l=>l\.uid===uid&&\(l\.status==='In'\|\|l\.status==='Out'\)\)/);
   assert.doesNotMatch(engine, /function clockToggle\(type\)\{let latest=state\.logs\.filter\(l=>l\.uid===currentUser\.id\)\./);
 });
