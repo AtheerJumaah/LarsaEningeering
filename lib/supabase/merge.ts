@@ -71,6 +71,26 @@ export const GUARDED_COLLECTIONS: Record<string, string> = {
 };
 const TOMBSTONE_KEYS = new Set(Object.values(GUARDED_COLLECTIONS));
 
+/* Per-person configuration maps: `{ [employeeId]: … }`. These are the same
+   kind of thing `users` and `logs` are — records about people that one device
+   must never be able to erase for everybody — but because they are OBJECTS
+   rather than id-keyed arrays they fell outside GUARDED_COLLECTIONS, and the
+   plain-object rule below reads "this key is missing here but was in my base"
+   as a deliberate deletion.
+
+   That is what wiped the approval chains. A device holding a copy from a
+   window in which the chains were absent wrote its whole state back; every
+   employee key it lacked looked like a deletion and 25 people's chains
+   vanished for the entire company, twice.
+
+   For these maps a missing entry is now never a deletion: absence proves
+   nothing, it usually just means that copy is old. Deliberate edits still
+   work exactly as before, because they happen INSIDE a person's entry — the
+   editor rewrites `flowConfig[employeeId]`, so clearing one chain is a change
+   to a key both sides have and merges normally. Only the disappearance of a
+   whole person is refused, and no screen in the app does that. */
+export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule"]);
+
 type MergeContext = {
   /* collection key ("users" / "logs") -> union of tombstoned ids across
      base, local and remote. */
@@ -259,6 +279,23 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
           out[collection] = kept;
           out[listKey] = unionIds(out[listKey], serverDoc[listKey]);
     });
+
+    /* The same protection for the per-person maps, on the path where there is
+       no merge to apply it: a CAS that accepts this push verbatim. Whatever
+       the server already holds for somebody is carried forward, so a copy that
+       simply predates their chain cannot delete it. An entry present on both
+       sides is left exactly as this device has it — that is how a deliberate
+       edit still wins here. */
+    ADD_ONLY_MAPS.forEach((mapKey) => {
+          const ours = isPlainObject(out[mapKey]) ? out[mapKey] as JsonObject : null;
+          const theirs = isPlainObject(serverDoc[mapKey]) ? serverDoc[mapKey] as JsonObject : null;
+          if (!theirs) return;
+          const kept: JsonObject = { ...(ours || {}) };
+          Object.keys(theirs).forEach((person) => {
+                  if (!Object.prototype.hasOwnProperty.call(kept, person)) kept[person] = theirs[person];
+          });
+          out[mapKey] = kept;
+    });
     return out;
 }
 
@@ -372,9 +409,10 @@ export function mergeValues(base: Json, local: Json, remote: Json, context: Merg
                 const inBase = Object.prototype.hasOwnProperty.call(baseObject, childKey);
                 if (!inLocal) {
                           /* Dropped here on purpose if we had it; otherwise it is new from
-                             them. A guarded collection or tombstone list is never dropped
-                             wholesale by local absence. */
-                  if (!inBase || GUARDED_COLLECTIONS[childKey] || TOMBSTONE_KEYS.has(childKey)) out[childKey] = remote[childKey];
+                             them. A guarded collection, a tombstone list, or an entry in a
+                             per-person map is never dropped wholesale by local absence. */
+                  if (!inBase || GUARDED_COLLECTIONS[childKey] || TOMBSTONE_KEYS.has(childKey)
+                      || (key !== undefined && ADD_ONLY_MAPS.has(key))) out[childKey] = remote[childKey];
                           return;
                 }
                 if (!inRemote) {
