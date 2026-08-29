@@ -107,8 +107,7 @@ test("the gate can never strand the clock", () => {
      gated on it would stay dead for ever, which is a worse bug than the one
      being fixed. Two escapes, and neither costs any safety: the guarantee is
      confirmClockState on the press, not the gate. */
-  assert.match(page, /if \(!supabaseConfigured\(\)\) markClockConfirmed\(\);/);
-  assert.match(page, /const clockGateCeiling = window\.setTimeout\(markClockConfirmed, 12000\);/);
+  assert.match(page, /const clockGateCeiling = window\.setTimeout\(markClockConfirmed, supabaseConfigured\(\) \? 12000 : 0\);/);
   assert.match(page, /window\.clearTimeout\(clockGateCeiling\);/);
   // And a held press resolves on its own clock too, so it can never hang.
   assert.match(page, /window\.setTimeout\(\(\) => done\(clockConfirmedRef\.current\), timeoutMs\);/);
