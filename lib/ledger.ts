@@ -208,6 +208,66 @@ export function initAttendanceLedger(): () => void {
   };
 }
 
+/* ---- The authoritative answer to "is this person on the clock?" -------- */
+
+/* A device decides a punch from its own cached copy of the staff blob. That
+   copy can be a day old — the app paints instantly from cache, a tab left
+   open all day may have missed a realtime event, and the same person often
+   carries two devices. Deciding from it silently turns "I opened the app to
+   clock in" into a clock-OUT, which is the whole "clocked in/out without
+   doing it" complaint.
+   
+   The ledger is append-only and shared, so it is the one place that can
+   settle the question. This is a single indexed row — the newest In/Out for
+   one person — not the 800 KB blob, so it is cheap enough to ask on every
+   punch.
+   
+   `reached` is the honest part: offline, it says so rather than pretending
+   the silence means anything. The caller then falls back to the newest thing
+   it can actually see, which is the best available truth. */
+export type ConfirmedClock = { reached: boolean; status: "In" | "Out" | null; at: string | null };
+
+export async function confirmClockState(uid: string, timeoutMs = 3500): Promise<ConfirmedClock> {
+  const unknown: ConfirmedClock = { reached: false, status: null, at: null };
+  if (!supabaseConfigured() || !uid) return unknown;
+  const client = getSupabaseClient();
+  if (!client) return unknown;
+  try {
+    /* Anything already queued on THIS device but not yet delivered is part of
+       the truth too — otherwise a punch made seconds ago offline would look
+       like it never happened and the next press would repeat it. */
+    const queued = readJson<LedgerEvent[]>(QUEUE_KEY, [])
+      .filter((event) => event?.uid === uid && (event.status === "In" || event.status === "Out"))
+      .sort((left, right) => String(right.occurred_at).localeCompare(String(left.occurred_at)))[0] || null;
+    const answered = await Promise.race([
+      client
+        .from("attendance_events")
+        .select("status, occurred_at")
+        .eq("uid", uid)
+        .in("status", ["In", "Out"])
+        .order("occurred_at", { ascending: false })
+        .limit(1),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("confirm: timed out")), timeoutMs)),
+    ]);
+    const { data, error } = answered as { data: { status?: string; occurred_at?: string }[] | null; error: unknown };
+    if (error) return unknown;
+    const row = Array.isArray(data) && data.length ? data[0] : null;
+    let status: "In" | "Out" | null = null;
+    let at: string | null = null;
+    if (row?.status) {
+      status = String(row.status) === "In" ? "In" : "Out";
+      at = row.occurred_at ? String(row.occurred_at) : null;
+    }
+    if (queued?.occurred_at && (!at || String(queued.occurred_at) > at)) {
+      status = queued.status === "In" ? "In" : "Out";
+      at = String(queued.occurred_at);
+    }
+    return { reached: true, status, at };
+  } catch {
+    return unknown;
+  }
+}
+
 /* ---- Inbound: ledger rows → restored blob logs ------------------------ */
 
 export type ReconcileResult = { restored: number };
