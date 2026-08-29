@@ -417,14 +417,39 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      network returns, and when the realtime channel re-subscribes after a
      drop — the moments a device is most likely to be silently stale. */
   let refreshing = false;
+  /* Two round trips on purpose. The staff document is ~840 KB, so pulling it
+     to discover it has not changed is most of a second on a phone for nothing
+     — and that pull is exactly the window in which the app shows a stale
+     screen. So ask for the STAMPS first (a few dozen bytes), and fetch `data`
+     only for the keys that actually moved. In the common case — nothing
+     changed — a refresh now costs one tiny query, which is what makes it
+     affordable to run on a timer as well as on focus. */
   async function refreshFromServer(reason: string) {
     if (refreshing || cancelled || !bootstrapped) return;
     refreshing = true;
     try {
+      const { data: stamps, error: stampError } = await supabase
+        .from("app_state")
+        .select("store_key, updated_at")
+        .in("store_key", SYNCED_KEYS as readonly string[]);
+      if (stampError || !Array.isArray(stamps)) return;
+      const stale = stamps
+        .map((row) => ({
+          key: String(row.store_key || "") as SyncedKey,
+          stamp: row.updated_at ? String(row.updated_at) : null,
+        }))
+        .filter(({ key, stamp }) =>
+          (SYNCED_KEYS as readonly string[]).includes(key)
+          /* No stamp means we cannot prove it is current, so fetch it. */
+          && (!stamp || lastSeenAt.get(key) !== stamp));
+      if (!stale.length) {
+        console.log(`[larsa-sync] refresh: already current (${reason})`);
+        return;
+      }
       const { data: rows, error } = await supabase
         .from("app_state")
         .select("store_key, data, updated_at")
-        .in("store_key", SYNCED_KEYS as readonly string[]);
+        .in("store_key", stale.map(({ key }) => key));
       if (error || !Array.isArray(rows)) return;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
@@ -433,7 +458,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         if (stamp && lastSeenAt.get(key) === stamp) return; // already current
         applyRemote(key, row.data ?? {}, stamp);
       });
-      console.log(`[larsa-sync] authoritative refresh complete (${reason})`);
+      console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
     } catch {
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
@@ -447,6 +472,17 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   bootstrap().then(() => { bootstrapped = true; });
   /* Clock skew drifts (and phones change it); re-measure every ten minutes. */
   const clockTimer = setInterval(() => { sampleServerClock(supabase, originalSetItem).catch(() => {}); }, 10 * 60 * 1000);
+  /* Focus and reconnect are EDGES, and a browser left open all day may never
+     produce one: a websocket can die without ever reporting CHANNEL_ERROR,
+     TIMED_OUT or CLOSED, and then realtime goes quiet in a way that is
+     indistinguishable from nothing having happened. That is how a screen sits
+     on yesterday's status all day. A visible tab therefore re-checks on a
+     timer as well — cheap, because the stamp probe above finds nothing to
+     fetch when nothing changed. Hidden tabs skip it: they refresh on the
+     visibilitychange that brings them back. */
+  const revalidateTimer = setInterval(() => {
+    if (!document.hidden) refreshFromServer("periodic revalidate");
+  }, 3 * 60 * 1000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
@@ -478,6 +514,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     window.localStorage.setItem = originalSetItem;
     pushTimers.forEach((timer) => clearTimeout(timer));
     clearInterval(clockTimer);
+    clearInterval(revalidateTimer);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
     window.removeEventListener("storage", onStorageWrite);
