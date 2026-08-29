@@ -4,7 +4,7 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
-import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved } from "../lib/ledger";
+import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim } from "../lib/attendance.mjs";
@@ -4423,6 +4423,30 @@ export default function Home() {
   }, []);
   const [loginError, setLoginError] = useState(""); const [signupOpen, setSignupOpen] = useState(true); useEffect(() => { let alive = true; loadPolicy().then((next) => { if (alive) setSignupOpen(next.self_signup_enabled !== false); }).catch(() => {}); return () => { alive = false; }; }, []);
   const [hydrated, setHydrated] = useState(false);
+  /* `hydrated` only means the browser mounted. THIS means the app has been
+     told what the server holds at least once this session. Until then the
+     screen is drawn from whatever this device had cached — which after a
+     night, a sleep, or a switch of phone is yesterday's truth. The clock is
+     the one control where acting on that is unacceptable, so it waits. */
+  const [clockConfirmed, setClockConfirmed] = useState(false);
+  const clockConfirmedRef = useRef(false);
+  const clockConfirmedWaiters = useRef<(() => void)[]>([]);
+  const markClockConfirmed = useCallback(() => {
+    setClockConfirmed(true);
+    const waiting = clockConfirmedWaiters.current;
+    clockConfirmedWaiters.current = [];
+    waiting.forEach((resume) => resume());
+  }, []);
+  /* A press made during that window is HELD, not dropped: it resolves the
+     moment the pull lands and is then judged against the truth. Nobody has to
+     press twice — pressing twice is exactly what people were doing. */
+  const whenClockConfirmed = useCallback((timeoutMs = 8000) => new Promise<boolean>((resolve) => {
+    if (clockConfirmedRef.current) { resolve(true); return; }
+    let settled = false;
+    const done = (ok: boolean) => { if (!settled) { settled = true; resolve(ok); } };
+    clockConfirmedWaiters.current.push(() => done(true));
+    window.setTimeout(() => done(clockConfirmedRef.current), timeoutMs);
+  }), []);
   /* Read only after hydration: the server has no such global, and reading it
      during the first render would make the markup disagree with the client. */
   const inlineEngines = useMemo<Partial<Record<Engine, string>>>(() => {
@@ -4606,7 +4630,16 @@ export default function Home() {
            class of incident where a stale device replaced the shared state.
            Restored punches re-enter the blob, re-render, and sync back up
            for every other device. */
+        if (status === "offline") {
+          /* No server this session. The clock still has to work — refusing to
+             let somebody clock in because the network is down would be worse
+             than the staleness this guards against — so it is released, and
+             the punch is judged against the best copy this device has. */
+          markClockConfirmed();
+          return;
+        }
         if (status !== "synced") return;
+        markClockConfirmed();
         reconcileStoreFromLedger().then(({ restored }) => {
           if (restored > 0) {
             setStorageTick((value) => value + 1);
@@ -4667,6 +4700,9 @@ export default function Home() {
     }, 0);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => { clockConfirmedRef.current = clockConfirmed; }, [clockConfirmed]);
+
 
   useEffect(() => {
     sessionUserRef.current = sessionUser;
@@ -6973,9 +7009,26 @@ export default function Home() {
      status changes — and the person is told what the record actually says
      while the screen redraws from it. The next press is then a deliberate one
      against the truth, and goes through. */
-  const punchClock = useCallback((mode: string, note = "", intent?: "In" | "Out") => {
+  const punchClock = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
     const user = sessionUserRef.current;
     if (!user) return false;
+    /* HOLD, don't guess. If this session has not yet been told what the
+       server holds, wait for it rather than acting on the cached copy the
+       screen was painted from. This is the window that produced the reports:
+       the app paints instantly, the button is live, and people press it
+       immediately — because pressing the clock is why they opened the app. */
+    if (!clockConfirmedRef.current) {
+      notify("Checking your clock status…");
+      await whenClockConfirmed();
+    }
+    /* And the guarantee itself: ask the shared, append-only ledger what this
+       person's last punch actually was. A device's own copy can be a day
+       behind — a second phone, a tab left open, a missed realtime event — and
+       every "clocked in/out without doing it" report traces to a punch decided
+       from one. The newest of (ledger, this device) is the best available
+       truth; when the ledger cannot be reached we say so by falling back to
+       the device rather than by pretending. */
+    const confirmed = await confirmClockState(user.id);
     const store = parseStore("larsaStaffV8");
     if (!store) {
       notify("Attendance records are still loading. Please try again.");
@@ -7005,11 +7058,34 @@ export default function Home() {
     if (latest?.time && serverNowMs() - new Date(latest.time).getTime() < 1200) {
       return false;
     }
-    const status = latest && latest.status === "In" ? "Out" : "In";
+    /* Whichever of the two is NEWER is what is true right now. */
+    const localAt = latest?.time ? new Date(latest.time).getTime() : 0;
+    const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
+    const trueStatus: "In" | "Out" | null = confirmed.reached && confirmed.status && serverAt >= localAt
+      ? confirmed.status
+      : (latest?.status === "In" ? "In" : latest ? "Out" : null);
+    const trueAt = confirmed.reached && confirmed.status && serverAt >= localAt ? confirmed.at : (latest?.time || null);
+    const status = trueStatus === "In" ? "Out" : "In";
+    const since = trueAt ? ` since ${new Date(trueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+    /* The pressed button and the truth disagree: write NOTHING. Nobody's
+       status changes on a disagreement — it is reported and the screen is
+       redrawn from what is real, so the next press is a deliberate one. */
     if (intent && intent !== status) {
       notify(status === "Out"
-        ? `The record says you are already clocked in${latest?.time ? ` since ${new Date(latest.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}. Nothing was changed — this screen was out of date and has been refreshed.`
-        : "The record says you are already clocked out. Nothing was changed — this screen was out of date and has been refreshed.");
+        ? `You are already clocked in${since} — nothing was changed. This screen was out of date and has been refreshed.`
+        : "You are already clocked out — nothing was changed. This screen was out of date and has been refreshed.");
+      setStorageTick((value) => value + 1);
+      refreshStaffEngine();
+      return false;
+    }
+    /* Belt and braces: a punch that would not CHANGE anything is not a
+       punch. Whatever else goes wrong — a retry, two tabs, a queued press
+       landing late — repeating the state somebody is already in can never
+       be recorded, so a duplicate can never close or open a shift. */
+    if (trueStatus !== null && trueStatus === status) {
+      notify(status === "In"
+        ? `You are already clocked in${since}.`
+        : "You are already clocked out.");
       setStorageTick((value) => value + 1);
       return false;
     }
@@ -7046,7 +7122,19 @@ export default function Home() {
     setStorageTick((value) => value + 1);
     notify(status === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, whenClockConfirmed]);
+  /* The Timeclock panel's clock button reaches up to this and hands its punch
+     over, so the guarded writer above is the ONLY thing in the product that
+     can append a punch. Same origin, so the panel can simply call it; if the
+     app is not there (the engine opened on its own) it keeps its own local
+     path and nothing changes for it. */
+  useEffect(() => {
+    const holder = window as unknown as {
+      __larsaPunch?: (mode: string, intent: "In" | "Out", note?: string) => void;
+    };
+    holder.__larsaPunch = (mode, intent, note) => { void punchClock(mode, note || "", intent); };
+    return () => { delete holder.__larsaPunch; };
+  }, [punchClock]);
 
   /* Breaks use their own status values on purpose. Every hour calculation in
      this app pairs "In" with "Out", so a break recorded that way would be
@@ -9843,6 +9931,7 @@ export default function Home() {
               sessions={clockSessions}
               summary={homeSummary}
               punch={punchClock}
+              clockReady={clockConfirmed}
               punchBreak={punchBreak}
               submitCorrection={submitCorrection}
               users={accessUsers}
@@ -17846,12 +17935,13 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak, submitCorrection, users, trimSession, resetSession,
+  punchBreak, submitCorrection, users, trimSession, resetSession, clockReady,
 }: {
+  clockReady: boolean;
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
-  punch: (mode: string, note?: string, intent?: "In" | "Out") => boolean;
+  punch: (mode: string, note?: string, intent?: "In" | "Out") => Promise<boolean>;
   punchBreak: (note?: string) => boolean;
   submitCorrection: (draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
@@ -17873,6 +17963,7 @@ function QuickClock({
   const shiftInks = (store?.shiftColours || {}) as Record<string, string>;
   const [mode, setMode] = useState("Office");
   const [note, setNote] = useState("");
+  const [punching, setPunching] = useState(false);
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({
     kind: "Missed Clock" as "Missed Clock" | "Missed Break" | "Extra Hours",
@@ -18096,13 +18187,25 @@ function QuickClock({
             placeholder="Running late, leaving early, working from a job site…"
           />
         </label>
+        {/* Disabled until the app has been told what the server holds, and
+            while a punch is in flight. The label says which it is, because a
+            dead-looking button with no explanation is its own bug report. */}
         <button
           type="button"
           className={`clock-punch ${open ? "out" : `in tone-${modeTone(mode)}`}`}
-          onClick={() => { if (punch(open ? open.mode : mode, note, open ? "Out" : "In")) setNote(""); }}
+          disabled={!clockReady || punching}
+          onClick={async () => {
+            if (punching) return;
+            setPunching(true);
+            try {
+              if (await punch(open ? open.mode : mode, note, open ? "Out" : "In")) setNote("");
+            } finally {
+              setPunching(false);
+            }
+          }}
         >
           <Timer size={22} />
-          {open ? "Clock Out" : "Clock In"}
+          {!clockReady ? "Checking your status…" : punching ? "Saving…" : open ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
