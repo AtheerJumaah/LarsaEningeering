@@ -4668,7 +4668,19 @@ export default function Home() {
        initLarsaSync so all three wrappers of localStorage.setItem compose. */
     const cleanupLedger = initAttendanceLedger();
     const cleanupAccounts = initAccountLedger();
+    /* The gate must never be able to strand the clock. initLarsaSync returns
+       WITHOUT reporting a status when there is nothing to sync with (no
+       Supabase configured), and a bootstrap that hangs rather than failing
+       reports nothing either — in both cases onStatusChange never fires and a
+       button gated on it would stay dead for ever. So the gate is released
+       immediately when there is no server at all, and in every case after a
+       ceiling. Releasing it costs no safety: the actual guarantee is
+       confirmClockState, which is consulted on the press itself and falls
+       back honestly when it cannot reach the ledger. */
+    if (!supabaseConfigured()) markClockConfirmed();
+    const clockGateCeiling = window.setTimeout(markClockConfirmed, 12000);
     return () => {
+      window.clearTimeout(clockGateCeiling);
       cleanupAccounts();
       cleanupLedger();
       cleanup();
@@ -4680,7 +4692,7 @@ export default function Home() {
       });
       delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
     };
-  }, [hydrated, refs]);
+  }, [hydrated, refs, markClockConfirmed]);
 
   useEffect(() => {
     activeRef.current = active;
