@@ -101,3 +101,21 @@ test("a refresh that finds nothing changed does not pull the 840 KB blob", () =>
   // A row with no stamp cannot be proven current, so it is still fetched.
   assert.match(sync, /&& \(!stamp \|\| lastSeenAt\.get\(key\) !== stamp\)\)/);
 });
+
+test("clocking SOMEBODY ELSE is held to the same rule", () => {
+  /* An admin clocking another person read a stale panel, captured the
+     direction BEFORE the note modal, then wrote it however long the modal
+     stayed open — onto someone else's payroll record. It also stamped the raw
+     device clock (not the server-corrected one) and used a bare `l+Date.now()`
+     id, so two admins acting in the same millisecond collided into one row. */
+  assert.match(engine, /function v30OtherStatus\(uid\)\{\s*\n\s*if\(typeof freshState==='function'\)freshState\(\);/);
+  assert.match(engine, /var offering = willClockIn \? 'In' : 'Out';/);
+  assert.match(engine, /var nowStatus = v30OtherStatus\(uid\);/);
+  assert.match(engine, /if\(\(nowStatus==='Out'\?'In':'Out'\) !== offering\)\{/);
+  assert.match(engine, /is already clocked '\+\(nowStatus==='In'\?'in':'out'\)\+' - nothing was changed\./);
+  // Corrected clock and a collision-proof id, like every other punch site.
+  assert.match(engine, /var nowIso=new Date\(Date\.now\(\)\+\(parseInt\(localStorage\.getItem\('larsaClockOffsetMsV1'\),10\)\|\|0\)\)\.toISOString\(\);/);
+  assert.match(engine, /state\.logs\.push\(\{id:'l'\+uid\+Date\.now\(\)\+Math\.random\(\),uid,type,status:offering,time:nowIso,active:offering==='In'/);
+  // No bare-timestamp id survives on the self-service or clock-other paths.
+  assert.doesNotMatch(engine, /state\.logs\.push\(\{id:'l'\+Date\.now\(\),uid,type,status:willClockIn/);
+});
