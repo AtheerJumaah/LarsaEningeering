@@ -100,6 +100,20 @@ test("5. the Timeclock panel hands its punch to the same guarded writer", () => 
   assert.match(page, /holder\.__larsaPunch = \(mode, intent, note\) => \{ void punchClock\(mode, note \|\| "", intent\); \};/);
 });
 
+test("the gate can never strand the clock", () => {
+  /* The gate is released by onStatusChange. But initLarsaSync returns without
+     reporting any status when Supabase is not configured, and a bootstrap that
+     hangs instead of failing reports nothing either \u2014 in both cases a button
+     gated on it would stay dead for ever, which is a worse bug than the one
+     being fixed. Two escapes, and neither costs any safety: the guarantee is
+     confirmClockState on the press, not the gate. */
+  assert.match(page, /if \(!supabaseConfigured\(\)\) markClockConfirmed\(\);/);
+  assert.match(page, /const clockGateCeiling = window\.setTimeout\(markClockConfirmed, 12000\);/);
+  assert.match(page, /window\.clearTimeout\(clockGateCeiling\);/);
+  // And a held press resolves on its own clock too, so it can never hang.
+  assert.match(page, /window\.setTimeout\(\(\) => done\(clockConfirmedRef\.current\), timeoutMs\);/);
+});
+
 test("the button cannot be pressed into a guess, and says why", () => {
   assert.match(page, /disabled=\{!clockReady \|\| punching\}/);
   assert.match(page, /\{!clockReady \? "Checking your status…" : punching \? "Saving…" : open \? "Clock Out" : "Clock In"\}/);
