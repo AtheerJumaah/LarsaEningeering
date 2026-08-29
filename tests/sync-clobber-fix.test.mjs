@@ -92,7 +92,12 @@ test("the Timeclock engine stamps punches with the shared server-clock offset", 
   const engine = await read("public/engines/timeclock.html");
   const corrected = "new Date(Date.now()+(parseInt(localStorage.getItem('larsaClockOffsetMsV1'),10)||0)).toISOString()";
   const punchSite = "state.logs.push({id:'l'+currentUser.id+Date.now()+Math.random(),uid:currentUser.id,type,status,time:" + corrected;
-  const breakSite = "state.logs.push({id:'l'+currentUser.id+Date.now()+Math.random(),uid:currentUser.id,type:'Break',status:active?'Break End':'Break Start',time:" + corrected;
+  /* `offering` is the break direction the button displayed, re-checked against
+     a fresh read when the note modal closes — it replaced an `active?…:…`
+     captured before the modal opened, which could write the opposite of what
+     was asked for if anything moved while the person typed. What this test
+     pins is unchanged: the corrected clock and the entropy id. */
+  const breakSite = "state.logs.push({id:'l'+currentUser.id+Date.now()+Math.random(),uid:currentUser.id,type:'Break',status:offering,time:" + corrected;
   assert.ok(engine.includes(punchSite), "engine self-punch must use the corrected clock and entropy id");
   assert.ok(engine.includes(breakSite), "engine break punch must use the corrected clock and entropy id");
 });
