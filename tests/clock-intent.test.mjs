@@ -34,19 +34,23 @@ assert.ok(tpl, "the engine bundler template line could not be found");
 const engine = JSON.parse(tpl);
 
 test("the app refuses to write the opposite of what the button offered", () => {
-  assert.match(page, /const punchClock = useCallback\(\(mode: string, note = "", intent\?: "In" \| "Out"\) => \{/);
+  assert.match(page, /const punchClock = useCallback\(async \(mode: string, note = "", intent\?: "In" \| "Out"\) => \{/);
   assert.match(page, /if \(intent && intent !== status\) \{/);
-  assert.match(page, /Nothing was changed — this screen was out of date and has been refreshed\./);
+  assert.match(page, /nothing was changed\. This screen was out of date and has been refreshed\./);
+  // And it names the state the record actually holds, with the time it began.
+  assert.match(page, /`You are already clocked in\$\{since\} — nothing was changed\./);
   // Refused, and refused BEFORE anything is appended or stored.
   const body = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
   const guardAt = body.indexOf("if (intent && intent !== status)");
   assert.ok(guardAt > 0 && guardAt < body.indexOf("store.logs.push("), "the guard must run before the write");
-  assert.match(body, /return false;\s*\n\s*\}\s*\n\s*\/\* Server-corrected time/);
+  // What follows the refusal is the second refusal (a no-op punch), and only
+  // then the write — so neither disagreement can reach store.logs.
+  assert.match(body, /return false;\s*\n\s*\}\s*\n\s*\/\* Belt and braces: a punch that would not CHANGE anything/);
 });
 
 test("the button hands over exactly what it displayed", () => {
   assert.match(page, /punch\(open \? open\.mode : mode, note, open \? "Out" : "In"\)/);
-  assert.match(page, /punch: \(mode: string, note\?: string, intent\?: "In" \| "Out"\) => boolean;/);
+  assert.match(page, /punch: \(mode: string, note\?: string, intent\?: "In" \| "Out"\) => Promise<boolean>;/);
 });
 
 test("the engine decides from a fresh read, not its own old snapshot", () => {
