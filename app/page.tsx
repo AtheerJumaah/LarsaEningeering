@@ -4677,8 +4677,7 @@ export default function Home() {
        ceiling. Releasing it costs no safety: the actual guarantee is
        confirmClockState, which is consulted on the press itself and falls
        back honestly when it cannot reach the ledger. */
-    if (!supabaseConfigured()) markClockConfirmed();
-    const clockGateCeiling = window.setTimeout(markClockConfirmed, 12000);
+    const clockGateCeiling = window.setTimeout(markClockConfirmed, supabaseConfigured() ? 12000 : 0);
     return () => {
       window.clearTimeout(clockGateCeiling);
       cleanupAccounts();
@@ -7151,9 +7150,17 @@ export default function Home() {
   /* Breaks use their own status values on purpose. Every hour calculation in
      this app pairs "In" with "Out", so a break recorded that way would be
      counted as a whole separate shift. These stay visible but inert. */
-  const punchBreak = useCallback((note = "") => {
+  const punchBreak = useCallback(async (note = "", intent?: "Break Start" | "Break End") => {
     const user = sessionUserRef.current;
     if (!user) return false;
+    /* A break is the same kind of decision as a clock punch and fails the same
+       way: derived from whatever this device had cached, it turns a tap on a
+       stale screen into a break nobody took. So it waits for the same
+       confirmation, and carries the same intent the pressed button offered. */
+    if (!clockConfirmedRef.current) {
+      notify("Checking your break status…");
+      await whenClockConfirmed();
+    }
     const store = parseStore("larsaStaffV8");
     if (!store) { notify("Attendance records are still loading."); return false; }
     if (!Array.isArray(store.logs)) store.logs = [];
@@ -7161,15 +7168,36 @@ export default function Home() {
       .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
     const ending = latestBreak?.status === "Break Start";
+    /* Screen and record disagree: write nothing, say what is actually on the
+       record, and redraw — never the opposite of what the button offered. */
+    const offering: "Break Start" | "Break End" = ending ? "Break End" : "Break Start";
+    if (intent && intent !== offering) {
+      notify(ending
+        ? "You are already on a break — nothing was changed. This screen was out of date and has been refreshed."
+        : "You are not on a break — nothing was changed. This screen was out of date and has been refreshed.");
+      setStorageTick((value) => value + 1);
+      refreshStaffEngine();
+      return false;
+    }
     /* A break only makes sense inside a shift. Starting one while clocked out
        would leave an open break dangling into the next day and read as if the
        person were on a break they never took. Ending one is always allowed, so
        nobody can get stuck on break by clocking out first. */
     if (!ending) {
+      /* Starting a break asserts the person is mid-shift, so that claim is
+         checked against the shared ledger too — the newer of (ledger, device)
+         wins, exactly as a clock punch is judged. Ending one is never gated:
+         nobody may get stuck on a break because the network is down. */
       const latestPunch = (store.logs as ClockLog[])
         .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
         .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-      if (latestPunch?.status !== "In") {
+      const confirmed = await confirmClockState(user.id);
+      const localAt = latestPunch?.time ? new Date(latestPunch.time).getTime() : 0;
+      const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
+      const onShift = confirmed.reached && confirmed.status && serverAt >= localAt
+        ? confirmed.status === "In"
+        : latestPunch?.status === "In";
+      if (!onShift) {
         notify("Clock in first — a break has to sit inside a shift.");
         return false;
       }
@@ -7187,7 +7215,17 @@ export default function Home() {
     setStorageTick((value) => value + 1);
     notify(ending ? "Break ended." : "Break started.");
     return true;
-  }, [notify, refreshStaffEngine]);
+  }, [notify, refreshStaffEngine, whenClockConfirmed]);
+  /* The same hand-off for breaks, registered after punchBreak exists. One
+     guarded writer per kind of record; the engine's local append survives only
+     for the standalone engine, opened with no app around it. */
+  useEffect(() => {
+    const holder = window as unknown as {
+      __larsaBreak?: (intent: "Break Start" | "Break End", note?: string) => void;
+    };
+    holder.__larsaBreak = (intent, note) => { void punchBreak(note || "", intent); };
+    return () => { delete holder.__larsaBreak; };
+  }, [punchBreak]);
 
   /* Clocking someone else in or out. Deliberately records who did it so the
      action is never anonymous in the attendance history. */
@@ -17954,7 +17992,7 @@ function QuickClock({
   sessions: ClockSession[];
   summary: HomeSummary;
   punch: (mode: string, note?: string, intent?: "In" | "Out") => Promise<boolean>;
-  punchBreak: (note?: string) => boolean;
+  punchBreak: (note?: string, intent?: "Break Start" | "Break End") => Promise<boolean>;
   submitCorrection: (draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
     date: string; from: string; to: string; reason: string; mode: string;
@@ -17976,6 +18014,7 @@ function QuickClock({
   const [mode, setMode] = useState("Office");
   const [note, setNote] = useState("");
   const [punching, setPunching] = useState(false);
+  const [breaking, setBreaking] = useState(false);
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({
     kind: "Missed Clock" as "Missed Clock" | "Missed Break" | "Extra Hours",
@@ -18242,12 +18281,26 @@ function QuickClock({
             {new Date(onBreak.time || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             {onBreak.note ? ` · ${onBreak.note}` : ""}
           </span>
-          <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>End Break</button>
+          <button type="button"
+            disabled={!clockReady || breaking}
+            onClick={async () => {
+              if (breaking) return;
+              setBreaking(true);
+              try { if (await punchBreak(note, "Break End")) setNote(""); }
+              finally { setBreaking(false); }
+            }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "End Break"}</button>
         </section>
       ) : open ? (
         <section className="break-banner">
           <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
-          <button type="button" onClick={() => { if (punchBreak(note)) setNote(""); }}>Start Break</button>
+          <button type="button"
+            disabled={!clockReady || breaking}
+            onClick={async () => {
+              if (breaking) return;
+              setBreaking(true);
+              try { if (await punchBreak(note, "Break Start")) setNote(""); }
+              finally { setBreaking(false); }
+            }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "Start Break"}</button>
         </section>
       ) : null}
 
