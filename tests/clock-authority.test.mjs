@@ -100,11 +100,14 @@ test("4. a punch that would change nothing is never recorded", () => {
 
 test("5. the Timeclock panel hands its punch to the same guarded writer", () => {
   assert.match(engine, /function larsaAppPunch\(\)\{try\{var p=window\.parent;if\(p&&p!==window&&typeof p\.__larsaPunch==='function'\)return p\.__larsaPunch\}catch\(e\)\{\}return null\}/);
-  assert.match(engine, /var hand=larsaAppPunch\(\);if\(hand\)\{var pending=window\.__larsaPendingNote\|\|'';window\.__larsaPendingNote='';try\{hand\(type,status,pending\);return\}/);
+  // Signed with the panel's own user, so the app can refuse a punch that would
+  // land on somebody else — see tests/punch-concurrency.test.mjs.
+  assert.match(engine, /var hand=larsaAppPunch\(\);if\(hand\)\{var pending=window\.__larsaPendingNote\|\|'';window\.__larsaPendingNote='';try\{hand\(type,status,pending,currentUser\.id\);return\}/);
   // The note the person typed travels with the hand-off.
   assert.match(engine, /window\.__larsaPendingNote = note \|\| '';/);
   // And the app publishes exactly that hook.
-  assert.match(page, /holder\.__larsaPunch = \(mode, intent, note\) => \{ void punchClock\(mode, note \|\| "", intent\); \};/);
+  assert.match(page, /holder\.__larsaPunch = \(mode, intent, note, uid\) => \{/);
+  assert.match(page, /void punchClockGuarded\(mode, note \|\| "", intent\);/);
 });
 
 test("the gate can never strand the clock", () => {
