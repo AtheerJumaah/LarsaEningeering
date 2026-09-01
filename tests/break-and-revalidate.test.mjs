@@ -80,8 +80,10 @@ test("the engine re-reads before it decides a break, and hands it over", () => {
   assert.match(engine, /if\(\(stillActive\?'Break End':'Break Start'\) !== offering\)\{/);
   // And the write is handed to the app's guarded writer.
   assert.match(engine, /typeof p\.__larsaBreak==='function'\)return p\.__larsaBreak/);
-  assert.match(engine, /if\(hand\)\{try\{hand\(offering, note\|\|''\);return\}/);
-  assert.match(page, /holder\.__larsaBreak = \(intent, note\) => \{ void punchBreak\(note \|\| "", intent\); \};/);
+  // The hand-off is now SIGNED with the person the panel believes is clocking.
+  assert.match(engine, /if\(hand\)\{try\{hand\(offering, note\|\|'', currentUser\.id\);return\}/);
+  assert.match(page, /holder\.__larsaBreak = \(intent, note, uid\) => \{/);
+  assert.match(page, /void punchBreakGuarded\(note \|\| "", intent\);/);
 });
 
 test("a tab left open revalidates on a timer, not only on an edge", () => {
