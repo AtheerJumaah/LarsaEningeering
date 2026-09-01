@@ -227,41 +227,73 @@ export function initAttendanceLedger(): () => void {
    it can actually see, which is the best available truth. */
 export type ConfirmedClock = { reached: boolean; status: "In" | "Out" | null; at: string | null };
 
-export async function confirmClockState(uid: string, timeoutMs = 3500): Promise<ConfirmedClock> {
+/* `removedIds` is not optional in spirit: the ledger is append-only, so a
+   punch a manager DELETED is still in it for ever. Reconciliation has always
+   known this — it skips removed ids when restoring — but this read did not,
+   so a reset session kept answering "that person is clocked in" forever and
+   every later press was refused with "you are already clocked in". Nobody
+   could clock at all after their record was corrected. Same list, same rule,
+   both directions. */
+export async function confirmClockState(
+  uid: string,
+  removedIds: readonly string[] = [],
+  timeoutMs = 3500,
+): Promise<ConfirmedClock> {
   const unknown: ConfirmedClock = { reached: false, status: null, at: null };
   if (!supabaseConfigured() || !uid) return unknown;
   const client = getSupabaseClient();
   if (!client) return unknown;
+  const removed = new Set(removedIds.map(String));
+  /* Instants, never strings. Postgres renders a timestamptz as
+     "…T15:58:00+00:00" and the browser writes "…T15:58:00.000Z"; comparing
+     those as text makes "." beat "+" and lets the local copy win a tie it
+     should lose. */
+  const ms = (value: unknown) => {
+    const at = Date.parse(String(value || ""));
+    return Number.isFinite(at) ? at : 0;
+  };
   try {
     /* Anything already queued on THIS device but not yet delivered is part of
        the truth too — otherwise a punch made seconds ago offline would look
        like it never happened and the next press would repeat it. */
     const queued = readJson<LedgerEvent[]>(QUEUE_KEY, [])
-      .filter((event) => event?.uid === uid && (event.status === "In" || event.status === "Out"))
-      .sort((left, right) => String(right.occurred_at).localeCompare(String(left.occurred_at)))[0] || null;
+      .filter((event) => event?.uid === uid
+        && (event.status === "In" || event.status === "Out")
+        && !removed.has(String(event.client_event_id || "")))
+      .sort((left, right) => ms(right.occurred_at) - ms(left.occurred_at))[0] || null;
     const answered = await Promise.race([
       client
         .from("attendance_events")
-        .select("status, occurred_at")
+        .select("client_event_id, status, occurred_at")
         .eq("uid", uid)
         .in("status", ["In", "Out"])
         .order("occurred_at", { ascending: false })
-        .limit(1),
+        /* A few rows, not one: if the newest turns out to be a removed record
+           the answer is the newest one that SURVIVES, not "no idea". Still a
+           single indexed lookup. */
+        .limit(25),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("confirm: timed out")), timeoutMs)),
     ]);
-    const { data, error } = answered as { data: { status?: string; occurred_at?: string }[] | null; error: unknown };
+    const { data, error } = answered as {
+      data: { client_event_id?: string; status?: string; occurred_at?: string }[] | null;
+      error: unknown;
+    };
     if (error) return unknown;
-    const row = Array.isArray(data) && data.length ? data[0] : null;
+    const rows = Array.isArray(data) ? data : [];
+    const row = rows.find((candidate) => !removed.has(String(candidate?.client_event_id || ""))) || null;
     let status: "In" | "Out" | null = null;
     let at: string | null = null;
     if (row?.status) {
       status = String(row.status) === "In" ? "In" : "Out";
       at = row.occurred_at ? String(row.occurred_at) : null;
     }
-    if (queued?.occurred_at && (!at || String(queued.occurred_at) > at)) {
+    if (queued?.occurred_at && ms(queued.occurred_at) > ms(at)) {
       status = queued.status === "In" ? "In" : "Out";
       at = String(queued.occurred_at);
     }
+    /* Every recent row was removed: the ledger has nothing to say about this
+       person any more, so say so instead of guessing. The caller then trusts
+       the store, which is what the manager actually curated. */
     return { reached: true, status, at };
   } catch {
     return unknown;
