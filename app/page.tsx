@@ -4438,6 +4438,17 @@ export default function Home() {
      per-session, so the offer resets every time the app is opened. */
   const clockRefusals = useRef<Record<string, number>>({});
   const breakRefusals = useRef<Record<string, number>>({});
+  /* One punch at a time, across every surface. Both punch writers read the
+     staff document, modify it and write it back — and since they ask the
+     server first, an `await` sits between the read and the write. Two presses
+     landing together (the panel and the app, or two fast taps on the engine
+     button, which carries no in-flight state of its own — and the
+     press-again flow invites exactly such a quick second press) could each
+     parse a copy that lacks the other's punch, and the later write would
+     silently DROP the earlier one. A lost punch is the failure this whole
+     repair series exists to prevent, so the lock lives in the writer, not on
+     any one button. */
+  const punchLock = useRef(false);
   const markClockConfirmed = useCallback(() => {
     setClockConfirmed(true);
     const waiting = clockConfirmedWaiters.current;
@@ -7106,19 +7117,8 @@ export default function Home() {
     const trueAt = ledgerWins ? confirmed.at : (latest?.time || null);
     const status = trueStatus === "In" ? "Out" : "In";
     const since = trueAt ? ` since ${new Date(trueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-    /* The pressed button and the truth disagree: write NOTHING. Nobody's
-       status changes on a disagreement — it is reported and the screen is
-       redrawn from what is real, so the next press is a deliberate one. */
-    /* Refuse ONCE, never twice. The first press that contradicts the record is
-       held back, the real state is named, and the screen is refreshed — that is
-       what stops a stale screen writing a silent opposite punch. But a person
-       who then presses AGAIN, having just been shown what the record says, is
-       making an informed decision, and the app has no business standing in
-       their way: being unable to clock in is a wage problem they cannot fix
-       themselves, while a duplicate punch is visible and can be trimmed. So a
-       repeat of the same press inside two minutes is honoured, whatever the
-       records disagree about. No conflict, and no future bug of this kind, can
-       lock somebody out of their own timesheet. */
+    /* The pressed button and the truth disagree: write NOTHING on the first
+       press — it is reported, and the screen is redrawn from what is real. */
     if (intent && intent !== status) {
       clockRefusals.current[refusalKey] = serverNowMs();
       notify(status === "Out"
@@ -7174,6 +7174,12 @@ export default function Home() {
     notify(status === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
     return true;
   }, [notify, refreshStaffEngine, whenClockConfirmed]);
+  const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
+    if (punchLock.current) { notify("Your last punch is still saving — one moment."); return false; }
+    punchLock.current = true;
+    try { return await punchClock(mode, note, intent); }
+    finally { punchLock.current = false; }
+  }, [punchClock, notify]);
   /* The Timeclock panel's clock button reaches up to this and hands its punch
      over, so the guarded writer above is the ONLY thing in the product that
      can append a punch. Same origin, so the panel can simply call it; if the
@@ -7181,11 +7187,25 @@ export default function Home() {
      path and nothing changes for it. */
   useEffect(() => {
     const holder = window as unknown as {
-      __larsaPunch?: (mode: string, intent: "In" | "Out", note?: string) => void;
+      __larsaPunch?: (mode: string, intent: "In" | "Out", note?: string, uid?: string) => void;
     };
-    holder.__larsaPunch = (mode, intent, note) => { void punchClock(mode, note || "", intent); };
+    /* The panel signs its hand-off with the person IT believes is clocking,
+       and this refuses anything that is not the app's own signed-in user. The
+       panel keeps its own `currentUser`, seeded by the app at sign-in — so the
+       two agree in practice, but "in practice" is not good enough when the
+       cost of being wrong is a punch on somebody else's timesheet. A panel
+       still running an older build sends no uid; that is accepted, because
+       refusing it would stop those people clocking at all. */
+    holder.__larsaPunch = (mode, intent, note, uid) => {
+      const me = sessionUserRef.current;
+      if (uid && me && String(uid) !== String(me.id)) {
+        notifyRef.current("This Timeclock panel is showing a different person. Reopen it and try again — nothing was changed.");
+        return;
+      }
+      void punchClockGuarded(mode, note || "", intent);
+    };
     return () => { delete holder.__larsaPunch; };
-  }, [punchClock]);
+  }, [punchClockGuarded]);
 
   /* Breaks use their own status values on purpose. Every hour calculation in
      this app pairs "In" with "Out", so a break recorded that way would be
@@ -7264,16 +7284,32 @@ export default function Home() {
     notify(ending ? "Break ended." : "Break started.");
     return true;
   }, [notify, refreshStaffEngine, whenClockConfirmed]);
+  /* Breaks share the clock's lock, not one of their own: both write the same
+     document, so a break and a punch landing together would drop one just as
+     surely as two punches would. */
+  const punchBreakGuarded = useCallback(async (note = "", intent?: "Break Start" | "Break End") => {
+    if (punchLock.current) { notify("Your last punch is still saving — one moment."); return false; }
+    punchLock.current = true;
+    try { return await punchBreak(note, intent); }
+    finally { punchLock.current = false; }
+  }, [punchBreak, notify]);
   /* The same hand-off for breaks, registered after punchBreak exists. One
      guarded writer per kind of record; the engine's local append survives only
      for the standalone engine, opened with no app around it. */
   useEffect(() => {
     const holder = window as unknown as {
-      __larsaBreak?: (intent: "Break Start" | "Break End", note?: string) => void;
+      __larsaBreak?: (intent: "Break Start" | "Break End", note?: string, uid?: string) => void;
     };
-    holder.__larsaBreak = (intent, note) => { void punchBreak(note || "", intent); };
+    holder.__larsaBreak = (intent, note, uid) => {
+      const me = sessionUserRef.current;
+      if (uid && me && String(uid) !== String(me.id)) {
+        notifyRef.current("This Timeclock panel is showing a different person. Reopen it and try again — nothing was changed.");
+        return;
+      }
+      void punchBreakGuarded(note || "", intent);
+    };
     return () => { delete holder.__larsaBreak; };
-  }, [punchBreak]);
+  }, [punchBreakGuarded]);
 
   /* Clocking someone else in or out. Deliberately records who did it so the
      action is never anonymous in the attendance history. */
@@ -7804,12 +7840,18 @@ export default function Home() {
       notify("Auto build needs the Manage permission on Weekly Schedule.");
       return false;
     }
+    /* Ask FIRST, then read. This confirm can sit open for minutes, and the
+       whole document is read, modified and written back — so a store read
+       before the question would write back a copy from before whatever landed
+       while the person was deciding. The sync layer's merge would repair the
+       damage, but relying on the repair instead of not causing it is how the
+       original incidents started. */
+    if (!(await dialog.confirm("Rebuild this week's schedule using the current build rules? Days you have already set will be replaced."))) return false;
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.users)) {
       notify("The staff directory is still loading.");
       return false;
     }
-    if (!(await dialog.confirm("Rebuild this week's schedule using the current build rules? Days you have already set will be replaced."))) return false;
     const staff = (store.users as StaffUser[]).filter((user) => user.enabled !== false);
     const previous = (store.schedule || {}) as Record<string, Record<string, { code?: string }[]>>;
     store.schedule ||= {};
@@ -10028,9 +10070,9 @@ export default function Home() {
               user={sessionUser}
               sessions={clockSessions}
               summary={homeSummary}
-              punch={punchClock}
+              punch={punchClockGuarded}
               clockReady={clockConfirmed}
-              punchBreak={punchBreak}
+              punchBreak={punchBreakGuarded}
               submitCorrection={submitCorrection}
               users={accessUsers}
               trimSession={trimSession}
