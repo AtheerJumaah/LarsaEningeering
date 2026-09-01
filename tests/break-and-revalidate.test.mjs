@@ -44,15 +44,16 @@ test("a break waits for the same confirmation a clock punch waits for", () => {
 
 test("a break press that contradicts the record writes nothing", () => {
   assert.match(breakBody, /const offering: "Break Start" \| "Break End" = ending \? "Break End" : "Break Start";/);
-  assert.match(breakBody, /if \(intent && intent !== offering\) \{/);
+  assert.match(breakBody, /if \(intent && intent !== offering && !breakInsisting\) \{/);
   assert.match(breakBody, /nothing was changed\. This screen was out of date and has been refreshed\./);
-  const refuseAt = breakBody.indexOf("if (intent && intent !== offering)");
+  const refuseAt = breakBody.indexOf("if (intent && intent !== offering && !breakInsisting)");
   assert.ok(refuseAt > 0 && refuseAt < breakBody.indexOf("store.logs.push("),
     "the refusal must run before anything is appended");
 });
 
 test("'am I on shift?' is answered by the ledger, not the cached copy", () => {
-  assert.match(breakBody, /const confirmed = await confirmClockState\(user\.id\);/);
+  // The removed-record list travels with the question — see the ledger test.
+  assert.match(breakBody, /const confirmed = await confirmClockState\(user\.id, store\.removedLogIds \|\| \[\]\);/);
   assert.match(breakBody, /confirmed\.reached && confirmed\.status && serverAt >= localAt/);
   // Ending a break is never gated on that — nobody may get stuck on a break.
   const gateAt = breakBody.indexOf("const confirmed = await confirmClockState");
