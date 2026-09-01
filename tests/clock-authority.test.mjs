@@ -62,17 +62,24 @@ test("1. a press before the server has been heard from is HELD, not guessed", ()
 });
 
 test("2. the truth comes from the shared ledger, newest wins", () => {
-  assert.match(ledger, /export async function confirmClockState\(uid: string, timeoutMs = 3500\)/);
+  assert.match(ledger, /export async function confirmClockState\(\s*\n\s*uid: string,\s*\n\s*removedIds: readonly string\[\] = \[\],\s*\n\s*timeoutMs = 3500,\s*\n\)/);
   // One indexed row for one person — not the whole store.
   assert.match(ledger, /\.eq\("uid", uid\)/);
   assert.match(ledger, /\.in\("status", \["In", "Out"\]\)/);
-  assert.match(ledger, /\.order\("occurred_at", \{ ascending: false \}\)\s*\n\s*\.limit\(1\)/);
+  /* A handful of rows, not one: the newest row may be a punch a manager
+     DELETED, and the answer then has to be the newest one that survives
+     rather than a record that no longer exists. Still one indexed lookup. */
+  assert.match(ledger, /\.order\("occurred_at", \{ ascending: false \}\)[\s\S]{0,260}?\.limit\(25\)/);
   // A punch this device queued but has not delivered yet still counts.
   assert.match(ledger, /const queued = readJson<LedgerEvent\[\]>\(QUEUE_KEY, \[\]\)/);
   // Offline says so rather than pretending silence is an answer.
   assert.match(ledger, /const unknown: ConfirmedClock = \{ reached: false, status: null, at: null \};/);
-  assert.match(punch, /const confirmed = await confirmClockState\(user\.id\);/);
-  assert.match(punch, /confirmed\.reached && confirmed\.status && serverAt >= localAt/);
+  assert.match(punch, /const confirmed = await confirmClockState\(user\.id, preStore\?\.removedLogIds \|\| \[\]\);/);
+  /* Newest wins — unless the person has just been turned away for this same
+     press, in which case the staff document gets the last word so nobody can
+     be locked out of their own timesheet. */
+  assert.match(punch, /const ledgerWins = !insisting && confirmed\.reached && Boolean\(confirmed\.status\) && serverAt >= localAt;/);
+  assert.match(punch, /const trueStatus: "In" \| "Out" \| null = ledgerWins/);
 });
 
 test("3. a press that contradicts the truth writes nothing", () => {
