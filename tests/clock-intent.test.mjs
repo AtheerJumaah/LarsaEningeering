@@ -45,7 +45,7 @@ test("the app refuses to write the opposite of what the button offered", () => {
   assert.ok(guardAt > 0 && guardAt < body.indexOf("store.logs.push("), "the guard must run before the write");
   // What follows the refusal is the second refusal (a no-op punch), and only
   // then the write — so neither disagreement can reach store.logs.
-  assert.match(body, /return false;\s*\n\s*\}\s*\n\s*\/\* Belt and braces: a punch that would not CHANGE anything/);
+  assert.match(body, /return false;\s*\n\s*\}\s*\n\s*delete clockRefusals\.current\[refusalKey\];\s*\n\s*\/\* Belt and braces: a punch that would not CHANGE anything/);
 });
 
 test("the button hands over exactly what it displayed", () => {
