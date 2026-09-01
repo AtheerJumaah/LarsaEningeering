@@ -4431,6 +4431,13 @@ export default function Home() {
   const [clockConfirmed, setClockConfirmed] = useState(false);
   const clockConfirmedRef = useRef(false);
   const clockConfirmedWaiters = useRef<(() => void)[]>([]);
+  /* When each person was last told "that press contradicts the record", per
+     direction. A second press of the same direction inside two minutes is
+     honoured against the staff document instead — see punchClock. Kept in a
+     ref, not state: it must never cause a render, and it is deliberately
+     per-session, so the offer resets every time the app is opened. */
+  const clockRefusals = useRef<Record<string, number>>({});
+  const breakRefusals = useRef<Record<string, number>>({});
   const markClockConfirmed = useCallback(() => {
     setClockConfirmed(true);
     const waiting = clockConfirmedWaiters.current;
@@ -7039,7 +7046,13 @@ export default function Home() {
        from one. The newest of (ledger, this device) is the best available
        truth; when the ledger cannot be reached we say so by falling back to
        the device rather than by pretending. */
-    const confirmed = await confirmClockState(user.id);
+    /* Read the store first, only to learn which records were deliberately
+       REMOVED, and hand that list to the ledger read — the ledger keeps
+       deleted punches for ever, and without this it answers with one of them.
+       The store is then re-read below, after the await, so the copy that is
+       actually modified and written back is the freshest one. */
+    const preStore = parseStore("larsaStaffV8") as { removedLogIds?: string[] } | null;
+    const confirmed = await confirmClockState(user.id, preStore?.removedLogIds || []);
     const store = parseStore("larsaStaffV8");
     if (!store) {
       notify("Attendance records are still loading. Please try again.");
@@ -7069,26 +7082,53 @@ export default function Home() {
     if (latest?.time && serverNowMs() - new Date(latest.time).getTime() < 1200) {
       return false;
     }
-    /* Whichever of the two is NEWER is what is true right now. */
+    /* Refuse ONCE, never twice. The first press that contradicts the record is
+       held back, the real state is named and the screen is refreshed — that is
+       what stops a stale screen writing a silent opposite punch. But a person
+       who presses AGAIN, having just been shown what the record says, is making
+       an informed decision, and the app has no business standing in the way:
+       being unable to clock in is a wage problem they cannot fix themselves,
+       whereas a duplicate punch is visible and can be trimmed.
+
+       On that second press the LEDGER is set aside and the staff document
+       decides — the document a manager actually curates, and the one the
+       button in front of them was drawn from. Every other guard still runs
+       against it, so this widens nothing except who gets the last word. */
+    const refusalKey = `${user.id}:${intent || ""}`;
+    const insisting = Boolean(intent) && serverNowMs() - (clockRefusals.current[refusalKey] || 0) < 120_000;
     const localAt = latest?.time ? new Date(latest.time).getTime() : 0;
     const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
-    const trueStatus: "In" | "Out" | null = confirmed.reached && confirmed.status && serverAt >= localAt
+    /* Whichever of the two is NEWER is what is true right now. */
+    const ledgerWins = !insisting && confirmed.reached && Boolean(confirmed.status) && serverAt >= localAt;
+    const trueStatus: "In" | "Out" | null = ledgerWins
       ? confirmed.status
       : (latest?.status === "In" ? "In" : latest ? "Out" : null);
-    const trueAt = confirmed.reached && confirmed.status && serverAt >= localAt ? confirmed.at : (latest?.time || null);
+    const trueAt = ledgerWins ? confirmed.at : (latest?.time || null);
     const status = trueStatus === "In" ? "Out" : "In";
     const since = trueAt ? ` since ${new Date(trueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
     /* The pressed button and the truth disagree: write NOTHING. Nobody's
        status changes on a disagreement — it is reported and the screen is
        redrawn from what is real, so the next press is a deliberate one. */
+    /* Refuse ONCE, never twice. The first press that contradicts the record is
+       held back, the real state is named, and the screen is refreshed — that is
+       what stops a stale screen writing a silent opposite punch. But a person
+       who then presses AGAIN, having just been shown what the record says, is
+       making an informed decision, and the app has no business standing in
+       their way: being unable to clock in is a wage problem they cannot fix
+       themselves, while a duplicate punch is visible and can be trimmed. So a
+       repeat of the same press inside two minutes is honoured, whatever the
+       records disagree about. No conflict, and no future bug of this kind, can
+       lock somebody out of their own timesheet. */
     if (intent && intent !== status) {
+      clockRefusals.current[refusalKey] = serverNowMs();
       notify(status === "Out"
-        ? `You are already clocked in${since} — nothing was changed. This screen was out of date and has been refreshed.`
-        : "You are already clocked out — nothing was changed. This screen was out of date and has been refreshed.");
+        ? `You are already clocked in${since} — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are clocking ${intent === "In" ? "in" : "out"}.`
+        : `You are already clocked out — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are clocking ${intent === "In" ? "in" : "out"}.`);
       setStorageTick((value) => value + 1);
       refreshStaffEngine();
       return false;
     }
+    delete clockRefusals.current[refusalKey];
     /* Belt and braces: a punch that would not CHANGE anything is not a
        punch. Whatever else goes wrong — a retry, two tabs, a queued press
        landing late — repeating the state somebody is already in can never
@@ -7171,14 +7211,18 @@ export default function Home() {
     /* Screen and record disagree: write nothing, say what is actually on the
        record, and redraw — never the opposite of what the button offered. */
     const offering: "Break Start" | "Break End" = ending ? "Break End" : "Break Start";
-    if (intent && intent !== offering) {
+    const breakKey = `${user.id}:${intent || ""}`;
+    const breakInsisting = Boolean(intent) && serverNowMs() - (breakRefusals.current[breakKey] || 0) < 120_000;
+    if (intent && intent !== offering && !breakInsisting) {
+      breakRefusals.current[breakKey] = serverNowMs();
       notify(ending
-        ? "You are already on a break — nothing was changed. This screen was out of date and has been refreshed."
-        : "You are not on a break — nothing was changed. This screen was out of date and has been refreshed.");
+        ? "You are already on a break — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are ending it."
+        : "You are not on a break — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are starting one.");
       setStorageTick((value) => value + 1);
       refreshStaffEngine();
       return false;
     }
+    delete breakRefusals.current[breakKey];
     /* A break only makes sense inside a shift. Starting one while clocked out
        would leave an open break dangling into the next day and read as if the
        person were on a break they never took. Ending one is always allowed, so
@@ -7191,13 +7235,17 @@ export default function Home() {
       const latestPunch = (store.logs as ClockLog[])
         .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
         .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-      const confirmed = await confirmClockState(user.id);
+      const confirmed = await confirmClockState(user.id, store.removedLogIds || []);
       const localAt = latestPunch?.time ? new Date(latestPunch.time).getTime() : 0;
       const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
-      const onShift = confirmed.reached && confirmed.status && serverAt >= localAt
+      /* Same rule as the clock: a second press after being turned away trusts
+         the staff document, so nobody is stuck unable to start a break because
+         the ledger still holds a punch that was deleted. */
+      const onShift = !breakInsisting && confirmed.reached && confirmed.status && serverAt >= localAt
         ? confirmed.status === "In"
         : latestPunch?.status === "In";
       if (!onShift) {
+        breakRefusals.current[breakKey] = serverNowMs();
         notify("Clock in first — a break has to sit inside a shift.");
         return false;
       }
