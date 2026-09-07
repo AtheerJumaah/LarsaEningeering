@@ -82,20 +82,29 @@ test("2. the truth comes from the shared ledger, newest wins", () => {
   assert.match(punch, /const trueStatus: "In" \| "Out" \| null = ledgerWins/);
 });
 
-test("3. a press that contradicts the truth writes nothing", () => {
-  assert.match(punch, /if \(intent && intent !== status\) \{/);
-  assert.match(punch, /nothing was changed\. This screen was out of date and has been refreshed\./);
-  const refuseAt = punch.indexOf("if (intent && intent !== status)");
-  assert.ok(refuseAt > 0 && refuseAt < punch.indexOf("store.logs.push("),
-    "the refusal must run before anything is appended");
+test("3. the press writes the direction the BUTTON offered, never a recomputed one", () => {
+  /* The original defect was a stale screen turning a press into its silent
+     OPPOSITE. The refuse-then-press-again era prevented that but made people
+     press twice. Both are gone the same way: what gets WRITTEN is the intent
+     the button displayed — a recomputed direction can never reach the record
+     when an intent is present. */
+  assert.match(punch, /const decided: "In" \| "Out" = intent \?\? \(trueStatus === "In" \? "Out" : "In"\);/);
+  assert.match(punch, /status: decided,\s*\n\s*time: now, active: decided === "In"/);
+  assert.doesNotMatch(punch, /const status = trueStatus === "In" \? "Out" : "In";/);
 });
 
-test("4. a punch that would change nothing is never recorded", () => {
-  assert.match(punch, /if \(trueStatus !== null && trueStatus === status\) \{/);
-  assert.match(punch, /You are already clocked in\$\{since\}\./);
-  const noopAt = punch.indexOf("if (trueStatus !== null && trueStatus === status)");
+test("4. a punch that would change nothing is answered and healed, not written", () => {
+  /* Repeating the state somebody is already in is a satisfied goal, not an
+     error: it is answered definitively, the screen is corrected, and a ledger
+     reconcile is fired on the spot so a store that disagreed heals without
+     waiting for the next app load. No duplicate can open or close a shift. */
+  assert.match(punch, /if \(trueStatus !== null && trueStatus === decided && !insisting\) \{/);
+  assert.match(punch, /You are already clocked in\$\{since\} — nothing to do\./);
+  assert.match(punch, /You are already clocked out\$\{since\} — nothing to do\./);
+  assert.match(punch, /void reconcileStoreFromLedger\(\)\.then\(\(\{ restored \}\) => \{/);
+  const noopAt = punch.indexOf("if (trueStatus !== null && trueStatus === decided");
   assert.ok(noopAt > 0 && noopAt < punch.indexOf("store.logs.push("),
-    "the no-op guard must run before anything is appended");
+    "the duplicate answer must run before anything is appended");
 });
 
 test("5. the Timeclock panel hands its punch to the same guarded writer", () => {
