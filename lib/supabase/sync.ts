@@ -358,7 +358,20 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         (payload) => {
           const row = payload.new as { store_key?: string; data?: unknown; updated_at?: string } | null;
           if (!row?.store_key || !(SYNCED_KEYS as readonly string[]).includes(row.store_key)) return;
-          applyRemote(row.store_key as SyncedKey, row.data ?? {}, row.updated_at ? String(row.updated_at) : null);
+          /* A realtime frame is a NOTIFICATION, not a trustworthy copy of the
+             row. Past the transport's message-size cap the `data` column
+             arrives EMPTY while the event still fires — measured live on
+             2026-09-07, when the ~900 KB staff blob crossed the cap: every
+             device that received the next change event pasted `{}` over its
+             good local staff store and the app rendered as if the company
+             had no staff at all. Content-free data therefore means
+             "something changed, contents unknown": re-fetch the
+             authoritative row instead of applying the nothing we were sent. */
+          if (!hasContent(row.data)) {
+            refreshFromServer("realtime payload had no data");
+            return;
+          }
+          applyRemote(row.store_key as SyncedKey, row.data, row.updated_at ? String(row.updated_at) : null);
         },
       )
       .subscribe((status, err) => {
@@ -384,6 +397,26 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      local edit against the shared base exactly like the push path does. */
   function applyRemote(key: SyncedKey, remoteData: unknown, remoteUpdatedAt: string | null) {
     const text = JSON.stringify(remoteData ?? {});
+    /* Never paste "nothing" over "something". Bootstrap already treats an
+       empty remote row as "seed it from local data" — so an empty arrival
+       here, while this device holds real content, is either a truncated
+       transport payload or the wipe-class incident this sync layer exists
+       to prevent. Either way the answer is a re-fetch, never a local wipe. */
+    if (!hasContent(remoteData)) {
+      let heldHasContent = false;
+      try { heldHasContent = hasContent(JSON.parse(localStorage.getItem(key) || "null")); } catch { /* unreadable = nothing to protect */ }
+      if (heldHasContent) {
+        /* The truncated-transport case never reaches here (the channel
+           handler re-fetches instead of applying), so an empty row that
+           does arrive was read authoritatively: the server actually lost
+           this blob. Do what bootstrap does with an empty remote — seed it
+           back from the surviving local copy (the push path merges against
+           whatever the server holds by then, so this can only ever add). */
+        console.warn(`[larsa-sync] refused to apply an empty remote copy of "${key}" over real local data — restoring the server copy instead`);
+        schedulePush(key);
+        return;
+      }
+    }
     if (lastKnown.get(key) === text) {
       if (remoteUpdatedAt) lastSeenAt.set(key, remoteUpdatedAt);
       return; // our own write echoed back, or nothing new
