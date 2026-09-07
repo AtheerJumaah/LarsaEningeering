@@ -312,13 +312,39 @@ export async function reconcileStoreFromLedger(): Promise<ReconcileResult> {
   const client = getSupabaseClient();
   if (!client) return { restored: 0 };
   const sinceIso = new Date(Date.now() - RECONCILE_WINDOW_MS).toISOString();
-  const { data, error } = await client
-    .from("attendance_events")
-    .select("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, person_name")
-    .gte("occurred_at", sinceIso)
-    .order("occurred_at", { ascending: true })
-    .limit(5000);
-  if (error || !Array.isArray(data) || !data.length) return { restored: 0 };
+  /* NEWEST first, and PAGED. Two things were silently defeating this restore:
+     PostgREST caps every response at 1000 rows however large the `limit`, and
+     the fetch was ordered ASCENDING — so the request for 5000 returned the
+     OLDEST 1000 events in the window and dropped everything after them. Once
+     the ledger passed ~1000 events the recent punches — exactly the Outs a
+     person needs restored so they can be shown clocked out and clock out
+     again — became invisible to reconciliation for good, while
+     confirmClockState (which reads newest-first under the cap) still saw them.
+     The store then kept a stale open shift, and the clock-out was refused as
+     "you are already clocked out." Ordering DESCENDING and paging past the cap
+     fixes it: the most recent activity is always covered first, and the whole
+     window is walked in 1000-row pages. */
+  const RECONCILE_PAGE = 1000;
+  const RECONCILE_MAX_PAGES = 8;
+  const rows: {
+    client_event_id?: string; occurred_at?: string; uid?: string; status?: string;
+    work_mode?: string; note?: string; clocked_by?: string; person_name?: string;
+  }[] = [];
+  for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
+    const from = page * RECONCILE_PAGE;
+    const { data: pageRows, error } = await client
+      .from("attendance_events")
+      .select("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, person_name")
+      .gte("occurred_at", sinceIso)
+      .order("occurred_at", { ascending: false })
+      .range(from, from + RECONCILE_PAGE - 1);
+    if (error) { if (page === 0) return { restored: 0 }; break; }
+    if (!Array.isArray(pageRows) || !pageRows.length) break;
+    for (const row of pageRows) rows.push(row);
+    if (pageRows.length < RECONCILE_PAGE) break;
+  }
+  const data = rows;
+  if (!data.length) return { restored: 0 };
 
   const raw = localStorage.getItem("larsaStaffV8");
   if (!raw) return { restored: 0 };
