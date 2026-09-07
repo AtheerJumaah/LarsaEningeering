@@ -7115,31 +7115,40 @@ export default function Home() {
       ? confirmed.status
       : (latest?.status === "In" ? "In" : latest ? "Out" : null);
     const trueAt = ledgerWins ? confirmed.at : (latest?.time || null);
-    const status = trueStatus === "In" ? "Out" : "In";
     const since = trueAt ? ` since ${new Date(trueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-    /* The pressed button and the truth disagree: write NOTHING on the first
-       press — it is reported, and the screen is redrawn from what is real. */
-    if (intent && intent !== status) {
+    /* ONE press decides. The press writes the direction the BUTTON OFFERED —
+       never a direction recomputed behind the person's back, so a stale screen
+       still cannot produce a silent opposite punch. The only press that does
+       not write is one that would repeat the state the person is already in —
+       and that is a satisfied goal, not an error: it is answered definitively
+       ("you are already clocked out since 17:04"), the screen is corrected,
+       and a ledger reconcile is started on the spot so the record heals
+       without waiting for the next app load. Nobody is told to press again to
+       get what they asked for; the earlier refuse-then-press-again flow is
+       exactly what people reported as "I have to do it more than once".
+
+       The never-locked-out escape stays absolute: a repeat of the same press
+       inside two minutes is written unconditionally, so even a wrong "truth"
+       can only ever cost one extra tap, with the real state named in between. */
+    const decided: "In" | "Out" = intent ?? (trueStatus === "In" ? "Out" : "In");
+    if (trueStatus !== null && trueStatus === decided && !insisting) {
       clockRefusals.current[refusalKey] = serverNowMs();
-      notify(status === "Out"
-        ? `You are already clocked in${since} — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are clocking ${intent === "In" ? "in" : "out"}.`
-        : `You are already clocked out — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are clocking ${intent === "In" ? "in" : "out"}.`);
+      notify(decided === "In"
+        ? `You are already clocked in${since} — nothing to do. If this is wrong, press again and it will be recorded anyway.`
+        : `You are already clocked out${since} — nothing to do. If this is wrong, press again and it will be recorded anyway.`);
       setStorageTick((value) => value + 1);
       refreshStaffEngine();
+      /* The screen said otherwise, so the store is missing a punch the ledger
+         holds. Restore it NOW rather than on the next app load. */
+      void reconcileStoreFromLedger().then(({ restored }) => {
+        if (restored > 0) {
+          setStorageTick((value) => value + 1);
+          refreshStaffEngine();
+        }
+      }).catch(() => { /* the next sync retries */ });
       return false;
     }
     delete clockRefusals.current[refusalKey];
-    /* Belt and braces: a punch that would not CHANGE anything is not a
-       punch. Whatever else goes wrong — a retry, two tabs, a queued press
-       landing late — repeating the state somebody is already in can never
-       be recorded, so a duplicate can never close or open a shift. */
-    if (trueStatus !== null && trueStatus === status) {
-      notify(status === "In"
-        ? `You are already clocked in${since}.`
-        : "You are already clocked out.");
-      setStorageTick((value) => value + 1);
-      return false;
-    }
     /* Server-corrected time, not the device's. A phone with a wrong clock
        used to write that wrong clock straight into the attendance record;
        serverNowIso() applies the measured skew (see lib/supabase/sync.ts). */
@@ -7159,8 +7168,8 @@ export default function Home() {
     store.logs.push({
       // uid + entropy so two people punching in the same millisecond on
       // different devices can never collide into one merged record.
-      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: mode, status,
-      time: now, active: status === "In", lastSeen: now, touchedAt: now,
+      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: mode, status: decided,
+      time: now, active: decided === "In", lastSeen: now, touchedAt: now,
       ...(note.trim() ? { note: note.trim() } : {}),
     });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
@@ -7171,7 +7180,7 @@ export default function Home() {
     pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
-    notify(status === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
+    notify(decided === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
     return true;
   }, [notify, refreshStaffEngine, whenClockConfirmed]);
   const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
