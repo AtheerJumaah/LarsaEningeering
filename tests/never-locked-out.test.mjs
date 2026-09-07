@@ -79,15 +79,16 @@ test("times are compared as instants, never as text", () => {
   assert.doesNotMatch(ledger, /localeCompare\(String\(left\.occurred_at\)\)/);
 });
 
-test("the first contradicting press is still refused, and says so", () => {
-  assert.match(punch, /if \(intent && intent !== status\) \{/);
+test("a press whose goal is already true is answered, and the escape stays armed", () => {
+  /* One press, one outcome: either the intent is written, or the person is
+     told the record already shows what they asked for — with the escape still
+     armed underneath, so a wrong "truth" costs at most one extra tap. */
+  assert.match(punch, /if \(trueStatus !== null && trueStatus === decided && !insisting\) \{/);
   assert.match(punch, /clockRefusals\.current\[refusalKey\] = serverNowMs\(\);/);
-  assert.match(punch, /nothing was changed\. This screen was out of date and has been refreshed\./);
-  // It tells the person what to do next instead of leaving them stuck.
-  assert.match(punch, /Press again if you really are clocking \$\{intent === "In" \? "in" : "out"\}\./);
-  const refuseAt = punch.indexOf("if (intent && intent !== status)");
-  assert.ok(refuseAt > 0 && refuseAt < punch.indexOf("store.logs.push("),
-    "the refusal must still run before anything is appended");
+  assert.match(punch, /nothing to do\. If this is wrong, press again and it will be recorded anyway\./);
+  const answerAt = punch.indexOf("if (trueStatus !== null && trueStatus === decided");
+  assert.ok(answerAt > 0 && answerAt < punch.indexOf("store.logs.push("),
+    "the answer must come before anything is appended");
 });
 
 test("the second press of the same direction is always honoured", () => {
