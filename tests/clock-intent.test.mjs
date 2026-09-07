@@ -33,19 +33,20 @@ const tpl = raw.split("\n").find((line) => line.startsWith('"<!DOCTYPE html>'));
 assert.ok(tpl, "the engine bundler template line could not be found");
 const engine = JSON.parse(tpl);
 
-test("the app refuses to write the opposite of what the button offered", () => {
+test("the app can never write the opposite of what the button offered", () => {
   assert.match(page, /const punchClock = useCallback\(async \(mode: string, note = "", intent\?: "In" \| "Out"\) => \{/);
-  assert.match(page, /if \(intent && intent !== status\) \{/);
-  assert.match(page, /nothing was changed\. This screen was out of date and has been refreshed\./);
-  // And it names the state the record actually holds, with the time it began.
-  assert.match(page, /`You are already clocked in\$\{since\} — nothing was changed\./);
-  // Refused, and refused BEFORE anything is appended or stored.
+  /* The guarantee is structural now: with an intent present, the record gets
+     the intent — `decided` — and a recomputed direction cannot reach it. The
+     old toggle inversion is impossible by construction, and no press-again
+     dance is needed to get what the button said. */
   const body = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
-  const guardAt = body.indexOf("if (intent && intent !== status)");
-  assert.ok(guardAt > 0 && guardAt < body.indexOf("store.logs.push("), "the guard must run before the write");
-  // What follows the refusal is the second refusal (a no-op punch), and only
-  // then the write — so neither disagreement can reach store.logs.
-  assert.match(body, /return false;\s*\n\s*\}\s*\n\s*delete clockRefusals\.current\[refusalKey\];\s*\n\s*\/\* Belt and braces: a punch that would not CHANGE anything/);
+  assert.match(body, /const decided: "In" \| "Out" = intent \?\? \(trueStatus === "In" \? "Out" : "In"\);/);
+  assert.match(body, /status: decided,/);
+  // The only non-writing press is the one whose goal is already true, and it
+  // answers with the state the record actually holds and the time it began.
+  assert.match(body, /`You are already clocked in\$\{since\} — nothing to do\./);
+  const guardAt = body.indexOf("if (trueStatus !== null && trueStatus === decided");
+  assert.ok(guardAt > 0 && guardAt < body.indexOf("store.logs.push("), "the duplicate answer must run before the write");
 });
 
 test("the button hands over exactly what it displayed", () => {
