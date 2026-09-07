@@ -296,6 +296,20 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
           });
           out[mapKey] = kept;
     });
+
+    /* And the rule that covers every collection at once, on this same
+       no-merge path: a top-level key the server holds and this document
+       lacks ENTIRELY is carried forward. Nothing in the app deletes a whole
+       top-level key, so a document without one is a partial copy — the copy a
+       device is left with after its store was emptied and only partly
+       rebuilt. That is how `approvals`, `performance` and `flowConfig` left
+       the shared document on 2026-09-07: the CAS accepted such a copy
+       verbatim, and these guards only knew about users, logs and the
+       per-person maps. A key present on both sides is left exactly as this
+       device has it, so every deliberate edit still wins here. */
+    Object.keys(serverDoc).forEach((topKey) => {
+          if (!Object.prototype.hasOwnProperty.call(out, topKey)) out[topKey] = serverDoc[topKey];
+    });
     return out;
 }
 
@@ -410,8 +424,18 @@ export function mergeValues(base: Json, local: Json, remote: Json, context: Merg
                 if (!inLocal) {
                           /* Dropped here on purpose if we had it; otherwise it is new from
                              them. A guarded collection, a tombstone list, or an entry in a
-                             per-person map is never dropped wholesale by local absence. */
-                  if (!inBase || GUARDED_COLLECTIONS[childKey] || TOMBSTONE_KEYS.has(childKey)
+                             per-person map is never dropped wholesale by local absence.
+
+                             Nor is ANY top-level collection of the document (key === undefined
+                             is the document root). No screen in the app deletes a whole
+                             top-level key — `approvals`, `performance`, `flowConfig` and the
+                             rest only ever change INSIDE — so a document that lacks one
+                             entirely is a partial copy, never an edit. On 2026-09-07 a device
+                             whose local store had been emptied wrote back a document with no
+                             `approvals`, `performance` or `flowConfig`, and this rule read all
+                             three as deletions for the whole company. Absence of a whole
+                             collection is not evidence of anything. */
+                  if (!inBase || key === undefined || GUARDED_COLLECTIONS[childKey] || TOMBSTONE_KEYS.has(childKey)
                       || (key !== undefined && ADD_ONLY_MAPS.has(key))) out[childKey] = remote[childKey];
                           return;
                 }
