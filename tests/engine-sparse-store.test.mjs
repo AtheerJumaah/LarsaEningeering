@@ -64,3 +64,33 @@ test("v10Ensure runs on a real store that merely lacks approvals", () => {
   assert.deepEqual(state.approvals, []);
   assert.equal(state.history.length, 1, "the clock log was seeded into history");
 });
+
+test("v10Ensure normalises every collection the pages walk", () => {
+  // The dashboard, timesheet and rules pages read these; the shared document
+  // had lost performance, shifts, rules and its columns on 2026-09-07.
+  const fn = app.slice(app.indexOf("function v10Ensure(){"), app.indexOf("function v10History("));
+  const run = new Function("state", "V10_SECTIONS", "save", "v10NowIso", fn + "; v10Ensure(); return state;");
+  const state = run(
+    { users: [{ id: "u1" }], logs: [] },
+    [["summary", "Summary"]], () => {}, () => "2026-09-07T00:00:00Z",
+  );
+  assert.deepEqual(state.performance, []);
+  assert.deepEqual(state.shifts, []);
+  assert.deepEqual(state.rules, []);
+  assert.deepEqual(state.v21History, []);
+  assert.ok(Array.isArray(state.columns) && state.columns.length >= 17, "the standard timesheet columns are restored");
+  assert.equal(typeof state.flowConfig, "object");
+  assert.equal(typeof state.schedule, "object");
+});
+
+test("renderDashboard's groupSum survives the exact 2026-09-07 crash", () => {
+  // The screenshot error: groupSum(state.performance, …) with performance
+  // undefined threw "Cannot read properties of undefined (reading 'forEach')".
+  const ensure = app.slice(app.indexOf("function v10Ensure(){"), app.indexOf("function v10History("));
+  const groupSum = app.slice(app.indexOf("function groupSum("), app.indexOf("function barChart("));
+  assert.match(groupSum, /\(rows\|\|\[\]\)\.forEach/, "groupSum tolerates a missing collection");
+  const run = new Function("state", "V10_SECTIONS", "save", "v10NowIso",
+    ensure + groupSum + "; v10Ensure(); return groupSum(state.performance, 'Department', 'Approved Points');");
+  const result = run({ users: [{ id: "u1" }] }, [["summary", "Summary"]], () => {}, () => "2026-09-07T00:00:00Z");
+  assert.deepEqual(result, {});
+});
