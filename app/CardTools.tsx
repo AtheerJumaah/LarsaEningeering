@@ -196,8 +196,19 @@ const SURFACES = [ { id: "default", label: "Default", value: "" }, { id: "warm",
     }
 
     prepare();
-    const observer = new MutationObserver(() => prepare());    const modePoll = window.setInterval(prepare, 900);
-    observer.observe(document.body, { childList: true, subtree: true });
+    const observer = new MutationObserver(() => prepare());
+    const modePoll = window.setInterval(prepare, 900);
+    /* This helper is rendered by the root layout. During a hydration retry the
+       layout can be unmounting while this effect is still being cleaned up,
+       so `document.body` is not guaranteed to be a Node at this exact moment.
+       Observing a missing body throws synchronously and leaves the entire app
+       without live React controls — notably the attendance buttons. The
+       interval already covers this brief hand-off; only attach the observer
+       when there is a real document body to observe. */
+    const body = document.body;
+    if (body instanceof HTMLElement) {
+      observer.observe(body, { childList: true, subtree: true });
+    }
 
     document.addEventListener("dragstart", onDragStart);
     document.addEventListener("dragover", onDragOver);
