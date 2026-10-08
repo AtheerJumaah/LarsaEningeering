@@ -19,6 +19,9 @@ export type AttendancePunchResult = {
   status?: "In" | "Out" | null;
   at?: string | null;
   eventId?: string | null;
+  workMode?: string | null;
+  note?: string | null;
+  clockedBy?: string | null;
 };
 
 /* The server owns the state transition. A timeout is reported as uncertain,
@@ -30,8 +33,16 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const response = await Promise.race([
-      client.rpc("record_attendance_punch", {
+    const request = (async () => {
+      /* The app's shared sync bootstrap signs into Supabase anonymously. A
+         first clock action can happen before that async bootstrap completes,
+         so establish the same session here before calling the invoker RPC. */
+      const { data: auth } = await client.auth.getSession();
+      if (!auth.session) {
+        const { error: signInError } = await client.auth.signInAnonymously();
+        if (signInError) return { outcome: "unavailable" as const };
+      }
+      const response = await client.rpc("record_attendance_punch", {
         p_client_event_id: input.client_event_id,
         p_occurred_at: input.occurred_at,
         p_uid: input.uid,
@@ -43,22 +54,28 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         p_clocked_by: input.clocked_by ?? null,
         p_source: input.source ?? "live",
         p_removed_ids: input.removed_ids ?? [],
-      }),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("Attendance save timed out")), 8000);
+      });
+      if (response.error) return { outcome: "unavailable" as const };
+      const row = Array.isArray(response.data) ? response.data[0] : response.data;
+      if (!row || (row.outcome !== "recorded" && row.outcome !== "already")) {
+        return { outcome: "unavailable" as const };
+      }
+      return {
+        outcome: row.outcome as "recorded" | "already",
+        status: row.current_status === "In" || row.current_status === "Out" ? row.current_status : null,
+        at: typeof row.current_at === "string" ? row.current_at : null,
+        eventId: typeof row.event_id === "string" ? row.event_id : null,
+        workMode: typeof row.current_work_mode === "string" ? row.current_work_mode : null,
+        note: typeof row.current_note === "string" ? row.current_note : null,
+        clockedBy: typeof row.current_clocked_by === "string" ? row.current_clocked_by : null,
+      };
+    })();
+    return await Promise.race([
+      request,
+      new Promise<AttendancePunchResult>((resolve) => {
+        timeout = setTimeout(() => resolve({ outcome: "unavailable" }), 8000);
       }),
     ]);
-    if (response.error) return { outcome: "unavailable" };
-    const row = Array.isArray(response.data) ? response.data[0] : response.data;
-    if (!row || (row.outcome !== "recorded" && row.outcome !== "already")) {
-      return { outcome: "unavailable" };
-    }
-    return {
-      outcome: row.outcome,
-      status: row.current_status === "In" || row.current_status === "Out" ? row.current_status : null,
-      at: typeof row.current_at === "string" ? row.current_at : null,
-      eventId: typeof row.event_id === "string" ? row.event_id : null,
-    };
   } catch {
     return { outcome: "unavailable" };
   } finally {
