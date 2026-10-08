@@ -37,7 +37,7 @@ test("trimSession admits managers and Admins for their scope, and every clock us
 
 test("the trim decision is the shared pairing engine, and the one-way rule survives intact", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /import \{ findPunchSession, planTrim \} from "\.\.\/lib\/attendance\.mjs";/);
+  assert.match(page, /import \{ findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession \} from "\.\.\/lib\/attendance\.mjs";/);
   const body = page.slice(page.indexOf("const trimSession = useCallback"), page.indexOf("Removes a session outright"));
   // The exact selected session, by the same pairing walk the list uses,
   // validated against the server-corrected clock.

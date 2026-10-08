@@ -1,70 +1,40 @@
-/* Larsa Control — one press is enough.
- *
- * Engineers reported having to press the clock button MORE THAN ONCE before
- * it let them clock in or out. That was the refuse-then-press-again design:
- * when the app's view of the truth disagreed with the button, the first press
- * was refused with "press again if you really mean it". The refusal protected
- * against a stale screen writing a silent opposite punch — but it made the
- * person do the app's work.
- *
- * The contract now:
- *
- *   1. A press with an intent WRITES that intent. The written direction is
- *      `decided = intent ?? toggle(truth)` — with a button behind it, the
- *      record can only ever get what the button displayed. The silent
- *      opposite punch stays impossible by construction, with no refusal
- *      needed to prevent it.
- *   2. The ONLY press that does not write is one whose goal is already true
- *      ("clock out" when the record already shows Out). That is answered
- *      definitively with the state and its time — not bounced back with a
- *      "press again" chore — and a ledger reconcile is fired immediately so
- *      the store that mis-drew the button heals on the spot instead of on
- *      the next app load.
- *   3. The never-locked-out escape is absolute: a repeat of the same press
- *      inside two minutes bypasses even the duplicate answer and is written
- *      unconditionally. A wrong "truth" can cost at most one extra tap.
- */
+/* Clock actions should be confirmed once by the server, with ambiguous writes
+ * safely retried under the same idempotency key. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+const page = await read("app/page.tsx");
+const client = await read("lib/attendance-punch.ts");
+const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
 
-const punch = page.slice(
-  page.indexOf("const punchClock = useCallback"),
-  page.indexOf("const punchClockGuarded"),
-);
-assert.ok(punch.length > 500, "punchClock could not be isolated");
-
-test("a press writes the direction the button offered — first time", () => {
-  assert.match(punch, /const decided: "In" \| "Out" = intent \?\? \(trueStatus === "In" \? "Out" : "In"\);/);
-  assert.match(punch, /status: decided,\s*\n\s*time: now, active: decided === "In"/);
-  assert.match(punch, /notify\(decided === "In" \? `Clocked in · \$\{mode\}` : `Clocked out · \$\{mode\}`\);/);
-  // The recomputed direction that used to be able to displace the intent is gone.
-  assert.doesNotMatch(punch, /const status = trueStatus === "In" \? "Out" : "In";/);
+ test("a clock action is recorded by the atomic server writer", () => {
+  assert.match(punch, /await recordAttendancePunch\(event\)/);
+  assert.match(punch, /status: decided,/);
+  assert.match(client, /client\.rpc\("record_attendance_punch"/);
+  assert.doesNotMatch(punch, /confirmClockState|trueStatus|clockRefusals/);
 });
 
-test("nobody is told to press again to get what they asked for", () => {
-  assert.doesNotMatch(punch, /Press again if you really are clocking/);
-  assert.doesNotMatch(punch, /This screen was out of date and has been refreshed/);
-  // The one remaining "press again" is the escape for a WRONG record — an
-  // offer to overrule, not a step in the normal path.
-  assert.match(punch, /If this is wrong, press again and it will be recorded anyway\./);
+test("a retry reuses the pending event and does not lose the employee's note", () => {
+  assert.match(punch, /const queueKey = attendancePunchQueueKey\(user\.id\);/);
+  assert.match(punch, /if \(queue\[queue\.length - 1\]\?\.status !== decided\)/);
+  assert.match(punch, /client_event_id: `p\$\{user\.id\}\$\{Date\.now\(\)\}/);
+  assert.match(punch, /note: note\.trim\(\) \|\| null,/);
+  assert.match(punch, /Your clock action is not confirmed yet\./);
 });
 
-test("an already-true goal is answered and the record heals immediately", () => {
-  assert.match(punch, /if \(trueStatus !== null && trueStatus === decided && !insisting\) \{/);
-  assert.match(punch, /nothing to do\./);
-  // Heal now, not on the next app load: the mis-drawn button proves the store
-  // is missing a punch the ledger holds.
-  assert.match(punch, /void reconcileStoreFromLedger\(\)\.then\(\(\{ restored \}\) => \{/);
-  assert.match(punch, /\}\)\.catch\(\(\) => \{ \/\* the next sync retries \*\/ \}\);/);
+test("the same server state refreshes the screen without another press", () => {
+  assert.match(punch, /if \(lastOutcome === "already"\)/);
+  assert.match(punch, /Already clocked in/);
+  assert.match(punch, /Already clocked out/);
+  assert.match(punch, /refreshStaffEngine\(\);/);
 });
 
-test("the insist escape bypasses even the duplicate answer", () => {
-  // `&& !insisting` on the only non-writing branch: an insisted repeat writes.
-  const answer = punch.indexOf("trueStatus === decided && !insisting");
-  assert.ok(answer > 0, "the duplicate answer must be conditional on not insisting");
-  assert.match(punch, /const insisting = Boolean\(intent\) && serverNowMs\(\) - \(clockRefusals\.current\[refusalKey\] \|\| 0\) < 120_000;/);
-  assert.match(punch, /delete clockRefusals\.current\[refusalKey\];/);
+test("the atomic writer uses server time, serializes by employee, and treats retries idempotently", async () => {
+  assert.match(punch, /occurred_at: serverNowIso\(\)/);
+  assert.match(client, /p_client_event_id: input\.client_event_id/);
+  const sql = await read("supabase/migrations/repair_012_atomic_attendance_punch.sql");
+  assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\(p_uid, 0\)\)/);
+  assert.match(sql, /if found and v_current\.status = p_status then/);
 });

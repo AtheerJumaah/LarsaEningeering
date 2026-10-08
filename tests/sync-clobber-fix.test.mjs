@@ -66,16 +66,16 @@ test("sync.ts measures device clock skew against server_now() and shares it via 
   assert.match(sync, /export function serverNowMs\(\)/);
 });
 
-test("punchClock and punchBreak stamp with the server-corrected clock, not the device's", async () => {
+test("clock punches and breaks stamp with the server-corrected clock, not the device's", async () => {
   const page = await read("app/page.tsx");
   assert.match(page, /import \{ initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow(?:, [A-Za-z0-9_, ]+)? \} from "\.\.\/lib\/supabase\/sync";/);
   const punchClock = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
   const punchBreak = page.slice(page.indexOf("const punchBreak = useCallback"), page.indexOf("const trimSession = useCallback"));
-  assert.match(punchClock, /const now = serverNowIso\(\);/);
+  assert.match(punchClock, /occurred_at: serverNowIso\(\)/);
   assert.match(punchBreak, /const now = serverNowIso\(\);/);
-  // The 1.2s double-tap guard compares a server-stamped log time, so it must
-  // use the server clock too or a skewed device could suppress punches.
-  assert.match(punchClock, /serverNowMs\(\) - new Date\(latest\.time\)\.getTime\(\) < 1200/);
+  // The UI timestamp is only a proposed ordering value. Postgres serializes
+  // and corrects it against the current ledger timestamp.
+  assert.match(punchClock, /await recordAttendancePunch\(event\)/);
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchClock), "punchClock must not stamp with the device clock");
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchBreak), "punchBreak must not stamp with the device clock");
 });
@@ -85,7 +85,7 @@ test("punch log ids carry uid + entropy so same-millisecond punches on two devic
   const clockSection = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const trimSession = useCallback"));
   const plain = clockSection.match(/id: `l\$\{Date\.now\(\)\}`/g) || [];
   assert.equal(plain.length, 0, "self-punch ids must not be bare timestamps");
-  assert.match(clockSection, /id: `l\$\{user\.id\}\$\{Date\.now\(\)\}\$\{Math\.random\(\)\}`/);
+  assert.match(clockSection, /client_event_id: `p\$\{user\.id\}\$\{Date\.now\(\)\}\$\{globalThis\.crypto\?\.randomUUID/);
 });
 
 test("the Timeclock engine stamps punches with the shared server-clock offset", async () => {
