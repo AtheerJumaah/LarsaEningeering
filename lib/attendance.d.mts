@@ -34,6 +34,9 @@ export type TrimPlan =
 
 export function orderedPunches(logs: PunchLogLike[] | unknown, uid: string): PunchLogLike[];
 export function pairPunchSessions(logs: PunchLogLike[] | unknown, uid: string): PunchSession[];
+export function isSuspiciousClosedSession(start: string, end: string): boolean;
+export function isActiveClockSession(session: { open: boolean; stale?: boolean; unclosed?: boolean } | null | undefined): boolean;
+export const SUSPICIOUS_CLOSED_SESSION_HOURS: number;
 export function findPunchSession(logs: PunchLogLike[] | unknown, uid: string, clockIn: string): PunchSession | null;
 export function planTrim(
   logs: PunchLogLike[] | unknown,
