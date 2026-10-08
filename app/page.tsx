@@ -7,7 +7,7 @@ import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
-import { findPunchSession, planTrim } from "../lib/attendance.mjs";
+import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
@@ -394,6 +394,7 @@ type ClockSession = {
      keeps the raw span visible so the flag can say how long it has been. */
   stale?: boolean;
   unclosed?: boolean;
+  long?: boolean;
   /* A punch of this session carries a correction stamp ("Adjusted by …",
      "Fixed by …", "Manual entry by …") — surfaced so the trim panel can say
      a session has already been corrected before somebody corrects it again. */
@@ -3085,10 +3086,10 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
        the original punches (they are the session's identity for trim and
        reset); the segment's own hours carry only what fell on `date`. */
-    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed", adjusted?: boolean) => {
+    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed" | "long", adjusted?: boolean) => {
       const from = new Date(start).getTime();
       const to = Math.max(new Date(end).getTime(), from);
-      const flagged = flag === "stale" || flag === "unclosed";
+      const flagged = Boolean(flag);
       let cursor = from;
       while (cursor < to || cursor === from) {
         const day = new Date(cursor);
@@ -3137,7 +3138,9 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           return;
         }
         if (row.status !== "Out" || !open?.time || !row.time) return;
-        record(open.time, row.time, open.type || row.type || "Unspecified", false, undefined, adjustedMark(open.note, row.note));
+        record(open.time, row.time, open.type || row.type || "Unspecified", false,
+          isSuspiciousClosedSession(open.time, row.time) ? "long" : undefined,
+          adjustedMark(open.note, row.note));
         open = null;
       });
     /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
@@ -16041,8 +16044,8 @@ function LivePresence({
       .filter((log) => log.uid === user.id && log.time)
       .sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime())[0];
     const openSession = sessions.find((session) => session.uid === user.id && session.open);
-    const isIn = Boolean(openSession) || latest?.status === "In";
-    const mode = openSession?.mode || latest?.type || "";
+    const isIn = isActiveClockSession(openSession) || (!openSession && latest?.status === "In");
+    const mode = isActiveClockSession(openSession) ? openSession?.mode || "" : !openSession ? latest?.type || "" : "";
     const planned = (schedule[user.id]?.[todayName] || [])
       .map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
     return {
@@ -16050,9 +16053,9 @@ function LivePresence({
       isIn,
       tone: isIn ? modeTone(mode) : "off",
       mode: mode || "—",
-      since: openSession?.clockIn || latest?.time || "",
+      since: isActiveClockSession(openSession) ? openSession?.clockIn || "" : !openSession ? latest?.time || "" : "",
       // Presence, not worked time -- someone on their lunch break is still here.
-      hours: openSession?.presenceHours || 0,
+      hours: isActiveClockSession(openSession) ? openSession?.presenceHours || 0 : 0,
       stale: Boolean(openSession?.stale),
       planned,
     };
@@ -18239,6 +18242,7 @@ function QuickClock({
       kept.adjusted = kept.adjusted || session.adjusted;
       kept.stale = kept.stale || session.stale;
       kept.unclosed = kept.unclosed || session.unclosed;
+      kept.long = kept.long || session.long;
       if (session.date < kept.date) kept.date = session.date;
     });
     return [...folded.values()]
@@ -18500,7 +18504,7 @@ function QuickClock({
                   </div>
                   {day.rows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
-              const liveOpen = session.open && !session.stale && !session.unclosed;
+              const liveOpen = isActiveClockSession(session);
               return (
                 <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
                   <div className="trim-who">
@@ -18519,6 +18523,8 @@ function QuickClock({
                       {session.spanDays > 1 ? ` (${session.spanDays} days)` : ""}
                       {" · "}{session.stale || session.unclosed
                         ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
+                        : session.long
+                          ? `${formatHours(session.openHours || 0)} — needs review, not counted`
                         : liveOpen
                           ? `${formatHours(session.hours)} so far`
                           : `${formatHours(session.hours)} worked`}
