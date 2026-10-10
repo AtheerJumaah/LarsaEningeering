@@ -59,14 +59,10 @@ test("a punch a manager deleted can never answer for the person again", () => {
 });
 
 test("both callers actually hand the removed list over", () => {
-  assert.match(punch, /const confirmed = await confirmClockState\(user\.id, preStore\?\.removedLogIds \|\| \[\]\);/);
+  assert.match(punch, /removed_ids: initialStore\?\.removedLogIds \|\| \[\],/);
   assert.match(breakBody, /const confirmed = await confirmClockState\(user\.id, store\.removedLogIds \|\| \[\]\);/);
-  /* The store is read once for the removed list, then re-read after the await
-     so the copy that is modified and written back is the freshest one. */
-  assert.match(punch, /const preStore = parseStore\("larsaStaffV8"\) as \{ removedLogIds\?: string\[\] \} \| null;/);
-  const preAt = punch.indexOf("const preStore =");
-  const reAt = punch.indexOf('const store = parseStore("larsaStaffV8");');
-  assert.ok(preAt > 0 && reAt > preAt, "the store must be re-read after the confirm");
+  // The RPC excludes tombstoned ledger rows while determining current state.
+  assert.match(punch, /removed_ids: initialStore\?\.removedLogIds \|\| \[\],/);
 });
 
 test("times are compared as instants, never as text", () => {
@@ -79,29 +75,17 @@ test("times are compared as instants, never as text", () => {
   assert.doesNotMatch(ledger, /localeCompare\(String\(left\.occurred_at\)\)/);
 });
 
-test("a press whose goal is already true is answered, and the escape stays armed", () => {
-  /* One press, one outcome: either the intent is written, or the person is
-     told the record already shows what they asked for — with the escape still
-     armed underneath, so a wrong "truth" costs at most one extra tap. */
-  assert.match(punch, /if \(trueStatus !== null && trueStatus === decided && !insisting\) \{/);
-  assert.match(punch, /clockRefusals\.current\[refusalKey\] = serverNowMs\(\);/);
-  assert.match(punch, /nothing to do\. If this is wrong, press again and it will be recorded anyway\./);
-  const answerAt = punch.indexOf("if (trueStatus !== null && trueStatus === decided");
-  assert.ok(answerAt > 0 && answerAt < punch.indexOf("store.logs.push("),
-    "the answer must come before anything is appended");
+test("clock actions have no refusal or press-again gate", () => {
+  assert.match(punch, /await recordAttendancePunch\(event\)/);
+  assert.match(punch, /const queueKey = attendancePunchQueueKey\(user\.id\);/);
+  assert.doesNotMatch(punch, /clockRefusals|insisting/);
+  assert.doesNotMatch(punch, /press again and it will be recorded anyway/i);
 });
 
-test("the second press of the same direction is always honoured", () => {
-  assert.match(page, /const clockRefusals = useRef<Record<string, number>>\(\{\}\);/);
+test("breaks keep their separate pending direction guard", () => {
   assert.match(page, /const breakRefusals = useRef<Record<string, number>>\(\{\}\);/);
-  // Keyed per person AND per direction: overriding takes deliberately
-  // repeating the rejected press, not just any second tap.
-  assert.match(punch, /const refusalKey = `\$\{user\.id\}:\$\{intent \|\| ""\}`;/);
-  assert.match(punch, /const insisting = Boolean\(intent\) && serverNowMs\(\) - \(clockRefusals\.current\[refusalKey\] \|\| 0\) < 120_000;/);
-  // On insistence the staff document decides, so every other guard still runs.
-  assert.match(punch, /const ledgerWins = !insisting && confirmed\.reached/);
-  // And the offer is spent once used.
-  assert.match(punch, /delete clockRefusals\.current\[refusalKey\];/);
+  assert.match(breakBody, /const breakKey = `\$\{user\.id\}:\$\{intent \|\| ""\}`;/);
+  assert.match(breakBody, /const breakInsisting = Boolean\(intent\) && serverNowMs\(\) - \(breakRefusals\.current\[breakKey\] \|\| 0\) < 120_000;/);
 });
 
 test("breaks get the same guarantee", () => {

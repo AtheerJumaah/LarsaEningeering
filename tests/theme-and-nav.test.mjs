@@ -82,13 +82,11 @@ test("but correcting and trimming recorded hours is untouched", () => {
   assert.match(page, /const resetSession = useCallback/);
 });
 
-test("clocking yourself in and out still works, and still guards a double-tap", () => {
+test("clocking yourself in and out is available immediately and deduplicated by the server", () => {
   assert.match(page, /const punchClock = useCallback/);
   assert.match(page, /const punchBreak = useCallback/);
-  // The guard stays short and honest: it absorbs a real double-fire and
-  // returns false rather than claiming success while doing nothing. It
-  // compares on the server-corrected clock, because latest.time is now
-  // server-stamped — see tests/sync-clobber-fix.test.mjs.
-  assert.match(page, /serverNowMs\(\) - new Date\(latest\.time\)\.getTime\(\) < 1200/);
-  assert.match(page, /< 1200\) \{\s*\n\s*return false;/);
+  const button = page.slice(page.indexOf('className={`clock-punch'), page.indexOf('</button>', page.indexOf('className={`clock-punch')));
+  assert.match(button, /disabled=\{punching\}/);
+  assert.doesNotMatch(button, /clockReady/);
+  assert.match(page, /await recordAttendancePunch\(event\)/);
 });

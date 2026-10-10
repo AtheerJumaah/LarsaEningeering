@@ -90,12 +90,12 @@ test("the week rebuild reads the document after the question, not before", () =>
   assert.ok(askAt < readAt, "the confirm must come BEFORE the store is read");
 });
 
-test("the lock cannot swallow an insisting second press", () => {
-  /* A refused first press releases the lock before it returns (the finally),
-     so the press-again offer is made with the lock already free. The refusal
-     bookkeeping lives INSIDE the locked writer, where it is race-free. */
+test("an uncertain save stays queued and the same id is retried", () => {
   const guarded = page.slice(page.indexOf("const punchClockGuarded"), page.indexOf("/* The Timeclock panel's clock button"));
   assert.match(guarded, /finally \{ punchLock\.current = false; \}/);
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
-  assert.match(writer, /clockRefusals\.current\[refusalKey\] = serverNowMs\(\);/);
+  assert.match(writer, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
+  assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
+  assert.ok(writer.indexOf("if (result.outcome === \"unavailable\"") < writer.indexOf("pending.shift()"),
+    "a timeout must leave the unresolved event in the queue");
 });

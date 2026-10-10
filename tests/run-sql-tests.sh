@@ -138,7 +138,9 @@ for name in repair_002_durable_attendance_ledger_and_write_hardening \
             repair_002b_ledger_break_statuses \
             repair_006_pin_trigger_search_path \
             repair_007_durable_account_ledger \
-            repair_008_server_guard_stale_writes; do
+            repair_008_server_guard_stale_writes \
+            repair_009_attendance_ledger_anon_access \
+            repair_012_atomic_attendance_punch; do
   f="$repo/supabase/migrations/$name.sql"
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
@@ -150,7 +152,8 @@ for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql"
           "$here/accounting-payroll-sql.test.sql" "$here/accounting-admin-role-sql.test.sql" \
           "$here/notifications-sql.test.sql" "$here/app-state-cas-sql.test.sql" \
           "$here/viewer-accounts-sql.test.sql" "$here/notify-email-sql.test.sql" \
-          "$here/qa-spec-sql.test.sql" "$here/repair-guard-sql.test.sql"; do
+          "$here/qa-spec-sql.test.sql" "$here/repair-guard-sql.test.sql" \
+          "$here/atomic-attendance-punch-sql.test.sql"; do
   out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
   echo "$out" | grep -E "FAIL|ERROR" && exit 1
   n="$(echo "$out" | grep -c "PASS:")"

@@ -7,8 +7,9 @@ import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
-import { findPunchSession, planTrim } from "../lib/attendance.mjs";
+import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
+import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
@@ -394,6 +395,7 @@ type ClockSession = {
      keeps the raw span visible so the flag can say how long it has been. */
   stale?: boolean;
   unclosed?: boolean;
+  long?: boolean;
   /* A punch of this session carries a correction stamp ("Adjusted by …",
      "Fixed by …", "Manual entry by …") — surfaced so the trim panel can say
      a session has already been corrected before somebody corrects it again. */
@@ -1353,6 +1355,9 @@ function parseStore(key: string) {
   } catch {
     return null;
   }
+}
+function attendancePunchQueueKey(uid: string) {
+  return `larsaAttendancePunchQueueV1:${uid}`;
 }
 function saveDownload(name: string, body: string, type = "application/json") {
   const link = document.createElement("a");
@@ -3085,10 +3090,10 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
        the original punches (they are the session's identity for trim and
        reset); the segment's own hours carry only what fell on `date`. */
-    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed", adjusted?: boolean) => {
+    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed" | "long", adjusted?: boolean) => {
       const from = new Date(start).getTime();
       const to = Math.max(new Date(end).getTime(), from);
-      const flagged = flag === "stale" || flag === "unclosed";
+      const flagged = Boolean(flag);
       let cursor = from;
       while (cursor < to || cursor === from) {
         const day = new Date(cursor);
@@ -3137,7 +3142,9 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           return;
         }
         if (row.status !== "Out" || !open?.time || !row.time) return;
-        record(open.time, row.time, open.type || row.type || "Unspecified", false, undefined, adjustedMark(open.note, row.note));
+        record(open.time, row.time, open.type || row.type || "Unspecified", false,
+          isSuspiciousClosedSession(open.time, row.time) ? "long" : undefined,
+          adjustedMark(open.note, row.note));
         open = null;
       });
     /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
@@ -7026,163 +7033,110 @@ export default function Home() {
     }
   };
 
-  /* `intent` is what the button the person actually pressed was offering.
-     The direction was previously derived ONLY from this device's copy of the
-     log, and written whatever it came out as — so a copy that was stale,
-     half-synced, or carrying a punch this device had not yet dropped turned
-     one press into the SILENT OPPOSITE of what the screen promised. That is
-     what "clocked in and out without knowing" was.
-
-     The read still decides what is true; the intent decides whether we are
-     allowed to act on it. When they disagree the punch is REFUSED — nobody's
-     status changes — and the person is told what the record actually says
-     while the screen redraws from it. The next press is then a deliberate one
-     against the truth, and goes through. */
+  /* The database owns each clock transition. This avoids deciding from a
+     cached whole-store snapshot and prevents two devices from accepting the
+     same stale state. A small per-user queue survives reloads so a timeout
+     retries the same event id instead of creating a second punch. */
   const punchClock = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
     const user = sessionUserRef.current;
     if (!user) return false;
-    /* HOLD, don't guess. If this session has not yet been told what the
-       server holds, wait for it rather than acting on the cached copy the
-       screen was painted from. This is the window that produced the reports:
-       the app paints instantly, the button is live, and people press it
-       immediately — because pressing the clock is why they opened the app. */
-    if (!clockConfirmedRef.current) {
-      notify("Checking your clock status…");
-      await whenClockConfirmed();
-    }
-    /* And the guarantee itself: ask the shared, append-only ledger what this
-       person's last punch actually was. A device's own copy can be a day
-       behind — a second phone, a tab left open, a missed realtime event — and
-       every "clocked in/out without doing it" report traces to a punch decided
-       from one. The newest of (ledger, this device) is the best available
-       truth; when the ledger cannot be reached we say so by falling back to
-       the device rather than by pretending. */
-    /* Read the store first, only to learn which records were deliberately
-       REMOVED, and hand that list to the ledger read — the ledger keeps
-       deleted punches for ever, and without this it answers with one of them.
-       The store is then re-read below, after the await, so the copy that is
-       actually modified and written back is the freshest one. */
-    const preStore = parseStore("larsaStaffV8") as { removedLogIds?: string[] } | null;
-    const confirmed = await confirmClockState(user.id, preStore?.removedLogIds || []);
-    const store = parseStore("larsaStaffV8");
-    if (!store) {
-      notify("Attendance records are still loading. Please try again.");
-      return false;
-    }
-    if (!Array.isArray(store.logs)) store.logs = [];
-    const latest = (store.logs as ClockLog[])
+    const initialStore = parseStore("larsaStaffV8") as {
+      logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string }[];
+      removedLogIds?: string[];
+    } | null;
+    const currentLog = (initialStore?.logs || [])
       .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    /* A double-tap is one decision, not two: without this, the second tap of an
-       accidental double-click reads the first tap's "In" and instantly punches
-       a zero-minute "Out".
-
-       This used to swallow ten SECONDS of clicks and return true while doing
-       nothing — so a second, entirely deliberate press did not register, said
-       nothing, and still cleared the note as though it had worked. Pressing
-       again inside the window renewed nothing but the confusion, which is
-       exactly the "I have to click more than once" this fixes.
-
-       1.2s covers a genuine double-fire from a mouse or a touch screen and
-       nothing else. Past that, a press is a decision and is honoured — a short
-       session is visible and can be trimmed, whereas a refused clock-out is
-       silent and leaves the person looking like they never left. Returning
-       false on suppression matters too: the caller keeps the note instead of
-       clearing it, and the first press's toast is still on screen, so staying
-       quiet here is feedback rather than the absence of it. */
-    if (latest?.time && serverNowMs() - new Date(latest.time).getTime() < 1200) {
-      return false;
-    }
-    /* Refuse ONCE, never twice. The first press that contradicts the record is
-       held back, the real state is named and the screen is refreshed — that is
-       what stops a stale screen writing a silent opposite punch. But a person
-       who presses AGAIN, having just been shown what the record says, is making
-       an informed decision, and the app has no business standing in the way:
-       being unable to clock in is a wage problem they cannot fix themselves,
-       whereas a duplicate punch is visible and can be trimmed.
-
-       On that second press the LEDGER is set aside and the staff document
-       decides — the document a manager actually curates, and the one the
-       button in front of them was drawn from. Every other guard still runs
-       against it, so this widens nothing except who gets the last word. */
-    const refusalKey = `${user.id}:${intent || ""}`;
-    const insisting = Boolean(intent) && serverNowMs() - (clockRefusals.current[refusalKey] || 0) < 120_000;
-    const localAt = latest?.time ? new Date(latest.time).getTime() : 0;
-    const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
-    /* Whichever of the two is NEWER is what is true right now. */
-    const ledgerWins = !insisting && confirmed.reached && Boolean(confirmed.status) && serverAt >= localAt;
-    const trueStatus: "In" | "Out" | null = ledgerWins
-      ? confirmed.status
-      : (latest?.status === "In" ? "In" : latest ? "Out" : null);
-    const trueAt = ledgerWins ? confirmed.at : (latest?.time || null);
-    const since = trueAt ? ` since ${new Date(trueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-    /* ONE press decides. The press writes the direction the BUTTON OFFERED —
-       never a direction recomputed behind the person's back, so a stale screen
-       still cannot produce a silent opposite punch. The only press that does
-       not write is one that would repeat the state the person is already in —
-       and that is a satisfied goal, not an error: it is answered definitively
-       ("you are already clocked out since 17:04"), the screen is corrected,
-       and a ledger reconcile is started on the spot so the record heals
-       without waiting for the next app load. Nobody is told to press again to
-       get what they asked for; the earlier refuse-then-press-again flow is
-       exactly what people reported as "I have to do it more than once".
-
-       The never-locked-out escape stays absolute: a repeat of the same press
-       inside two minutes is written unconditionally, so even a wrong "truth"
-       can only ever cost one extra tap, with the real state named in between. */
-    const decided: "In" | "Out" = intent ?? (trueStatus === "In" ? "Out" : "In");
-    if (trueStatus !== null && trueStatus === decided && !insisting) {
-      clockRefusals.current[refusalKey] = serverNowMs();
-      notify(decided === "In"
-        ? `You are already clocked in${since} — nothing to do. If this is wrong, press again and it will be recorded anyway.`
-        : `You are already clocked out${since} — nothing to do. If this is wrong, press again and it will be recorded anyway.`);
-      setStorageTick((value) => value + 1);
-      refreshStaffEngine();
-      /* The screen said otherwise, so the store is missing a punch the ledger
-         holds. Restore it NOW rather than on the next app load. */
-      void reconcileStoreFromLedger().then(({ restored }) => {
-        if (restored > 0) {
-          setStorageTick((value) => value + 1);
-          refreshStaffEngine();
-        }
-      }).catch(() => { /* the next sync retries */ });
-      return false;
-    }
-    delete clockRefusals.current[refusalKey];
-    /* Server-corrected time, not the device's. A phone with a wrong clock
-       used to write that wrong clock straight into the attendance record;
-       serverNowIso() applies the measured skew (see lib/supabase/sync.ts). */
-    const now = serverNowIso();
-    /* One truthful `active` flag per person. Punches only ever APPENDED, so
-       every past clock-in kept its active=true forever (69 stale flags were
-       live in production when this was written) and anything that rendered
-       from the flag showed people on the clock long after they left. The
-       punch that changes a person's state now also retires every stale flag
-       that state contradicts. */
-    (store.logs as ClockLog[]).forEach((log) => {
-      if (log.uid === user.id && log.active && (log.status === "In" || log.status === "Out")) {
-        log.active = false;
+    const decided: "In" | "Out" = intent ?? (currentLog?.status === "In" ? "Out" : "In");
+    const queueKey = attendancePunchQueueKey(user.id);
+    const storedQueue = parseStore(queueKey);
+    const queue: AttendancePunchInput[] = Array.isArray(storedQueue)
+      ? storedQueue.filter((event) => event?.uid === user.id && (event.status === "In" || event.status === "Out"))
+      : [];
+    /* An unresolved request for this same state is the same action, not a
+       second punch. Reuse it; a deliberate opposite action is queued after it. */
+    if (queue[queue.length - 1]?.status !== decided) {
+      if (queue.length >= 100) {
+        notify("Your device has several unconfirmed clock actions. Reconnect so they can finish saving before adding another.");
+        return false;
       }
-    });
-    // Same record shape the Timeclock engine writes, so both stay in step.
-    store.logs.push({
-      // uid + entropy so two people punching in the same millisecond on
-      // different devices can never collide into one merged record.
-      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: mode, status: decided,
-      time: now, active: decided === "In", lastSeen: now, touchedAt: now,
-      ...(note.trim() ? { note: note.trim() } : {}),
-    });
-    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    /* Persistence must not even wait out the sync debounce: the punch is
-       already visible locally (state and timer flip instantly from the
-       localStorage write above); this starts the backend write and the
-       broadcast to other devices in the same breath. */
-    pushSyncedKeyNow("larsaStaffV8");
-    refreshStaffEngine();
-    setStorageTick((value) => value + 1);
-    notify(decided === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
+      queue.push({
+        client_event_id: `p${user.id}${Date.now()}${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+        occurred_at: serverNowIso(),
+        uid: user.id,
+        normalized_email: user.email?.trim().toLowerCase() || null,
+        person_name: user.name || null,
+        status: decided,
+        work_mode: mode,
+        note: note.trim() || null,
+        source: "live",
+        removed_ids: initialStore?.removedLogIds || [],
+      });
+    }
+    const pending = queue;
+    try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
+    catch {
+      notify("This device could not save the pending clock action. Please check storage and try again.");
+      return false;
+    }
+
+    let lastOutcome: "recorded" | "already" = "already";
+    let lastStatus: "In" | "Out" = decided;
+    let lastAt: string | null = null;
+    while (pending.length) {
+      const event = pending[0];
+      const result = await recordAttendancePunch(event);
+      if (result.outcome === "unavailable" || !result.status || !result.at) {
+        notify("Your clock action is not confirmed yet. It is saved on this device and will safely retry when you press again.");
+        return false;
+      }
+      lastOutcome = result.outcome;
+      lastStatus = result.status;
+      lastAt = result.at;
+
+      /* The transaction response is the authoritative state. Add its exact
+         ledger event to the local view only once, then repair all old active
+         flags so a stale In cannot keep someone clocked in after an Out. */
+      const store = parseStore("larsaStaffV8") as {
+        logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string }[];
+      } | null;
+      if (store) {
+        if (!Array.isArray(store.logs)) store.logs = [];
+        const eventId = result.eventId || event.client_event_id;
+        let log = store.logs.find((item) => String(item.id || "") === eventId);
+        if (!log) {
+          log = {
+            id: eventId, uid: user.id, type: result.workMode || event.work_mode || "Office",
+            status: result.status, time: result.at,
+            ...(result.note || event.note ? { note: result.note || event.note || undefined } : {}),
+            ...(result.clockedBy || event.clocked_by ? { clockedBy: result.clockedBy || event.clocked_by || undefined } : {}),
+            lastSeen: result.at, touchedAt: result.at, active: false,
+          };
+          store.logs.push(log);
+        }
+        store.logs.forEach((item) => {
+          if (item.uid === user.id && (item.status === "In" || item.status === "Out")) item.active = false;
+        });
+        if (result.status === "In") log.active = true;
+        localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+        pushSyncedKeyNow("larsaStaffV8");
+      }
+
+      pending.shift();
+      try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
+      catch { /* server already confirmed; ledger reconciliation repairs the view */ }
+      refreshStaffEngine();
+      setStorageTick((value) => value + 1);
+    }
+
+    if (lastOutcome === "already") {
+      const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+      notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`);
+      return false;
+    }
+    notify(lastStatus === "In" ? `Clocked in · ${mode}` : `Clocked out · ${mode}`);
     return true;
-  }, [notify, refreshStaffEngine, whenClockConfirmed]);
+  }, [notify, refreshStaffEngine]);
   const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
     if (punchLock.current) { notify("Your last punch is still saving — one moment."); return false; }
     punchLock.current = true;
@@ -16041,8 +15995,8 @@ function LivePresence({
       .filter((log) => log.uid === user.id && log.time)
       .sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime())[0];
     const openSession = sessions.find((session) => session.uid === user.id && session.open);
-    const isIn = Boolean(openSession) || latest?.status === "In";
-    const mode = openSession?.mode || latest?.type || "";
+    const isIn = isActiveClockSession(openSession) || (!openSession && latest?.status === "In");
+    const mode = isActiveClockSession(openSession) ? openSession?.mode || "" : !openSession ? latest?.type || "" : "";
     const planned = (schedule[user.id]?.[todayName] || [])
       .map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
     return {
@@ -16050,9 +16004,9 @@ function LivePresence({
       isIn,
       tone: isIn ? modeTone(mode) : "off",
       mode: mode || "—",
-      since: openSession?.clockIn || latest?.time || "",
+      since: isActiveClockSession(openSession) ? openSession?.clockIn || "" : !openSession ? latest?.time || "" : "",
       // Presence, not worked time -- someone on their lunch break is still here.
-      hours: openSession?.presenceHours || 0,
+      hours: isActiveClockSession(openSession) ? openSession?.presenceHours || 0 : 0,
       stale: Boolean(openSession?.stale),
       planned,
     };
@@ -18239,6 +18193,7 @@ function QuickClock({
       kept.adjusted = kept.adjusted || session.adjusted;
       kept.stale = kept.stale || session.stale;
       kept.unclosed = kept.unclosed || session.unclosed;
+      kept.long = kept.long || session.long;
       if (session.date < kept.date) kept.date = session.date;
     });
     return [...folded.values()]
@@ -18337,13 +18292,12 @@ function QuickClock({
             placeholder="Running late, leaving early, working from a job site…"
           />
         </label>
-        {/* Disabled until the app has been told what the server holds, and
-            while a punch is in flight. The label says which it is, because a
-            dead-looking button with no explanation is its own bug report. */}
+        {/* Clock-in/out is available during bootstrap; Postgres serializes the
+            transition and the client keeps uncertain requests for safe retry. */}
         <button
           type="button"
           className={`clock-punch ${open ? "out" : `in tone-${modeTone(mode)}`}`}
-          disabled={!clockReady || punching}
+          disabled={punching}
           onClick={async () => {
             if (punching) return;
             setPunching(true);
@@ -18355,7 +18309,7 @@ function QuickClock({
           }}
         >
           <Timer size={22} />
-          {!clockReady ? "Checking your status…" : punching ? "Saving…" : open ? "Clock Out" : "Clock In"}
+          {punching ? "Saving…" : open ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
@@ -18500,7 +18454,7 @@ function QuickClock({
                   </div>
                   {day.rows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
-              const liveOpen = session.open && !session.stale && !session.unclosed;
+              const liveOpen = isActiveClockSession(session);
               return (
                 <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
                   <div className="trim-who">
@@ -18519,6 +18473,8 @@ function QuickClock({
                       {session.spanDays > 1 ? ` (${session.spanDays} days)` : ""}
                       {" · "}{session.stale || session.unclosed
                         ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
+                        : session.long
+                          ? `${formatHours(session.openHours || 0)} — needs review, not counted`
                         : liveOpen
                           ? `${formatHours(session.hours)} so far`
                           : `${formatHours(session.hours)} worked`}
