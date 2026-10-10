@@ -7037,7 +7037,7 @@ export default function Home() {
      cached whole-store snapshot and prevents two devices from accepting the
      same stale state. A small per-user queue survives reloads so a timeout
      retries the same event id instead of creating a second punch. */
-  const punchClock = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
+  const punchClock = useCallback(async (mode: string, note = "", intent?: "In" | "Out", quiet = false) => {
     const user = sessionUserRef.current;
     if (!user) return false;
     const initialStore = parseStore("larsaStaffV8") as {
@@ -7088,7 +7088,7 @@ export default function Home() {
       const event = pending[0];
       const result = await recordAttendancePunch(event);
       if (result.outcome === "unavailable" || !result.status || !result.at) {
-        notify("Your clock action is not confirmed yet. It is saved on this device and will safely retry when you press again.");
+        if (!quiet) notify("Your clock action is waiting to sync. Keep the app open or reconnect; it will retry automatically. Don't tap again.");
         return false;
       }
       lastOutcome = result.outcome;
@@ -7145,22 +7145,45 @@ export default function Home() {
 
     if (lastOutcome === "already") {
       const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-      notify(localRefreshFailed
-        ? `Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`
-        : lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`);
+      if (localRefreshFailed) notify(`Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
+      else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`);
       return false;
     }
-    notify(localRefreshFailed
-      ? `Your clock action was saved on the server, but this device could not refresh. Reload the page.`
-      : lastStatus === "In" ? `Clocked in — ${mode}` : `Clocked out — ${mode}`);
+    if (localRefreshFailed) notify(`Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
+    else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : `Clocked out — ${mode}`);
     return true;
   }, [notify, refreshStaffEngine]);
-  const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out") => {
-    if (punchLock.current) { notify("Your last punch is still saving — one moment."); return false; }
+  const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out", quiet = false) => {
+    if (punchLock.current) { if (!quiet) notify("Your last punch is still saving - one moment."); return false; }
     punchLock.current = true;
-    try { return await punchClock(mode, note, intent); }
+    try { return await punchClock(mode, note, intent, quiet); }
     finally { punchLock.current = false; }
   }, [punchClock, notify]);
+  /* A timed-out RPC stays in the per-user durable queue. Resume it on startup,
+     reconnect, return to the tab, and while this session remains open; the
+     stable event id makes every retry safe if the earlier request actually
+     committed. */
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id) return;
+    const retryPending = () => {
+      if (!navigator.onLine || punchLock.current) return;
+      const key = attendancePunchQueueKey(sessionUser.id);
+      const queued = parseStore(key);
+      if (!Array.isArray(queued) || !queued.length) return;
+      const latest = queued[queued.length - 1] as AttendancePunchInput;
+      if (latest?.uid !== sessionUser.id || (latest.status !== "In" && latest.status !== "Out")) return;
+      void punchClockGuarded(latest.work_mode || "Office", latest.note || "", latest.status, true);
+    };
+    retryPending();
+    const timer = window.setInterval(retryPending, 15_000);
+    window.addEventListener("online", retryPending);
+    window.addEventListener("focus", retryPending);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", retryPending);
+      window.removeEventListener("focus", retryPending);
+    };
+  }, [hydrated, sessionUser?.id, punchClockGuarded]);
   /* The Timeclock panel's clock button reaches up to this and hands its punch
      over, so the guarded writer above is the ONLY thing in the product that
      can append a punch. Same origin, so the panel can simply call it; if the

@@ -21,7 +21,7 @@ test("a retry reuses the pending event and does not lose the employee's note", (
   assert.match(punch, /if \(queue\[queue\.length - 1\]\?\.status !== decided\)/);
   assert.match(punch, /client_event_id: `p\$\{user\.id\}\$\{Date\.now\(\)\}/);
   assert.match(punch, /note: note\.trim\(\) \|\| null,/);
-  assert.match(punch, /Your clock action is not confirmed yet\./);
+  assert.match(punch, /Your clock action is waiting to sync\./);
 });
 
 test("the same server state refreshes the screen without another press", () => {
