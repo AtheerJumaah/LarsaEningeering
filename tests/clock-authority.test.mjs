@@ -49,3 +49,15 @@ test("clock-in/out remains usable during the first sync, and the iframe uses the
   assert.doesNotMatch(button, /clockReady/);
   assert.match(page, /void punchClockGuarded\(mode, note \|\| "", intent\);/);
 });
+
+
+test("recent sessions explain when suspicious or unclosed hours are excluded", () => {
+  const heading = page.indexOf("<h3>Your recent sessions</h3>");
+  const start = page.lastIndexOf('<section className="report-panel">', heading);
+  const recent = page.slice(start, page.indexOf("</section>", heading));
+    assert.ok(recent.includes("<th>Hours / status</th>"));
+  assert.match(recent, /session\.stale \|\| session\.unclosed/);
+  assert.match(recent, /Needs correction · not counted/);
+  assert.match(recent, /session\.long/);
+  assert.match(recent, /Needs review · not counted/);
+});
