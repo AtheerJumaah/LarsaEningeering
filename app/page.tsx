@@ -18720,7 +18720,7 @@ function QuickClock({
           <span className="black-badge">{recent.length}</span></div>
         <div className="data-table-wrap">
           <table className="data-table compact-table">
-            <thead><tr><th>Date</th><th>Mode</th><th>In</th><th>Out</th><th>Hours</th></tr></thead>
+            <thead><tr><th>Date</th><th>Mode</th><th>In</th><th>Out</th><th>Hours / status</th></tr></thead>
             <tbody>
               {recent.map((session, index) => (
                 <tr key={`${session.clockIn}-${index}`}>
@@ -18728,7 +18728,7 @@ function QuickClock({
                   <td><span className={`mode-chip tone-${modeTone(session.mode)}`}>{session.mode}</span></td>
                   <td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
                   <td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
-                  <td>{formatHours(session.hours)}</td>
+                  <td>{session.stale || session.unclosed ? "Needs correction · not counted" : session.long ? "Needs review · not counted" : session.open ? `${formatHours(session.hours)} so far` : formatHours(session.hours)}</td>
                 </tr>
               ))}
               {!recent.length && <tr><td colSpan={5}><div className="empty compact">No attendance recorded yet.</div></td></tr>}
