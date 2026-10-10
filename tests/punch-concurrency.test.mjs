@@ -38,13 +38,13 @@ const engine = JSON.parse(tpl);
 test("only one punch at a time may be inside the read-modify-write", () => {
   assert.match(page, /const punchLock = useRef\(false\);/);
   // The lock wraps BOTH writers, and both share it.
-  assert.match(page, /const punchClockGuarded = useCallback\(async \(mode: string, note = "", intent\?: "In" \| "Out"\) => \{\s*\n\s*if \(punchLock\.current\)/);
+  assert.match(page, /const punchClockGuarded = useCallback\(async \(mode: string, note = "", intent\?: "In" \| "Out", quiet = false\) => \{\s*\n\s*if \(punchLock\.current\)/);
   assert.match(page, /const punchBreakGuarded = useCallback\(async \(note = "", intent\?: "Break Start" \| "Break End"\) => \{\s*\n\s*if \(punchLock\.current\)/);
   // Released on every path, including the ones that throw.
   const releases = page.match(/finally \{ punchLock\.current = false; \}/g) || [];
   assert.equal(releases.length, 2, "both wrappers must release the lock in a finally");
   // The writers keep their names; the lock is a separate, guarded entry point.
-  assert.match(page, /return await punchClock\(mode, note, intent\);/);
+  assert.match(page, /return await punchClock\(mode, note, intent, quiet\);/);
   assert.match(page, /return await punchBreak\(note, intent\);/);
 });
 
@@ -98,4 +98,28 @@ test("an uncertain save stays queued and the same id is retried", () => {
   assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
   assert.ok(writer.indexOf("if (result.outcome === \"unavailable\"") < writer.indexOf("pending.shift()"),
     "a timeout must leave the unresolved event in the queue");
+});
+
+test("a confirmed server punch cannot be turned into a repeat press by a cache write failure", () => {
+  const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
+  const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;");
+  const consumeQueue = writer.indexOf("pending.shift();", serverConfirmed);
+  const saveQueue = writer.indexOf('localStorage.setItem(queueKey, JSON.stringify(pending))', consumeQueue);
+  const refreshCache = writer.indexOf('localStorage.setItem("larsaStaffV8", JSON.stringify(store))', saveQueue);
+  assert.ok(serverConfirmed >= 0 && consumeQueue > serverConfirmed && saveQueue > consumeQueue,
+    "remove a server-confirmed request from the pending queue first");
+  assert.ok(refreshCache > saveQueue, "the local cache is updated after the queue is consumed");
+  assert.match(writer.slice(saveQueue, refreshCache), /catch \{[\s\S]*?\}/,
+    "localStorage errors must not escape the confirmed server path");
+  assert.match(writer, /saved on the server, but this device could not refresh/,
+    "tell the employee the server saved it if this browser cannot refresh");
+});
+
+test("pending punches resume automatically and reuse their queued event id", () => {
+  assert.match(page, /const retryPending = \(\) => \{/);
+  assert.match(page, /window\.setInterval\(retryPending, 15_000\)/);
+  assert.match(page, /window\.addEventListener\("online", retryPending\)/);
+  assert.match(page, /window\.addEventListener\("focus", retryPending\)/);
+  assert.match(page, /punchClockGuarded\(latest\.work_mode \|\| "Office", latest\.note \|\| "", latest\.status, true\)/);
+  assert.match(page, /Don't tap again\./);
 });
