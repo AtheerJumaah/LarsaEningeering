@@ -99,3 +99,18 @@ test("an uncertain save stays queued and the same id is retried", () => {
   assert.ok(writer.indexOf("if (result.outcome === \"unavailable\"") < writer.indexOf("pending.shift()"),
     "a timeout must leave the unresolved event in the queue");
 });
+
+test("a confirmed server punch cannot be turned into a repeat press by a cache write failure", () => {
+  const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
+  const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;");
+  const consumeQueue = writer.indexOf("pending.shift();", serverConfirmed);
+  const saveQueue = writer.indexOf('localStorage.setItem(queueKey, JSON.stringify(pending))', consumeQueue);
+  const refreshCache = writer.indexOf('localStorage.setItem("larsaStaffV8", JSON.stringify(store))', saveQueue);
+  assert.ok(serverConfirmed >= 0 && consumeQueue > serverConfirmed && saveQueue > consumeQueue,
+    "remove a server-confirmed request from the pending queue first");
+  assert.ok(refreshCache > saveQueue, "the local cache is updated after the queue is consumed");
+  assert.match(writer.slice(saveQueue, refreshCache), /catch \{[\s\S]*?\}/,
+    "localStorage errors must not escape the confirmed server path");
+  assert.match(writer, /saved on the server, but this device could not refresh/,
+    "tell the employee the server saved it if this browser cannot refresh");
+});
