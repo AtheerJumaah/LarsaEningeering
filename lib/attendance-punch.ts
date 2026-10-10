@@ -12,10 +12,12 @@ export type AttendancePunchInput = {
   clocked_by?: string | null;
   source?: string;
   removed_ids?: string[];
+  needs_review?: boolean;
+  review_reason?: string;
 };
 
 export type AttendancePunchResult = {
-  outcome: "recorded" | "already" | "unavailable";
+  outcome: "recorded" | "already" | "needs_review" | "unavailable";
   status?: "In" | "Out" | null;
   at?: string | null;
   eventId?: string | null;
@@ -55,7 +57,14 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         p_source: input.source ?? "live",
         p_removed_ids: input.removed_ids ?? [],
       });
-      if (response.error) return { outcome: "unavailable" as const };
+      if (response.error) {
+        const error = response.error as { code?: unknown; message?: unknown };
+        if (String(error.code || "") === "22023"
+          && String(error.message || "").includes("Attendance punch time needs review")) {
+          return { outcome: "needs_review" as const };
+        }
+        return { outcome: "unavailable" as const };
+      }
       const row = Array.isArray(response.data) ? response.data[0] : response.data;
       if (!row || (row.outcome !== "recorded" && row.outcome !== "already")) {
         return { outcome: "unavailable" as const };

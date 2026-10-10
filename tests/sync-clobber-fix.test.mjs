@@ -73,8 +73,9 @@ test("clock punches and breaks stamp with the server-corrected clock, not the de
   const punchBreak = page.slice(page.indexOf("const punchBreak = useCallback"), page.indexOf("const trimSession = useCallback"));
   assert.match(punchClock, /occurred_at: serverNowIso\(\)/);
   assert.match(punchBreak, /const now = serverNowIso\(\);/);
-  // The UI timestamp is only a proposed ordering value. Postgres serializes
-  // and corrects it against the current ledger timestamp.
+  // The UI timestamp is server-clock corrected before queueing. Postgres
+  // preserves that occurrence time for offline punches and keeps receipt time
+  // separately for audit/order.
   assert.match(punchClock, /await recordAttendancePunch\(event\)/);
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchClock), "punchClock must not stamp with the device clock");
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchBreak), "punchBreak must not stamp with the device clock");

@@ -1359,6 +1359,9 @@ function parseStore(key: string) {
 function attendancePunchQueueKey(uid: string) {
   return `larsaAttendancePunchQueueV1:${uid}`;
 }
+function attendancePunchReviewKey(uid: string) {
+  return `larsaAttendancePunchReviewV1:${uid}`;
+}
 function saveDownload(name: string, body: string, type = "application/json") {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([body], { type }));
@@ -7053,6 +7056,10 @@ export default function Home() {
     const queue: AttendancePunchInput[] = Array.isArray(storedQueue)
       ? storedQueue.filter((event) => event?.uid === user.id && (event.status === "In" || event.status === "Out"))
       : [];
+    if (queue[0]?.needs_review) {
+      if (!quiet) notify("A previous offline clock action needs review. It was not recorded; submit an attendance correction request before continuing.");
+      return false;
+    }
     /* An unresolved request for this same state is the same action, not a
        second punch. Reuse it; a deliberate opposite action is queued after it. */
     if (queue[queue.length - 1]?.status !== decided) {
@@ -7084,9 +7091,31 @@ export default function Home() {
     let lastStatus: "In" | "Out" = decided;
     let lastAt: string | null = null;
     let localRefreshFailed = false;
+    let needsReviewCount = 0;
     while (pending.length) {
       const event = pending[0];
       const result = await recordAttendancePunch(event);
+      if (result.outcome === "needs_review") {
+        const reviewKey = attendancePunchReviewKey(user.id);
+        try {
+          const storedReview = parseStore(reviewKey);
+          const review: AttendancePunchInput[] = Array.isArray(storedReview) ? storedReview : [];
+          if (!review.some((saved) => saved.client_event_id === event.client_event_id)) {
+            review.push({ ...event, needs_review: true, review_reason: "timestamp-out-of-window-or-order" });
+          }
+          localStorage.setItem(reviewKey, JSON.stringify(review.slice(-100)));
+          pending.shift();
+          localStorage.setItem(queueKey, JSON.stringify(pending));
+          needsReviewCount++;
+          continue;
+        } catch {
+          /* Keep the original event in the active queue and stop automatic retries. */
+          pending[0] = { ...event, needs_review: true, review_reason: "timestamp-out-of-window-or-order" };
+          try { localStorage.setItem(queueKey, JSON.stringify(pending)); } catch { /* original remains queued */ }
+          notify("A pending clock action could not be safely time-stamped. It was not recorded; submit an attendance correction request.");
+          return false;
+        }
+      }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
         if (!quiet) notify("Your clock action is waiting to sync. Keep the app open or reconnect; it will retry automatically. Don't tap again.");
         return false;
@@ -7143,14 +7172,21 @@ export default function Home() {
       setStorageTick((value) => value + 1);
     }
 
-    if (lastOutcome === "already") {
-      const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-      if (localRefreshFailed) notify(`Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
-      else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`);
+    if (needsReviewCount && lastAt === null) {
+      notify(`${needsReviewCount} offline clock action${needsReviewCount === 1 ? "" : "s"} need review and were not recorded. Submit an attendance correction request.`);
       return false;
     }
-    if (localRefreshFailed) notify(`Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
-    else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : `Clocked out — ${mode}`);
+
+    if (lastOutcome === "already") {
+      const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+      const reviewPrefix = needsReviewCount ? `${needsReviewCount} older offline clock action${needsReviewCount === 1 ? "" : "s"} need review. ` : "";
+      if (localRefreshFailed) notify(`${reviewPrefix}Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
+      else if (!quiet || needsReviewCount) notify(`${reviewPrefix}${lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`}`);
+      return false;
+    }
+    const reviewPrefix = needsReviewCount ? `${needsReviewCount} older offline clock action${needsReviewCount === 1 ? "" : "s"} need review. ` : "";
+    if (localRefreshFailed) notify(`${reviewPrefix}Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
+    else if (!quiet || needsReviewCount) notify(`${reviewPrefix}${lastStatus === "In" ? `Clocked in - ${mode}` : `Clocked out - ${mode}`}`);
     return true;
   }, [notify, refreshStaffEngine]);
   const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out", quiet = false) => {
@@ -7170,6 +7206,7 @@ export default function Home() {
       const key = attendancePunchQueueKey(sessionUser.id);
       const queued = parseStore(key);
       if (!Array.isArray(queued) || !queued.length) return;
+      if (queued[0]?.needs_review) return;
       const latest = queued[queued.length - 1] as AttendancePunchInput;
       if (latest?.uid !== sessionUser.id || (latest.status !== "In" && latest.status !== "Out")) return;
       void punchClockGuarded(latest.work_mode || "Office", latest.note || "", latest.status, true);

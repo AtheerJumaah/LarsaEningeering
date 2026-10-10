@@ -96,8 +96,11 @@ test("an uncertain save stays queued and the same id is retried", () => {
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
   assert.match(writer, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
   assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
-  assert.ok(writer.indexOf("if (result.outcome === \"unavailable\"") < writer.indexOf("pending.shift()"),
-    "a timeout must leave the unresolved event in the queue");
+  const unavailable = writer.indexOf("if (result.outcome === \"unavailable\"");
+  const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;", unavailable);
+  const consumeConfirmed = writer.indexOf("pending.shift();", serverConfirmed);
+  assert.ok(unavailable >= 0 && serverConfirmed > unavailable && consumeConfirmed > serverConfirmed,
+    "only a confirmed server result may consume the unresolved event");
 });
 
 test("a confirmed server punch cannot be turned into a repeat press by a cache write failure", () => {

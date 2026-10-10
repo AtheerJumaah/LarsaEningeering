@@ -140,7 +140,8 @@ for name in repair_002_durable_attendance_ledger_and_write_hardening \
             repair_007_durable_account_ledger \
             repair_008_server_guard_stale_writes \
             repair_009_attendance_ledger_anon_access \
-            repair_012_atomic_attendance_punch; do
+            repair_012_atomic_attendance_punch \
+            repair_013_preserve_offline_punch_time; do
   f="$repo/supabase/migrations/$name.sql"
   echo "applying $(basename "$f")"
   PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
