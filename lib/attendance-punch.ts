@@ -35,6 +35,7 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
   if (!client) return { outcome: "unavailable" };
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   try {
     const request = (async () => {
       /* The app's shared sync bootstrap signs into Supabase anonymously. A
@@ -45,6 +46,8 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         const { error: signInError } = await client.auth.signInAnonymously();
         if (signInError) return { outcome: "unavailable" as const };
       }
+      // A timed-out auth lookup must not start a late, abandoned RPC.
+      if (controller.signal.aborted) return { outcome: "unavailable" as const };
       let deviceId: string | null = null;
       try {
         deviceId = localStorage.getItem("larsaAttendanceDeviceV1") || globalThis.crypto.randomUUID();
@@ -64,7 +67,7 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         p_removed_ids: input.removed_ids ?? [],
         p_actor_employee_id: input.actor_id || input.uid,
         p_device_info: { id: deviceId, userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null },
-      });
+      }).abortSignal(controller.signal);
       if (response.error) {
         const code = String(response.error.code || "");
         if (code === "PGRST202" || code === "42883") return { outcome: "configuration_error" as const };
@@ -88,7 +91,10 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
     return await Promise.race([
       request,
       new Promise<AttendancePunchResult>((resolve) => {
-        timeout = setTimeout(() => resolve({ outcome: "unavailable" }), 8000);
+        timeout = setTimeout(() => {
+          controller.abort();
+          resolve({ outcome: "unavailable" });
+        }, 8000);
       }),
     ]);
   } catch {

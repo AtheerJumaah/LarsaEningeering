@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {isSuspiciousClosedSession} from '../lib/attendance.mjs';
+import {planAttendanceCorrection} from '../lib/attendance-corrections.mjs';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 function runtime(path, client, seed = {}) {
@@ -18,7 +19,7 @@ function runtime(path, client, seed = {}) {
       : name.includes('merge') ? { mergeStoreText: (_base,local,remote) => ({...remote,...JSON.parse(local)}), protectOutgoing: x => x }
       : (() => {throw new Error(name)})(),
     localStorage, window: { localStorage, ...events }, document: { hidden: false, ...events },
-    navigator: { onLine: true }, Date, Map, Set, Promise,
+    navigator: { onLine: true }, Date, Map, Set, Promise, AbortController,
     setTimeout: (fn,ms) => { timers.push({fn,ms,interval:false}); return timers.length; }, clearTimeout(){},
     setInterval: (fn,ms) => { timers.push({fn,ms,interval:true}); return timers.length; }, clearInterval(){},
   });
@@ -84,10 +85,52 @@ test('the packed clock passes employee identity before consulting stale state',(
 });
 
 test('confirmed punch client distinguishes a missing RPC from an offline connection',async()=>{
-  const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:async()=>({error:{code:'PGRST202',message:'function unavailable'}})};
+  const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:()=>({abortSignal:async()=>({error:{code:'PGRST202',message:'function unavailable'}})})};
   const r=runtime('lib/attendance-punch.ts',client);
   const result=await r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
   assert.equal(result.outcome,'configuration_error');
+});
+
+test('uncertain punch timeout aborts the request, preserving original intent and event id',async()=>{
+  let signal, payload;
+  const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:(_name,p)=>{
+    payload=p;return {abortSignal:s=>{signal=s;return new Promise(()=>{});}};
+  }};
+  const r=runtime('lib/attendance-punch.ts',client);
+  const input={client_event_id:'stable',uid:'employee',status:'Out',occurred_at:'2026-10-12T09:00:00Z'};
+  const pending=r.api.recordAttendancePunch(input);await settle();
+  r.timers.find(t=>t.ms===8000).fn();
+  assert.equal((await pending).outcome,'unavailable');
+  assert.equal(signal.aborted,true);
+  assert.equal(payload.p_client_event_id,input.client_event_id);
+  assert.equal(payload.p_status,'Out');assert.equal(payload.p_occurred_at,input.occurred_at);
+});
+
+test('auth lookup finishing after timeout cannot send an abandoned punch',async()=>{
+  let release,calls=0;
+  const client={auth:{getSession:()=>new Promise(resolve=>{release=resolve;})},rpc:()=>{calls++;}};
+  const r=runtime('lib/attendance-punch.ts',client);
+  const pending=r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  r.timers.find(t=>t.ms===8000).fn();assert.equal((await pending).outcome,'unavailable');
+  release({data:{session:{}}});await settle();assert.equal(calls,0);
+});
+
+test('native correction planner refuses overlap and legacy ambiguous timezone, preserving current shift',()=>{
+  const now=Date.parse('2026-10-12T18:00:00Z');
+  const logs=[{uid:'e',status:'In',time:'2026-10-12T16:00:00Z'}];
+  const request={id:'c',uid:'e',type:'Missed Hours',fromAt:'2026-10-11T22:00:00Z',toAt:'2026-10-12T06:00:00Z'};
+  assert.equal(planAttendanceCorrection(request,logs,now).ok,true);
+  assert.equal(planAttendanceCorrection({...request,fromAt:'2026-10-12T15:00:00Z',toAt:'2026-10-12T17:00:00Z'},logs,now).ok,false);
+  assert.equal(planAttendanceCorrection({...request,fromAt:undefined},logs,now).ok,false);
+  assert.equal(logs.length,1);assert.equal(logs[0].status,'In');
+});
+
+test('native missed-break correction must belong to a recorded shift',()=>{
+  const now=Date.parse('2026-10-12T18:00:00Z');
+  const logs=[{uid:'e',status:'In',time:'2026-10-12T16:00:00Z'},{uid:'e',status:'Out',time:'2026-10-12T17:00:00Z'}];
+  const request={id:'c',uid:'e',type:'Missed Break',fromAt:'2026-10-12T16:20:00Z',toAt:'2026-10-12T16:40:00Z'};
+  assert.equal(planAttendanceCorrection(request,logs,now).ok,true);
+  assert.equal(planAttendanceCorrection({...request,toAt:'2026-10-12T17:10:00Z'},logs,now).ok,false);
 });
 
 function calculate(logs, now='2026-10-12T18:00:00Z') {

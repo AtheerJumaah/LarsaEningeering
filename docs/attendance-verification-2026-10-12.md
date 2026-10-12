@@ -7,7 +7,7 @@
 - Vercel: larsa-eningeering, project prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk.
 - Production database: larsa-control, fqxknodpkjdmueevafdk, us-east-1.
 - Starting production commit: 985e23ebcf4f01c6065c17aa1702ad8a96a56fb0.
-- Final release and live evidence: to be recorded after deployment verification.
+- First verified release: 57f07bbeb28651d943c2358ff512f24db6eedc33, deployment dpl_H2yofqy67M311Zmhrrz95HXS5PXk, READY with larsaeng.app alias. A follow-up adds bounded RPC cancellation and query materialization; its final deployed SHA is supplied in the delivery message.
 
 ## Checklist
 
@@ -15,20 +15,20 @@
 
 | Issue | Origin | Current status / evidence |
 |---|---|---|
-| Clock In/Out incorrect | Reported | Confirmed, fixed; runtime/API/browser verification; live test pending. |
-| Ctrl + Shift + R required | Reported | Sync recovery fixed and runtime-verified; worker release bumped, live upgrade pending. |
+| Clock In/Out incorrect | Reported | Confirmed, fixed; runtime/API/browser verification and live deliberate In/Out confirmed. Intermittent live network/API delay remains unresolved. |
+| Ctrl + Shift + R required | Reported | Sync recovery fixed and runtime-verified; signed-in browser automatically upgraded to the new deployment without a hard refresh. |
 | No automatic entry/active synchronization | Reported | Fixed; login, entry, focus, visibility, reconnect, realtime and 15-second visible-tab fallback. Failed bootstrap recovery runtime-verified. |
-| Ignored clicks / minutes of delay | Reported | Stale embedded refusal reproduced and fixed. Browser verified Saving state and 1.2-second slow API response. Individual employees’ historical network delays remain unattributed. |
+| Ignored clicks / minutes of delay | Reported | Stale embedded refusal reproduced and fixed. Browser verified Saving state and slow response. Live Break End receipt was delayed 78.6 seconds and Out 27.2 seconds, despite database RPC execution maximum 2.9 seconds. Network/connection delay remains unresolved; original instants survived and no duplicates appeared. |
 | Unintentional Clocked In/Out status | Reported | Confirmed three production ledger/document status disagreements due to upload ordering. Startup historical upload reproduced and removed. No evidence that every reported status change was an unintended employee action. |
 | Records/hours unexpectedly change | Reported | Fixed delayed-time substitution, unfinished-break bleed, and correction timezone reinterpretation; calculation and transactional tests passed. Historical payroll repair was not performed. |
 | Timeouts/offline | Risk to investigate | Confirmed offline time loss, fixed. Browser verified failed request and commit-before-timeout retry. Original-time review queue retained for ambiguous/older-than-36-hour actions. |
 | Devices/tabs/embedded panel conflicts | Risk to investigate | Atomic employee lock and stable IDs; strict panel identity and intent; browser verified second-tab update. Physical independent-device testing pending. |
-| Old caches/service workers | Risk to investigate | Network-first engine loading retained; worker v48; idle-only replacement reload and minute update checks. Production upgrade pending. |
+| Old caches/service workers | Risk to investigate | Network-first engine loading retained; worker v48; idle-only replacement reload and minute update checks. Live browser upgraded automatically after another tab installed the new worker. Mobile/old browser matrix unverified. |
 | Storage failure / reconciliation | Risk to investigate | Startup replay removed, flag-only reconciliation now repaints. Browser verified storage failure blocks unqueued punch. Persistent denial of all browser storage remains unsupported; do not claim offline durability in that state. |
 | Wrong employee / stale login | Risk to investigate | Unsigned/different panel identity rejected; disabled/missing cached account rejected; account-switch guard stops draining another user's queue. Server staff identity security remains unresolved (see below). |
-| Forgotten/long/overnight/timezones/DST | Risk to investigate | 31 runtime/calculation/correction tests passed; server-corrected durations, stale/long flags, no automatic Clock Out, overnight requests capture exact instants. |
+| Forgotten/long/overnight/timezones/DST | Risk to investigate | 35 runtime/calculation/correction tests passed; server-corrected durations, stale/long flags, no automatic Clock Out, overnight requests capture exact instants. |
 | Breaks / manager / approved corrections | Risk to investigate | Employee and manager punches/breaks share atomic operation; corrections use deterministic IDs, actor stamps and overlap checks. Database effective chronology respects approved trims. Live manager/correction workflow still pending. Legacy requests without exact instants require review/resubmission. |
-| Wrong app/database deployment | Risk to investigate | Starting GitHub/Vercel/domain/database chain verified. Final SHA and alias pending. |
+| Wrong app/database deployment | Risk to investigate | GitHub/Vercel/domain/database chain verified before and after release. Production assets match the new deployment and production database. |
 
 ## Demonstrated root causes and changes
 
@@ -39,6 +39,7 @@
 5. The packed Timeclock checked stale local state before handing off, and the outer handoff omitted employee identity. Reproduced by invoking the real packed clock function. Intent/identity now reach the parent first; embedded and standalone fallbacks cannot fabricate employee punches.
 6. Open breaks were clamped separately to every future session. They now stop at Clock Out/new In. The real session builder is exercised by runtime tests, not a mirror implementation.
 7. Corrections converted date/time in the reviewer’s timezone and generated non-stable materialization IDs. New requests freeze UTC instants/timezone at submission, support overnight work, retain actor and stable correction IDs, and refuse overlaps with other sessions. Native and embedded approval paths were updated.
+8. Uncertain requests continued after their eight-second UI deadline. Follow-up aborts the RPC at that deadline and prevents an auth lookup finishing later from starting an abandoned punch. Retries still reuse the original event ID and instant. Effective-event SQL materializes the correction map and converted row once; no performance improvement is claimed from the variable live timing measurements.
 
 ## Traceability and remaining security limitation
 
@@ -52,17 +53,32 @@ New atomic punches carry employee ID, declared acting employee ID, action source
 - Original-time SQL test failed before migration, then passed.
 - Same-intent timestamp-order race test failed before the follow-up migration, then passed.
 - Three production rollback-only SQL suites verify time preservation, idempotency, chronology, invalid/future/out-of-order rejection, breaks, audit metadata and effective corrections. Confirmed zero diagnostic attendance rows remain.
-- 31 runtime/calculation/correction/trim/duration tests passed.
+- 35 runtime/calculation/correction/trim/duration tests passed, including late-auth and request-abort checks and direct native correction planner tests.
 - Seven isolated Chromium browser scenarios passed: slow save with disabled duplicate press; confirmed breaks; two-tab propagation; failed network/reconnect; timeout after server commit; refresh without a new punch; quota failure before request.
 - Production build, TypeScript and packed-engine parsing passed before release.
-- Full pre-change suite baseline: 508 tests, 494 pass, 14 failures (existing assertions/environment issues). Changed attendance source-pattern assertions also need updating; the full suite is not claimed green. New behavioral evidence above is reported separately.
+- Full pre-change suite baseline: 508 tests, 494 pass, 14 failures (existing assertions/environment issues). Last whole-suite run before the four additional runtime cases: 521 tests, 478 pass, 43 fail. This includes 29 assertions pinning replaced implementation patterns (including accepting unsigned panels, cached break refusal and historical startup behavior). These assertions need revision; the full suite is not claimed green. New behavioral evidence above is reported separately.
 
 Browser fault tests use an isolated mock API, not the production account. Database tests use real installed production functions inside transactions that roll back. Neither alone proves a live employee flow; final live evidence is recorded separately below.
 
-## Remaining verification
+## Live production evidence
 
-- Live deliberate In → Break Start → Break End → Out on the user-designated Atheer Jumaah account, with event/document/UI/hour agreement.
-- Live automatic synchronization and cache-version upgrade.
+User-designated Atheer Jumaah account (u1), 12 October 2026, explicit diagnostic notes. Four events remain as an audited test shift; no history was deleted:
+
+| Action | Original UTC instant | Server receipt UTC | Event ID suffix |
+|---|---|---|---|
+| In | 08:52:10.165 | 08:52:16.236 | 19bcf972-0138-497e-acef-2c6732f92bff |
+| Break Start | 08:53:13.388 | 08:53:17.403 | 6d2f5e83-65c4-46e6-a92f-4abb1687f3c6 |
+| Break End | 08:57:32.769 | 08:58:51.414 | 92d70562-635b-4de7-b908-fd2106711c1f |
+| Out | 09:01:10.798 | 09:01:38.045 | ca031dd0-71ae-4e47-ba3a-b425e21f8936 |
+
+All four have matching document IDs/status/timestamps, actor u1, source, Supabase session and device metadata. Final UI shows Off the clock / Clock In and the closed session as 5 min. Database elapsed 540.633 seconds minus break 259.381 seconds = 281.252 seconds (4 min 41.252 sec), correctly displayed rounded to five minutes. No extra events were created by retries or refresh. Zero rollback diagnostic rows remain.
+
+The long live delays prevent a claim that all response-time problems are solved. They demonstrate pending/retry safety and original-time preservation, not fast service under every connection.
+
+## Remaining verification / limitations
+
 - Physical second device, real device sleep/resume and mobile browser cache matrix.
 - Live authorized manager and non-self correction approval workflow.
+- GitHub/Vercel runtime logs were unavailable to the connected account (403); no clean runtime-log scan is claimed.
+- The full legacy source-assertion suite is not green; separate passing behavioral tests are not a substitute for maintaining that suite.
 - For historical complaints, employees/event dates are needed to attribute each individual change; legacy audit gaps cannot be invented away.
