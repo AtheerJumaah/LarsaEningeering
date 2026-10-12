@@ -201,6 +201,41 @@ document.addEventListener('DOMContentLoaded', async function() {
   </style>
 
 </style>
+
+<script>
+/* The packed staff panel has a legacy local fallback. When it is embedded in
+   the Next app, that fallback must not get a chance to reject a click from its
+   stale iframe copy before the parent can consult the durable clock ledger.
+   Install this small bridge after the packed document is unpacked so the
+   parent writer is always the first path for an embedded panel. */
+(function(){
+  function installParentFirstClock(){
+    var previous = window.clockToggle;
+    if(typeof previous !== 'function' || previous.__larsaParentFirst) return;
+    var wrapped = function(type, intent){
+      try{
+        var parent = window.parent;
+        if(parent && parent !== window && typeof parent.__larsaPunch === 'function'){
+          var pending = window.__larsaPendingNote || '';
+          try{
+            parent.__larsaPunch(type, intent, pending);
+            window.__larsaPendingNote = '';
+            return;
+          }catch(e){ /* parent unavailable; retain the standalone fallback */ }
+        }
+      }catch(e){ /* cross-window access can fail during teardown */ }
+      return previous.apply(this, arguments);
+    };
+    wrapped.__larsaParentFirst = true;
+    window.clockToggle = wrapped;
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    installParentFirstClock();
+    window.setTimeout(installParentFirstClock, 0);
+  });
+  window.setTimeout(installParentFirstClock, 50);
+})();
+</script>
 <style>
 /* The app's own top bar already carries the Iraq and US Central clocks, so the
    pair the engine draws inside its page header is the same information twice
