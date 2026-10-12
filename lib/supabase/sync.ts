@@ -131,7 +131,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 
   async function ensureSession() {
     const { data } = await supabase.auth.getSession();
-    if (!data.session) {
+    if (data.session?.expires_at && data.session.expires_at * 1000 < Date.now() + 30_000) {
+      const { error } = await supabase.auth.refreshSession();
+      if (error) throw error;
+    } else if (!data.session) {
       console.log("[larsa-sync] no local session — calling signInAnonymously()");
       const { error } = await supabase.auth.signInAnonymously();
       if (error) throw error;
@@ -294,10 +297,15 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 
   // Every write to a synced key — whichever code made it — now also queues
   // a push. Anything else passes straight through untouched.
-  window.localStorage.setItem = function patchedSetItem(key: string, value: string) {
-    originalSetItem(key, value);
-    if ((SYNCED_KEYS as readonly string[]).includes(key)) schedulePush(key as SyncedKey);
+  // Storage is an exotic object: assigning storage.setItem may store a string
+  // instead of overriding the browser method. Patch the method's owner.
+  const methodOwner = typeof Storage !== "undefined" ? Storage.prototype : window.localStorage;
+  const previousMethod = methodOwner.setItem;
+  const patchedSetItem = function(this: Storage, key: string, value: string) {
+    previousMethod.call(this, key, value);
+    if (!cancelled && this === window.localStorage && (SYNCED_KEYS as readonly string[]).includes(key)) schedulePush(key as SyncedKey);
   };
+  methodOwner.setItem = patchedSetItem;
 
   async function bootstrap() {
     options.onStatusChange?.("connecting");
@@ -314,6 +322,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       /* Fire-and-forget: the offset is a refinement, never a gate. */
       sampleServerClock(supabase, originalSetItem).catch(() => {});
       await Promise.all(SYNCED_KEYS.map(async (key) => {
+        const baseline = localStorage.getItem(key);
         const { data: row, error: selectError } = await supabase
           .from("app_state")
           .select("data, updated_at")
@@ -323,14 +332,18 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           console.error(`[larsa-sync] select failed for "${key}":`, selectError);
           throw selectError;
         }
+        if (cancelled) return;
         if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));        const remote = row?.data;
         const local = readLocal(key);
         if (hasContent(remote)) {
           const text = JSON.stringify(remote);
           const before = localStorage.getItem(key);
-          originalSetItem(key, text);
+          let nextText = text;
+          if (before !== baseline && before) nextText = JSON.stringify(mergeStoreText(baseline, before, remote));
+          originalSetItem(key, nextText);
           lastKnown.set(key, text);
-          if (text !== before) caughtUpKeys.push(key);
+          if (nextText !== text) schedulePush(key);
+          if (nextText !== before) caughtUpKeys.push(key);
           console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
         } else if (hasContent(local)) {
           // First device to sign in with real local data seeds the table.
@@ -341,15 +354,17 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         }
       }));
       if (cancelled) return;
+      bootstrapped = true;
       options.onStatusChange?.("synced");
       console.log("[larsa-sync] initial catch-up complete, keys updated:", caughtUpKeys);
       caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
     } catch (err) {
-      console.error("[larsa-sync] bootstrap failed — sync is OFF for this session:", err);
+      console.error("[larsa-sync] bootstrap failed — retrying on focus, reconnect, or polling:", err);
       options.onStatusChange?.("offline");
       return;
     }
 
+    if (cleanupChannel) return;
     const channel = supabase
       .channel("larsa-app-state")
       .on(
@@ -417,7 +432,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         return;
       }
     }
-    if (lastKnown.get(key) === text) {
+    if (lastKnown.get(key) === text && localStorage.getItem(key) === text) {
       if (remoteUpdatedAt) lastSeenAt.set(key, remoteUpdatedAt);
       return; // our own write echoed back, or nothing new
     }
@@ -458,14 +473,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      changed — a refresh now costs one tiny query, which is what makes it
      affordable to run on a timer as well as on focus. */
   async function refreshFromServer(reason: string) {
-    if (refreshing || cancelled || !bootstrapped) return;
+    if (refreshing || cancelled) return;
     refreshing = true;
     try {
+      if (!bootstrapped) { await bootstrap(); return; }
+      await ensureSession();
       const { data: stamps, error: stampError } = await supabase
         .from("app_state")
         .select("store_key, updated_at")
         .in("store_key", SYNCED_KEYS as readonly string[]);
-      if (stampError || !Array.isArray(stamps)) return;
+      if (stampError || !Array.isArray(stamps)) throw stampError || new Error("Invalid sync response");
       const stale = stamps
         .map((row) => ({
           key: String(row.store_key || "") as SyncedKey,
@@ -476,6 +493,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           /* No stamp means we cannot prove it is current, so fetch it. */
           && (!stamp || lastSeenAt.get(key) !== stamp));
       if (!stale.length) {
+        options.onStatusChange?.("synced");
+        SYNCED_KEYS.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
         console.log(`[larsa-sync] refresh: already current (${reason})`);
         return;
       }
@@ -483,7 +502,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         .from("app_state")
         .select("store_key, data, updated_at")
         .in("store_key", stale.map(({ key }) => key));
-      if (error || !Array.isArray(rows)) return;
+      if (error || !Array.isArray(rows)) throw error || new Error("Invalid sync response");
+      if (cancelled) return;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
         if (!(SYNCED_KEYS as readonly string[]).includes(key)) return;
@@ -492,7 +512,9 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         applyRemote(key, row.data ?? {}, stamp);
       });
       console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
+      options.onStatusChange?.("synced");
     } catch {
+      options.onStatusChange?.("offline");
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
       refreshing = false;
@@ -502,7 +524,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   let cleanupChannel: (() => void) | null = null;
   let hadChannelDrop = false;
   let bootstrapped = false;
-  bootstrap().then(() => { bootstrapped = true; });
+  void refreshFromServer("startup");
   /* Clock skew drifts (and phones change it); re-measure every ten minutes. */
   const clockTimer = setInterval(() => { sampleServerClock(supabase, originalSetItem).catch(() => {}); }, 10 * 60 * 1000);
   /* Focus and reconnect are EDGES, and a browser left open all day may never
@@ -515,7 +537,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      visibilitychange that brings them back. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate");
-  }, 3 * 60 * 1000);
+  }, 15_000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
@@ -524,6 +546,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const onOnline = () => { refreshFromServer("network back"); };
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
+  window.addEventListener("focus", onVisible);
   /* Writes made by the engine iframes land in the same localStorage but do
      NOT pass through this window's patched setItem — same origin, different
      window object. They fire a `storage` event here instead, so that event
@@ -541,17 +564,20 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     if (existing) clearTimeout(existing);
     pushKey(key).catch(() => { /* retried by the next write or refresh */ });
   };
+  refreshNowHook = () => { void refreshFromServer("login or explicit revalidation"); };
 
   return () => {
     cancelled = true;
-    window.localStorage.setItem = originalSetItem;
+    if (methodOwner.setItem === patchedSetItem) methodOwner.setItem = previousMethod;
     pushTimers.forEach((timer) => clearTimeout(timer));
     clearInterval(clockTimer);
     clearInterval(revalidateTimer);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
+    window.removeEventListener("focus", onVisible);
     window.removeEventListener("storage", onStorageWrite);
     pushNowHook = null;
+    refreshNowHook = null;
     cleanupChannel?.();
   };
 }
@@ -560,6 +586,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
    punches so persistence starts the instant the button is pressed; the
    localStorage write has already made the UI state correct either way. */
 let pushNowHook: ((key: SyncedKey) => void) | null = null;
+let refreshNowHook: (() => void) | null = null;
+export function refreshSharedStateNow() { refreshNowHook?.(); }
 export function pushSyncedKeyNow(key: SyncedKey) {
   pushNowHook?.(key);
 }

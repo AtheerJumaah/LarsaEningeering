@@ -50,6 +50,7 @@ type ClockLogLike = {
   type?: string;
   note?: string;
   clockedBy?: string;
+  correctionId?: string;
   active?: boolean;
   lastSeen?: string;
   origUid?: string;
@@ -129,7 +130,7 @@ function enqueue(events: LedgerEvent[]) {
   events.forEach((event) => {
     if (!present.has(event.client_event_id)) queue.push(event);
   });
-  writeJson(QUEUE_KEY, queue.slice(-2000));
+  writeJson(QUEUE_KEY, queue);
   void flushLedgerQueue();
 }
 
@@ -169,19 +170,30 @@ export function ledgerTapStaffWrite(rawValue: string) {
   const fresh: LedgerEvent[] = [];
   logs.forEach((log) => {
     if (!log?.id || seen.has(String(log.id))) return;
-    const event = eventFromLog(log, store, "live");
+    const event = eventFromLog(log, store, log.correctionId ? "approved-correction" : log.recovery ? "recovery-import" : log.clockedBy ? "manager-action" : "legacy-local-action");
     if (event) {
       fresh.push(event);
       seen.add(String(log.id));
     }
   });
   if (fresh.length) {
-    writeJson(SEEN_KEY, Array.from(seen).slice(-5000));
+    writeJson(SEEN_KEY, Array.from(seen));
     enqueue(fresh);
   }
 }
 
 let tapInstalled = false;
+
+// Explicit approval hook. An iframe has its own Storage prototype, so its
+// writes do not pass through the parent's tap. Never scan/cache-replay here:
+// only the deliberately approved request's deterministic events are queued.
+export function captureApprovedCorrection(correctionId: string) {
+  const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+  const events = (store.logs || []).filter(log => log.correctionId === correctionId)
+    .map(log => eventFromLog(log, store, "approved-correction"))
+    .filter((event): event is LedgerEvent => Boolean(event));
+  enqueue(events);
+}
 
 /* Install the write tap + retry timers. Runs once, idempotent. The tap
  * wraps whatever setItem is CURRENT — the sync layer's own wrapper installs
@@ -189,20 +201,39 @@ let tapInstalled = false;
 export function initAttendanceLedger(): () => void {
   if (typeof window === "undefined" || tapInstalled) return () => {};
   tapInstalled = true;
-  const previousSetItem = window.localStorage.setItem.bind(window.localStorage);
-  window.localStorage.setItem = function ledgerPatchedSetItem(key: string, value: string) {
-    previousSetItem(key, value);
-    if (key === "larsaStaffV8") {
+  let cancelled = false;
+  const owner = typeof Storage !== "undefined" ? Storage.prototype : window.localStorage;
+  const previousSetItem = owner.setItem;
+  const patchedSetItem = function(this: Storage, key: string, value: string) {
+    if (!cancelled && this === window.localStorage && key === "larsaStaffV8") {
+      const before = readJson<StaffStoreLike>(key, {});
+      const seen = new Set(readJson<string[]>(SEEN_KEY, []));
+      (before.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
+      writeJson(SEEN_KEY, Array.from(seen));
+    }
+    previousSetItem.call(this, key, value);
+    if (!cancelled && this === window.localStorage && key === "larsaStaffV8") {
       try { ledgerTapStaffWrite(value); } catch { /* never break a save */ }
     }
   };
-  /* Catch up on anything written before this ran (or while offline). */
+  owner.setItem = patchedSetItem;
+  /* Seed the baseline, never manufacture live events merely by opening an
+     old cache. Explicit durable pending work alone may resume on startup. */
   const current = localStorage.getItem("larsaStaffV8");
-  if (current) { try { ledgerTapStaffWrite(current); } catch { /* as above */ } }
+  if (current) {
+    const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+    const seen = new Set(readJson<string[]>(SEEN_KEY, []));
+    (store.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
+    writeJson(SEEN_KEY, Array.from(seen));
+  }
+  void flushLedgerQueue();
   const timer = window.setInterval(() => { void flushLedgerQueue(); }, 60_000);
   const onOnline = () => { void flushLedgerQueue(); };
   window.addEventListener("online", onOnline);
   return () => {
+    cancelled = true;
+    tapInstalled = false;
+    if (owner.setItem === patchedSetItem) owner.setItem = previousSetItem;
     window.clearInterval(timer);
     window.removeEventListener("online", onOnline);
   };
@@ -302,7 +333,7 @@ export async function confirmClockState(
 
 /* ---- Inbound: ledger rows → restored blob logs ------------------------ */
 
-export type ReconcileResult = { restored: number };
+export type ReconcileResult = { restored: number; changed?: boolean };
 
 /* After the shared blob has been pulled at boot, restore anything the ledger
  * holds that the blob has lost. Returns how many events were restored; the
@@ -403,7 +434,7 @@ export async function reconcileStoreFromLedger(): Promise<ReconcileResult> {
   if (restored || flagsChanged) {
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
   }
-  return { restored };
+  return { restored, changed: Boolean(restored || flagsChanged) };
 }
 
 /* Remember a deliberate session removal so reconciliation honours it. */

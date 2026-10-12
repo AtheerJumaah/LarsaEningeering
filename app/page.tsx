@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, SYNCED_KEYS } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
-import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState } from "../lib/ledger";
+import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
+import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
@@ -349,6 +350,7 @@ type ClockLog = {
   time?: string;
   note?: string;
   clockedBy?: string;
+  correctionId?: string;
   lastSeen?: string;
   active?: boolean;
   /* Recency stamp (ISO server time), written at punch time and refreshed by
@@ -2203,6 +2205,11 @@ type LeaveRequest = {
   from?: string;
   to?: string;
   // Only set on a "Points Unlock" request: the closed week, and the whole
+  fromAt?: string;
+  toAt?: string;
+  timeZone?: string;
+  materialized?: boolean;
+  materialised?: boolean;
   // performance entry waiting on the decision. Approving one writes the entry.
   week?: string;
   entry?: PerformanceRow;
@@ -3027,7 +3034,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
   const historyStarts = new Map(users.map((user) => [user.id, historyStartFor(user)]));
   const grouped = new Map<string, ClockLog[]>();
   logs.forEach((log) => {
-    if (!log.uid || !log.time) return;
+    if (!log.uid || !log.time || !Number.isFinite(Date.parse(log.time))) return;
     const start = historyStarts.get(log.uid) || 0;
     if (start && new Date(log.time).getTime() < start) return;
     const group = grouped.get(log.uid) || [];
@@ -3049,7 +3056,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     rows.forEach((row) => {
       if (!row.time) return;
       if (row.status === "Break Start") { breakStart ??= new Date(row.time).getTime(); return; }
-      if (row.status === "Break End" && breakStart !== null) {
+      if ((row.status === "Break End" || row.status === "Out" || row.status === "In") && breakStart !== null) {
         breaks.push({ start: breakStart, end: new Date(row.time).getTime() });
         breakStart = null;
       }
@@ -3152,11 +3159,11 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
        with type checking on then refuses the file. */
     const stillOpen = open as ClockLog | null;
     if (stillOpen?.time) {
-      const openHours = (Date.now() - new Date(stillOpen.time).getTime()) / 3600000;
+      const openHours = (serverNowMs() - new Date(stillOpen.time).getTime()) / 3600000;
       /* Open under 48 h: a live shift, counted normally. Past 48 h: stale.
          Still never auto-closed — the logs are untouched and the person or a
          manager closes or resets it — but flagged and excluded until then. */
-      record(stillOpen.time, new Date().toISOString(), stillOpen.type || "Unspecified", true,
+      record(stillOpen.time, serverNowIso(), stillOpen.type || "Unspecified", true,
         openHours >= 48 ? "stale" : undefined, adjustedMark(stillOpen.note));
     }
   });
@@ -4665,10 +4672,10 @@ export default function Home() {
         }
         if (status !== "synced") return;
         markClockConfirmed();
-        reconcileStoreFromLedger().then(({ restored }) => {
-          if (restored > 0) {
+        reconcileStoreFromLedger().then(({ restored, changed }) => {
+          if (changed || restored > 0) {
             setStorageTick((value) => value + 1);
-            notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
+            if (restored > 0) notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
           }
         }).catch(() => { /* runs again on next open */ });
         /* And the same for accounts. An account missing from the blob is
@@ -5829,6 +5836,7 @@ export default function Home() {
   }, [notify, refs]);
 
   const completeSignIn = useCallback((user: StaffUser, method: SignInMethod = "email") => {
+    refreshSharedStateNow();
     const normalizedUser = user.permissionProfile
       ? { ...user, permissions: staffPermissionsForUser(user) }
       : user;
@@ -6567,20 +6575,30 @@ export default function Home() {
        the foreground) and reloads once when one takes over, so the new
        version replaces the old one by itself. */
     let updateCheck: (() => void) | null = null;
+    let versionTimer: number | null = null;
     navigator.serviceWorker?.register("/sw.js").then((registration) => {
       registration.update().catch(() => undefined);
       updateCheck = () => { if (!document.hidden) registration.update().catch(() => undefined); };
       document.addEventListener("visibilitychange", updateCheck);
+      versionTimer = window.setInterval(updateCheck, 60_000);
     }).catch(() => undefined);
     /* Only a REPLACEMENT is worth a reload. On a first install there was no
        controller, and reloading then would restart the app under somebody's
        hands for no reason — and could loop. */
     const hadController = Boolean(navigator.serviceWorker?.controller);
     let reloading = false;
+    let safeReloadTimer: number | null = null;
     const onControllerChange = () => {
       if (!hadController || reloading) return;
       reloading = true;
-      window.location.reload();
+      const reloadWhenIdle = () => {
+        const editing = document.activeElement?.matches("input, textarea, [contenteditable=true]");
+        if (punchLock.current || editing) {
+          safeReloadTimer = window.setTimeout(reloadWhenIdle, 15_000); return;
+        }
+        window.location.reload();
+      };
+      reloadWhenIdle();
     };
     navigator.serviceWorker?.addEventListener("controllerchange", onControllerChange);
 
@@ -6590,6 +6608,8 @@ export default function Home() {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
       navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
+      if (versionTimer !== null) window.clearInterval(versionTimer);
+      if (safeReloadTimer !== null) window.clearTimeout(safeReloadTimer);
       if (updateCheck) document.removeEventListener("visibilitychange", updateCheck);
     };
     // notify is stable for the life of the page.
@@ -7037,25 +7057,37 @@ export default function Home() {
      cached whole-store snapshot and prevents two devices from accepting the
      same stale state. A small per-user queue survives reloads so a timeout
      retries the same event id instead of creating a second punch. */
-  const punchClock = useCallback(async (mode: string, note = "", intent?: "In" | "Out", quiet = false) => {
-    const user = sessionUserRef.current;
+  const punchClock = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string) => {
+    const actor = sessionUserRef.current;
+    if (!actor) return false;
+    const user = targetUid ? accessUsers.find(person => person.id === targetUid) : actor;
     if (!user) return false;
+    if (user.id !== actor.id) {
+      const item = ITEMS.find(row => row.id === "staff-clock");
+      if (!item || !hasItemPermission(actor, item, "manage") || !scopedUsers(actor, accessUsers).some(person => person.id === user.id)) {
+        if (!quiet) notify("You cannot record attendance for this employee."); return false;
+      }
+    }
     const initialStore = parseStore("larsaStaffV8") as {
-      logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string }[];
+      logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string; enabled?: boolean }[];
       removedLogIds?: string[];
     } | null;
+    if (!initialStore?.users?.some(person => person.id === user.id && person.enabled !== false)) {
+      if (!quiet) notify("Your employee account is unavailable or disabled in the current attendance records. Sign in again; no punch was created.");
+      return false;
+    }
     const currentLog = (initialStore?.logs || [])
       .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    const decided: "In" | "Out" = intent ?? (currentLog?.status === "In" ? "Out" : "In");
+    const decided: AttendancePunchInput["status"] = intent ?? (currentLog?.status === "In" ? "Out" : "In");
     const queueKey = attendancePunchQueueKey(user.id);
     const storedQueue = parseStore(queueKey);
     const queue: AttendancePunchInput[] = Array.isArray(storedQueue)
-      ? storedQueue.filter((event) => event?.uid === user.id && (event.status === "In" || event.status === "Out"))
+      ? storedQueue.filter((event) => event?.uid === user.id && ["In", "Out", "Break Start", "Break End"].includes(event.status))
       : [];
     /* An unresolved request for this same state is the same action, not a
        second punch. Reuse it; a deliberate opposite action is queued after it. */
-    if (queue[queue.length - 1]?.status !== decided) {
+    if (!quiet && queue[queue.length - 1]?.status !== decided) {
       if (queue.length >= 100) {
         notify("Your device has several unconfirmed clock actions. Reconnect so they can finish saving before adding another.");
         return false;
@@ -7066,28 +7098,58 @@ export default function Home() {
         uid: user.id,
         normalized_email: user.email?.trim().toLowerCase() || null,
         person_name: user.name || null,
+        actor_id: actor.id,
+        clocked_by: actor.id !== user.id ? actor.name : null,
         status: decided,
         work_mode: mode,
         note: note.trim() || null,
-        source: "live",
+        source: actor.id !== user.id ? "manager-punch" : decided.startsWith("Break") ? "employee-break" : "employee-punch",
         removed_ids: initialStore?.removedLogIds || [],
       });
     }
     const pending = queue;
-    try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
+    try {
+      localStorage.setItem(queueKey, JSON.stringify(pending));
+      if (user.id !== actor.id) {
+        const registryKey = `larsaAttendanceManagedPendingV1:${actor.id}`;
+        const registry = parseStore(registryKey);
+        localStorage.setItem(registryKey, JSON.stringify(Array.from(new Set([...(Array.isArray(registry) ? registry : []), user.id]))));
+      }
+    }
     catch {
       notify("This device could not save the pending clock action. Please check storage and try again.");
       return false;
     }
 
     let lastOutcome: "recorded" | "already" = "already";
-    let lastStatus: "In" | "Out" = decided;
+    let lastStatus: AttendancePunchInput["status"] = decided;
     let lastAt: string | null = null;
     let localRefreshFailed = false;
+    let reviewCount = 0;
     while (pending.length) {
+      if (sessionUserRef.current?.id !== actor.id) return false;
       const event = pending[0];
       const result = await recordAttendancePunch(event);
+      if (result.outcome === "configuration_error") {
+        if (!quiet) notify("Attendance saving is unavailable because a required server function is missing. Your action remains pending; contact an administrator.");
+        return false;
+      }
+      if (result.outcome === "needs_review") {
+        reviewCount++;
+        const reviewKey = `larsaAttendancePunchReviewV1:${user.id}`;
+        try {
+          const review = parseStore(reviewKey);
+          const items = Array.isArray(review) ? review : [];
+          if (!items.some(item => item.client_event_id === event.client_event_id)) items.push({ ...event, needs_review: true, review_reason: "Original punch time conflicts with the server sequence or is outside the automatic retry window." });
+          localStorage.setItem(reviewKey, JSON.stringify(items));
+          pending.shift();
+          localStorage.setItem(queueKey, JSON.stringify(pending));
+        } catch { notify("A pending punch needs review, but this device cannot store it safely. No time was substituted."); return false; }
+        notify("A delayed clock action needs an attendance correction. Its original time was preserved for review; it was not changed to the reconnection time.");
+        continue;
+      }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
+        setStorageTick(value => value + 1);
         if (!quiet) notify("Your clock action is waiting to sync. Keep the app open or reconnect; it will retry automatically. Don't tap again.");
         return false;
       }
@@ -7099,7 +7161,9 @@ export default function Home() {
          idempotency key before touching the disposable local view: a quota
          error below must never turn a completed punch into an apparent
          failure that asks the employee to press again. */
-      pending.shift();
+      const sharedQueue = parseStore(queueKey);
+      const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
+      pending.splice(0, pending.length, ...remaining);
       try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
       catch { /* the server remains authoritative; the same id is safe to retry */ }
 
@@ -7129,7 +7193,9 @@ export default function Home() {
           store.logs.forEach((item) => {
             if (item.uid === user.id && (item.status === "In" || item.status === "Out")) item.active = false;
           });
-          if (result.status === "In") log.active = true;
+          const latestShift = store.logs.filter(item => item.uid === user.id && (item.status === "In" || item.status === "Out"))
+            .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
+          if (latestShift?.status === "In") latestShift.active = true;
           localStorage.setItem("larsaStaffV8", JSON.stringify(store));
           pushSyncedKeyNow("larsaStaffV8");
         }
@@ -7143,20 +7209,25 @@ export default function Home() {
       setStorageTick((value) => value + 1);
     }
 
+    if (reviewCount > 0) {
+      notify(`${reviewCount} delayed attendance action${reviewCount === 1 ? " needs" : "s need"} a correction. Original times were retained for review.`);
+      setStorageTick(value => value + 1);
+      return false;
+    }
     if (lastOutcome === "already") {
       const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
       if (localRefreshFailed) notify(`Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
-      else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : `Already clocked out${since}. Your status has been refreshed.`);
+      else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : lastStatus === "Out" ? `Already clocked out${since}. Your status has been refreshed.` : lastStatus === "Break Start" ? "Already on a break. Your status has been refreshed." : "Break already ended. Your status has been refreshed.");
       return false;
     }
     if (localRefreshFailed) notify(`Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
-    else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : `Clocked out — ${mode}`);
+    else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : lastStatus === "Out" ? `Clocked out — ${mode}` : lastStatus === "Break Start" ? "Break started." : "Break ended.");
     return true;
-  }, [notify, refreshStaffEngine]);
-  const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: "In" | "Out", quiet = false) => {
+  }, [notify, refreshStaffEngine, accessUsers]);
+  const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string) => {
     if (punchLock.current) { if (!quiet) notify("Your last punch is still saving - one moment."); return false; }
     punchLock.current = true;
-    try { return await punchClock(mode, note, intent, quiet); }
+    try { return await punchClock(mode, note, intent, quiet, targetUid); }
     finally { punchLock.current = false; }
   }, [punchClock, notify]);
   /* A timed-out RPC stays in the per-user durable queue. Resume it on startup,
@@ -7167,12 +7238,16 @@ export default function Home() {
     if (!hydrated || !sessionUser?.id) return;
     const retryPending = () => {
       if (!navigator.onLine || punchLock.current) return;
-      const key = attendancePunchQueueKey(sessionUser.id);
-      const queued = parseStore(key);
-      if (!Array.isArray(queued) || !queued.length) return;
-      const latest = queued[queued.length - 1] as AttendancePunchInput;
-      if (latest?.uid !== sessionUser.id || (latest.status !== "In" && latest.status !== "Out")) return;
-      void punchClockGuarded(latest.work_mode || "Office", latest.note || "", latest.status, true);
+      const registry = parseStore(`larsaAttendanceManagedPendingV1:${sessionUser.id}`);
+      for (const uid of [sessionUser.id, ...(Array.isArray(registry) ? registry : [])]) {
+        const queued = parseStore(attendancePunchQueueKey(uid));
+        if (!Array.isArray(queued) || !queued.length) continue;
+        const latest = queued[queued.length - 1] as AttendancePunchInput;
+        if (latest?.uid !== uid || !["In", "Out", "Break Start", "Break End"].includes(latest.status)) continue;
+        if (uid !== sessionUser.id && latest.actor_id !== sessionUser.id) continue;
+        void punchClockGuarded(latest.work_mode || "Office", latest.note || "", latest.status, true, uid);
+        break;
+      }
     };
     retryPending();
     const timer = window.setInterval(retryPending, 15_000);
@@ -7192,102 +7267,46 @@ export default function Home() {
   useEffect(() => {
     const holder = window as unknown as {
       __larsaPunch?: (mode: string, intent: "In" | "Out", note?: string, uid?: string) => void;
+      __larsaManagerPunch?: (mode: string, intent: "In" | "Out", note: string, targetUid: string, actorUid: string) => void;
+      __larsaCorrectionRecorded?: (correctionId: string, actorUid: string) => void;
     };
     /* The panel signs its hand-off with the person IT believes is clocking,
        and this refuses anything that is not the app's own signed-in user. The
        panel keeps its own `currentUser`, seeded by the app at sign-in — so the
        two agree in practice, but "in practice" is not good enough when the
-       cost of being wrong is a punch on somebody else's timesheet. A panel
-       still running an older build sends no uid; that is accepted, because
-       refusing it would stop those people clocking at all. */
+       cost of being wrong is a punch on somebody else's timesheet. Unsigned
+       older panels must reconnect rather than guess the person's identity. */
     holder.__larsaPunch = (mode, intent, note, uid) => {
       const me = sessionUserRef.current;
-      if (uid && me && String(uid) !== String(me.id)) {
+      if (!uid || !me || String(uid) !== String(me.id) || (intent !== "In" && intent !== "Out")) {
         notifyRef.current("This Timeclock panel is showing a different person. Reopen it and try again — nothing was changed.");
         return;
       }
       void punchClockGuarded(mode, note || "", intent);
     };
-    return () => { delete holder.__larsaPunch; };
+    holder.__larsaManagerPunch = (mode, intent, note, targetUid, actorUid) => {
+      const me = sessionUserRef.current;
+      if (!me || me.id !== actorUid || !targetUid || (intent !== "In" && intent !== "Out")) {
+        notifyRef.current("The manager panel's identity is stale. Reopen it; no attendance was changed."); return;
+      }
+      void punchClockGuarded(mode, note, intent, false, targetUid);
+    };
+    holder.__larsaCorrectionRecorded = (correctionId, actorUid) => {
+      if (sessionUserRef.current?.id !== actorUid) return;
+      captureApprovedCorrection(correctionId);
+      pushSyncedKeyNow("larsaStaffV8");
+      setStorageTick(value => value + 1);
+    };
+    return () => { delete holder.__larsaPunch; delete holder.__larsaManagerPunch; delete holder.__larsaCorrectionRecorded; };
   }, [punchClockGuarded]);
 
   /* Breaks use their own status values on purpose. Every hour calculation in
      this app pairs "In" with "Out", so a break recorded that way would be
      counted as a whole separate shift. These stay visible but inert. */
   const punchBreak = useCallback(async (note = "", intent?: "Break Start" | "Break End") => {
-    const user = sessionUserRef.current;
-    if (!user) return false;
-    /* A break is the same kind of decision as a clock punch and fails the same
-       way: derived from whatever this device had cached, it turns a tap on a
-       stale screen into a break nobody took. So it waits for the same
-       confirmation, and carries the same intent the pressed button offered. */
-    if (!clockConfirmedRef.current) {
-      notify("Checking your break status…");
-      await whenClockConfirmed();
-    }
-    const store = parseStore("larsaStaffV8");
-    if (!store) { notify("Attendance records are still loading."); return false; }
-    if (!Array.isArray(store.logs)) store.logs = [];
-    const latestBreak = (store.logs as ClockLog[])
-      .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
-      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    const ending = latestBreak?.status === "Break Start";
-    /* Screen and record disagree: write nothing, say what is actually on the
-       record, and redraw — never the opposite of what the button offered. */
-    const offering: "Break Start" | "Break End" = ending ? "Break End" : "Break Start";
-    const breakKey = `${user.id}:${intent || ""}`;
-    const breakInsisting = Boolean(intent) && serverNowMs() - (breakRefusals.current[breakKey] || 0) < 120_000;
-    if (intent && intent !== offering && !breakInsisting) {
-      breakRefusals.current[breakKey] = serverNowMs();
-      notify(ending
-        ? "You are already on a break — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are ending it."
-        : "You are not on a break — nothing was changed. This screen was out of date and has been refreshed. Press again if you really are starting one.");
-      setStorageTick((value) => value + 1);
-      refreshStaffEngine();
-      return false;
-    }
-    delete breakRefusals.current[breakKey];
-    /* A break only makes sense inside a shift. Starting one while clocked out
-       would leave an open break dangling into the next day and read as if the
-       person were on a break they never took. Ending one is always allowed, so
-       nobody can get stuck on break by clocking out first. */
-    if (!ending) {
-      /* Starting a break asserts the person is mid-shift, so that claim is
-         checked against the shared ledger too — the newer of (ledger, device)
-         wins, exactly as a clock punch is judged. Ending one is never gated:
-         nobody may get stuck on a break because the network is down. */
-      const latestPunch = (store.logs as ClockLog[])
-        .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
-        .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-      const confirmed = await confirmClockState(user.id, store.removedLogIds || []);
-      const localAt = latestPunch?.time ? new Date(latestPunch.time).getTime() : 0;
-      const serverAt = confirmed.at ? new Date(confirmed.at).getTime() : 0;
-      /* Same rule as the clock: a second press after being turned away trusts
-         the staff document, so nobody is stuck unable to start a break because
-         the ledger still holds a punch that was deleted. */
-      const onShift = !breakInsisting && confirmed.reached && confirmed.status && serverAt >= localAt
-        ? confirmed.status === "In"
-        : latestPunch?.status === "In";
-      if (!onShift) {
-        breakRefusals.current[breakKey] = serverNowMs();
-        notify("Clock in first — a break has to sit inside a shift.");
-        return false;
-      }
-    }
-    const now = serverNowIso();
-    store.logs.push({
-      id: `l${user.id}${Date.now()}${Math.random()}`, uid: user.id, type: "Break",
-      status: ending ? "Break End" : "Break Start",
-      time: now, active: false, lastSeen: now, touchedAt: now,
-      ...(note.trim() ? { note: note.trim() } : {}),
-    });
-    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    pushSyncedKeyNow("larsaStaffV8");
-    refreshStaffEngine();
-    setStorageTick((value) => value + 1);
-    notify(ending ? "Break ended." : "Break started.");
-    return true;
-  }, [notify, refreshStaffEngine, whenClockConfirmed]);
+    if (!intent) { notify("Select Start Break or End Break explicitly."); return false; }
+    return punchClock("Break", note, intent);
+  }, [punchClock, notify]);
   /* Breaks share the clock's lock, not one of their own: both write the same
      document, so a break and a punch landing together would drop one just as
      surely as two punches would. */
@@ -7306,7 +7325,7 @@ export default function Home() {
     };
     holder.__larsaBreak = (intent, note, uid) => {
       const me = sessionUserRef.current;
-      if (uid && me && String(uid) !== String(me.id)) {
+      if (!uid || !me || String(uid) !== String(me.id) || (intent !== "Break Start" && intent !== "Break End")) {
         notifyRef.current("This Timeclock panel is showing a different person. Reopen it and try again — nothing was changed.");
         return;
       }
@@ -8087,7 +8106,13 @@ export default function Home() {
     const store = parseStore("larsaStaffV8");
     if (!store) { notify("Requests are still loading. Please try again."); return false; }
     if (!draft.date || !draft.from || !draft.to) { notify("Enter the date and both times."); return false; }
-    if (draft.to <= draft.from) { notify("The end time has to be after the start time."); return false; }
+    if (draft.to === draft.from) { notify("Start and end times must differ. An earlier end time means the following day."); return false; }
+    const correctionStart = new Date(`${draft.date}T${draft.from}:00`);
+    const correctionEnd = new Date(`${draft.date}T${draft.to}:00`);
+    if (draft.to < draft.from) correctionEnd.setDate(correctionEnd.getDate() + 1);
+    if (!Number.isFinite(correctionStart.getTime()) || !Number.isFinite(correctionEnd.getTime()) || correctionEnd.getTime() > serverNowMs()) {
+      notify("Correction times must be valid and in the past."); return false;
+    }
     if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
     /* Attendance corrections do NOT walk an approval chain either. A wrong
@@ -8102,6 +8127,9 @@ export default function Home() {
     const record: LeaveRequest = {
       id: `r${Date.now()}`,
       type: draft.kind,
+      fromAt: correctionStart.toISOString(),
+      toAt: correctionEnd.toISOString(),
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       uid: actor.id,
       requestType: draft.mode,
       date: draft.date,
@@ -8233,6 +8261,10 @@ export default function Home() {
        of people who must all agree, so any one of them can stop it. */
     const advancing = status === "Approved" && flow.length > step + 1;
     const settled: "Approved" | "Rejected" | "Pending" = advancing ? "Pending" : status;
+    const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
+    const correctionPlan = settled === "Approved" && CORRECTIONS.includes(String(record.type))
+      ? planAttendanceCorrection(record, store.logs, serverNowMs()) : null;
+    if (correctionPlan && !correctionPlan.ok) { notify(correctionPlan.reason); return false; }
     const stamp = new Date().toISOString();
     store.approvals[index] = {
       ...record,
@@ -8252,11 +8284,10 @@ export default function Home() {
     /* An approved attendance correction is what actually writes the missing
        records. Guarded on `materialised` so re-approving can never double-count,
        and breaks keep their own status values so they stay out of hour totals. */
-    const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
     const updated = store.approvals[index] as LeaveRequest & { materialised?: boolean };
-    if (settled === "Approved" && CORRECTIONS.includes(String(record.type)) && !updated.materialised) {
+    if (correctionPlan?.ok && !updated.materialised && !updated.materialized) {
       if (!Array.isArray(store.logs)) store.logs = [];
-      const at = (time?: string) => new Date(`${record.date}T${time || "00:00"}:00`).toISOString();
+      const at = (position: number) => position === 0 ? correctionPlan.start : correctionPlan.end;
       const stamp = `Approved correction (${record.type}) · ${record.reason || ""}`;
       const isBreak = record.type === "Missed Break";
       const kind = isBreak ? "Break" : (record.requestType || "Office");
@@ -8265,11 +8296,12 @@ export default function Home() {
         : [["In", record.from], ["Out", record.to]];
       pair.forEach(([state, time], position) => {
         (store.logs as ClockLog[]).push({
-          id: `l${Date.now()}${position}`, uid: record.uid, type: kind, status: state,
-          time: at(time), lastSeen: at(time), note: stamp,
+          id: `correction:${record.id}:${position === 0 ? "in" : "out"}`, uid: record.uid, type: kind, status: state,
+          time: at(position), lastSeen: at(position), note: stamp, clockedBy: actor.id, touchedAt: serverNowIso(), correctionId: record.id,
         });
       });
       updated.materialised = true;
+      updated.materialized = true;
     }
 
     /* Approving is what actually writes the entry into the closed week. It lands
@@ -9408,7 +9440,8 @@ export default function Home() {
   );
   const pointsRows = useMemo(() => performanceRows(staffStore), [staffStore]);
   const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
-  const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers]);
+  const attendanceMinute = Math.floor(serverNowMs() / 60_000);
+  const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers, attendanceMinute]);
   const accountingSnapshot = useMemo(
     () => (hydrated
       ? readAccountingSnapshot()
@@ -18133,7 +18166,7 @@ function QuickClock({
   const onBreak = useMemo(() => {
     if (!user) return null;
     const last = logs
-      .filter((log) => log.uid === user.id && (log.status === "Break Start" || log.status === "Break End"))
+      .filter((log) => log.uid === user.id && ["In", "Out", "Break Start", "Break End"].includes(log.status || ""))
       .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
     return last?.status === "Break Start" ? last : null;
   }, [logs, user]);
@@ -18251,12 +18284,20 @@ function QuickClock({
   const [from, setFrom] = useState(dateInputValue(monthStart));
   const [to, setTo] = useState(dateInputValue(new Date()));
   useEffect(() => {
-    setNow(new Date());
-    const timer = setInterval(() => setNow(new Date()), 1000);
+    setNow(new Date(serverNowMs()));
+    const timer = setInterval(() => setNow(new Date(serverNowMs())), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const open = summary.openClock;
+  const pendingActions: AttendancePunchInput[] = user ? (parseStore(attendancePunchQueueKey(user.id)) || []) : [];
+  const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
+  const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
+  const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
+    .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
+  const clockedIn = (pendingPunch?.status || latestPunch?.status) === "In";
+  const actionMode = pendingPunch?.work_mode || latestPunch?.type || mode;
+  const reviewActions = user ? parseStore(`larsaAttendancePunchReviewV1:${user.id}`) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
@@ -18309,6 +18350,9 @@ function QuickClock({
       </section>
 
       <section className="clock-face">
+        {pending.length > 0 && <p role="status">Pending synchronization: {pending.length} action{pending.length === 1 ? "" : "s"}. Your original punch times are saved on this device, but not yet confirmed by the server. Reconnect; no extra click is needed.</p>}
+        {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
+        {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
           <small>{open ? "Time on shift" : "Current time"}</small>
           <b>{open ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</b>
@@ -18321,7 +18365,7 @@ function QuickClock({
               key={item.id}
               className={`mode-${item.tone}${mode === item.id ? " active" : ""}`}
               onClick={() => setMode(item.id)}
-              disabled={Boolean(open)}
+              disabled={clockedIn}
             ><i aria-hidden="true" />{item.label}</button>
           ))}
         </div>
@@ -18337,20 +18381,20 @@ function QuickClock({
             transition and the client keeps uncertain requests for safe retry. */}
         <button
           type="button"
-          className={`clock-punch ${open ? "out" : `in tone-${modeTone(mode)}`}`}
+          className={`clock-punch ${clockedIn ? "out" : `in tone-${modeTone(mode)}`}`}
           disabled={punching}
           onClick={async () => {
             if (punching) return;
             setPunching(true);
             try {
-              if (await punch(open ? open.mode : mode, note, open ? "Out" : "In")) setNote("");
+              if (await punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In")) setNote("");
             } finally {
               setPunching(false);
             }
           }}
         >
           <Timer size={22} />
-          {punching ? "Saving…" : open ? "Clock Out" : "Clock In"}
+          {punching ? "Saving…" : clockedIn ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
@@ -18611,6 +18655,7 @@ function QuickClock({
               )}
               <label>{correction.kind === "Missed Break" ? "Break started" : "From"}<input type="time" value={correction.from} onChange={(event) => setCorrection((c) => ({ ...c, from: event.target.value }))} /></label>
               <label>{correction.kind === "Missed Break" ? "Break ended" : "To"}<input type="time" value={correction.to} onChange={(event) => setCorrection((c) => ({ ...c, to: event.target.value }))} /></label>
+              <small>Times use this device’s timezone. An earlier end time means the following day; the exact instants are saved for your approver.</small>
               <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="Explain briefly — your approver sees exactly this." /></label>
             </div>
             <div className="correction-actions">
