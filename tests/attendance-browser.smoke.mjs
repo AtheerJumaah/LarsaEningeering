@@ -93,5 +93,19 @@ try {
   try { await waitLabel(second,'Clock In'); }
   catch(error) {console.log('STORAGE TEST STATE',events.length,await second.evaluate(()=>({label:document.querySelector('.clock-punch')?.textContent,queue:localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test'),patch:Storage.prototype.setItem.toString(),message:document.body.innerText.slice(-1400)})));throw error;}
   assert.equal(events.length,6);passed.push('pending storage failure prevents an unsafe punch');
+  await second.evaluate(()=>{window.__attendanceQuotaFail=false;});
+  await label(second).click();await waitLabel(second,'Clock Out');
+  delay=1200;
+  await second.getByRole('button',{name:'Start Break',exact:true}).click();
+  await label(second).click();
+  await second.waitForFunction(()=>{
+    const queue=JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]');
+    return queue.some(event=>event.status==='Out');
+  },null,{timeout:1500});
+  delay=0;
+  await second.waitForFunction(()=>JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]').length===0,{timeout:20000});
+  await waitLabel(second,'Clock In');
+  assert.deepEqual(events.slice(-3).map(e=>e.status),['In','Break Start','Out']);
+  passed.push('deliberate Out during slow break save is queued once and confirmed in order');
   console.log(JSON.stringify({passed,events:events.length,finalStatus:events.at(-1).status},null,2));
 } finally {await browser.close();}

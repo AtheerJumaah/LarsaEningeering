@@ -7057,7 +7057,7 @@ export default function Home() {
      cached whole-store snapshot and prevents two devices from accepting the
      same stale state. A small per-user queue survives reloads so a timeout
      retries the same event id instead of creating a second punch. */
-  const punchClock = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string) => {
+  const punchClock = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string, queueOnly = false) => {
     const actor = sessionUserRef.current;
     if (!actor) return false;
     const user = targetUid ? accessUsers.find(person => person.id === targetUid) : actor;
@@ -7121,6 +7121,11 @@ export default function Home() {
       return false;
     }
 
+    if (queueOnly) {
+      setStorageTick(value => value + 1);
+      notify("Your attendance action is queued behind the current save. Its original time is saved; no extra click is needed.");
+      return false;
+    }
     let lastOutcome: "recorded" | "already" = "already";
     let lastStatus: AttendancePunchInput["status"] = decided;
     let lastAt: string | null = null;
@@ -7142,7 +7147,9 @@ export default function Home() {
           const items = Array.isArray(review) ? review : [];
           if (!items.some(item => item.client_event_id === event.client_event_id)) items.push({ ...event, needs_review: true, review_reason: "Original punch time conflicts with the server sequence or is outside the automatic retry window." });
           localStorage.setItem(reviewKey, JSON.stringify(items));
-          pending.shift();
+          const sharedQueue = parseStore(queueKey);
+          const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
+          pending.splice(0, pending.length, ...remaining);
           localStorage.setItem(queueKey, JSON.stringify(pending));
         } catch { notify("A pending punch needs review, but this device cannot store it safely. No time was substituted."); return false; }
         notify("A delayed clock action needs an attendance correction. Its original time was preserved for review; it was not changed to the reconnection time.");
@@ -7225,7 +7232,10 @@ export default function Home() {
     return true;
   }, [notify, refreshStaffEngine, accessUsers]);
   const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string) => {
-    if (punchLock.current) { if (!quiet) notify("Your last punch is still saving - one moment."); return false; }
+    if (punchLock.current) {
+      if (quiet) return false;
+      return punchClock(mode, note, intent, false, targetUid, true);
+    }
     punchLock.current = true;
     try { return await punchClock(mode, note, intent, quiet, targetUid); }
     finally { punchLock.current = false; }
@@ -7237,8 +7247,13 @@ export default function Home() {
     const readSessions = () => {
       const store = parseStore("larsaStaffV8") as Record<string, unknown> | null;
       const users = Array.isArray(store?.users) ? store.users as StaffUser[] : [];
+      const actor = users.find(user => user.id === sessionUserRef.current?.id);
+      if (!actor || actor.enabled === false) return [];
+      const allowed = new Set(scopedUsers(actor, users.map(user => ({ ...user, enabled: true }))).map(user => user.id));
+      const companyScope = isAdmin(actor) || actor.permissionProfile?.scope === "company";
       const rows = new Map<string, Record<string, unknown>>();
       buildClockSessions(store, users).forEach(session => {
+        if (!companyScope && !allowed.has(session.uid)) return;
         const key = `${session.uid}|${session.clockIn}|${session.mode}`;
         const row = rows.get(key) || {
           uid: session.uid, Employee: session.employee, Type: session.mode,
@@ -7330,15 +7345,15 @@ export default function Home() {
   /* Breaks use their own status values on purpose. Every hour calculation in
      this app pairs "In" with "Out", so a break recorded that way would be
      counted as a whole separate shift. These stay visible but inert. */
-  const punchBreak = useCallback(async (note = "", intent?: "Break Start" | "Break End") => {
+  const punchBreak = useCallback(async (note = "", intent?: "Break Start" | "Break End", queueOnly = false) => {
     if (!intent) { notify("Select Start Break or End Break explicitly."); return false; }
-    return punchClock("Break", note, intent);
+    return punchClock("Break", note, intent, false, undefined, queueOnly);
   }, [punchClock, notify]);
   /* Breaks share the clock's lock, not one of their own: both write the same
      document, so a break and a punch landing together would drop one just as
      surely as two punches would. */
   const punchBreakGuarded = useCallback(async (note = "", intent?: "Break Start" | "Break End") => {
-    if (punchLock.current) { notify("Your last punch is still saving — one moment."); return false; }
+    if (punchLock.current) return punchBreak(note, intent, true);
     punchLock.current = true;
     try { return await punchBreak(note, intent); }
     finally { punchLock.current = false; }

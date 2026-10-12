@@ -29,3 +29,21 @@ test('an embedded panel without its authoritative parent does not invent gross h
   vm.runInContext(functions(['larsaSharedAttendanceSessions','sessions23']),context);
   assert.equal(vm.runInContext('sessions23()',context).length,0);
 });
+
+test('real parent bridge respects current employee scope and sums daily net segments',()=>{
+  const source=ts.createSourceFile('page.tsx',readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let effect;
+  function visit(node){if(ts.isCallExpression(node)&&node.expression.getText(source)==='useEffect'&&node.arguments[0]?.getText(source).includes('holder.__larsaAttendanceSessions = readSessions'))effect=node.arguments[0].getText(source);ts.forEachChild(node,visit);}
+  visit(source);assert.ok(effect);
+  const users=[{id:'e',name:'Test'},{id:'other',name:'Other'}];
+  const record={uid:'e',employee:'Test',mode:'Office',clockIn:'2026-10-11T23:00:00Z',clockOut:'2026-10-12T01:00:00Z',hours:0.5,presenceHours:1,breakHours:0.5,open:false};
+  const window={};const sessionUserRef={current:{id:'e'}};
+  const context=vm.createContext({window,sessionUserRef,Map,Set,Number,
+    parseStore:()=>({users}),isAdmin:()=>false,scopedUsers:actor=>users.filter(user=>user.id===actor.id),
+    buildClockSessions:()=>[record,{...record,hours:0.75,breakHours:0.25},{...record,uid:'other',hours:8}]});
+  vm.runInContext(ts.transpileModule(`(${effect})();`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  const rows=window.__larsaAttendanceSessions();assert.equal(rows.length,1);
+  assert.equal(rows[0].uid,'e');assert.equal(rows[0].Hours,1.25);assert.equal(rows[0].BreakHours,0.75);
+  sessionUserRef.current=null;assert.equal(window.__larsaAttendanceSessions().length,0);
+  sessionUserRef.current={id:'e'};users[0].enabled=false;assert.equal(window.__larsaAttendanceSessions().length,0);
+});
