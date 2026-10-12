@@ -60,6 +60,26 @@ test('failed startup sync recovers and subscribes when the app regains focus', a
   assert.equal(statuses.at(-1),'synced');cleanup();
 });
 
+test('shared-state saves serialize per key and preserve edits made during a slow save',async()=>{
+  const s=server();s.online();const calls=[];let release;
+  const oldRpc=s.client.rpc;
+  s.client.rpc=(name,p)=>{
+    if(name!=='app_state_put')return oldRpc(name,p);
+    calls.push(p);
+    if(calls.length===1)return new Promise(resolve=>{release=()=>resolve({data:[{applied:true,current_data:p.p_data,current_updated_at:'2026-10-12T00:01:00Z'}]});});
+    return Promise.resolve({data:[{applied:true,current_data:p.p_data,current_updated_at:'2026-10-12T00:02:00Z'}]});
+  };
+  const r=runtime('lib/supabase/sync.ts',s.client);const cleanup=r.api.initLarsaSync();await settle();
+  r.context.localStorage.setItem('larsaStaffV8',JSON.stringify({users:[{id:'employee'}],logs:[{id:'first'}]}));
+  r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
+  r.context.localStorage.setItem('larsaStaffV8',JSON.stringify({users:[{id:'employee'}],logs:[{id:'first'},{id:'second'}]}));
+  r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
+  assert.equal(calls.length,1,'a slow shared row must not accumulate overlapping writes');
+  release();await settle();r.timers.filter(timer=>timer.ms===700).at(-1).fn();await settle();
+  assert.equal(calls.length,2);assert.equal(calls[1].p_data.logs.length,2);
+  assert.equal(JSON.parse(r.data.get('larsaStaffV8')).logs.length,2);cleanup();
+});
+
 test('opening the app does not upload cached historical punches as new live events', async()=>{
   const inserted=[];
   const client={from(){return {upsert:async rows=>{inserted.push(...rows);return {error:null}}}}};

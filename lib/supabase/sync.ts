@@ -127,6 +127,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   // from "the echo of our own write" without a real diff.
   const lastKnown = new Map<string, string>();  /* The updated_at this device last saw for each key. Without it, a browser     that has been open since yesterday cannot tell that the shared copy has     moved on, and its next write silently replaces work done elsewhere. That     is how a full set of hashed passwords and contact details reverted to a     morning-old copy. */  const lastSeenAt = new Map<string, string>();
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pushingKeys = new Set<SyncedKey>();
+  const pushAgain = new Set<SyncedKey>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
 
   async function ensureSession() {
@@ -163,6 +165,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      the row exists, so "I don't know what the server holds" can never
      again mean "so replace it". */
   async function pushKey(key: SyncedKey) {
+    if (cancelled) return;
+    if (pushingKeys.has(key)) { pushAgain.add(key); return; }
+    pushingKeys.add(key);
+    try {
     const raw = localStorage.getItem(key);
     /* The copy this device and the server last agreed on — the base any
        merge below needs. */
@@ -197,6 +203,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         p_data: parsed,
         p_base_updated_at: lastSeenAt.get(key) ?? null,
       });
+      if (cancelled) return;
       if (error) {
         /* One rejection is deliberate and must NOT poison this device: the
            database's Super Admin guard refuses any app write that would mint
@@ -287,6 +294,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     }
     /* Five straight refusals means genuinely live contention — the next
        write or realtime arrival picks it up from the newest stamp. */
+    } finally {
+      pushingKeys.delete(key);
+      if (pushAgain.delete(key) && !cancelled) schedulePush(key);
+    }
   }
 
   function schedulePush(key: SyncedKey) {
