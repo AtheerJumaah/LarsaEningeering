@@ -40,6 +40,7 @@
 6. Open breaks were clamped separately to every future session. They now stop at Clock Out/new In. The real session builder is exercised by runtime tests, not a mirror implementation.
 7. Corrections converted date/time in the reviewer’s timezone and generated non-stable materialization IDs. New requests freeze UTC instants/timezone at submission, support overnight work, retain actor and stable correction IDs, and refuse overlaps with other sessions. Native and embedded approval paths were updated.
 8. Uncertain requests continued after their eight-second UI deadline. Follow-up aborts the RPC at that deadline and prevents an auth lookup finishing later from starting an abandoned punch. Retries still reuse the original event ID and instant. Effective-event SQL materializes the correction map and converted row once; no performance improvement is claimed from the variable live timing measurements.
+9. Live embedded Timesheet showed gross duration (0.15 h) for the test shift instead of net duration (281.252 seconds). A test invoking the actual packed sessions23 function failed before the fix. Ten packed session calculators now consume the native parent calculation, including break deductions and review flags; they no longer maintain conflicting calculations. Home also said “No shift recorded” after a saved shift; it now correctly says “Off the clock,” without implying that history is missing. Final worker cache v49 delivers these changes.
 
 ## Traceability and remaining security limitation
 
@@ -54,6 +55,7 @@ New atomic punches carry employee ID, declared acting employee ID, action source
 - Same-intent timestamp-order race test failed before the follow-up migration, then passed.
 - Three production rollback-only SQL suites verify time preservation, idempotency, chronology, invalid/future/out-of-order rejection, breaks, audit metadata and effective corrections. Confirmed zero diagnostic attendance rows remain.
 - 35 runtime/calculation/correction/trim/duration tests passed, including late-auth and request-abort checks and direct native correction planner tests.
+- Two packed-timesheet runtime tests passed after reproducing the live net/gross mismatch. Final live timesheet verification follows deployment.
 - Seven isolated Chromium browser scenarios passed: slow save with disabled duplicate press; confirmed breaks; two-tab propagation; failed network/reconnect; timeout after server commit; refresh without a new punch; quota failure before request.
 - Production build, TypeScript and packed-engine parsing passed before release.
 - Full pre-change suite baseline: 508 tests, 494 pass, 14 failures (existing assertions/environment issues). Last whole-suite run before the four additional runtime cases: 521 tests, 478 pass, 43 fail. This includes 29 assertions pinning replaced implementation patterns (including accepting unsigned panels, cached break refusal and historical startup behavior). These assertions need revision; the full suite is not claimed green. New behavioral evidence above is reported separately.

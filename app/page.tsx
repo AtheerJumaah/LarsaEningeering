@@ -2403,8 +2403,8 @@ function buildHomeSummary(
     reminders.push({
       id: "shift-none",
       group: "Today",
-      title: "No shift recorded",
-      detail: "Open Clock In / Out to record your attendance.",
+      title: "Off the clock",
+      detail: "Your saved attendance remains recorded. Open Clock In / Out to start your next shift.",
       meta: todayName,
       tone: "open",
       itemId: "quick-clock",
@@ -7230,6 +7230,33 @@ export default function Home() {
     try { return await punchClock(mode, note, intent, quiet, targetUid); }
     finally { punchLock.current = false; }
   }, [punchClock, notify]);
+  // Embedded summaries and exports use the same net-hour calculation as the
+  // native clock. The old packed timesheets independently counted gross time.
+  useEffect(() => {
+    const holder = window as unknown as { __larsaAttendanceSessions?: () => Record<string, unknown>[] };
+    const readSessions = () => {
+      const store = parseStore("larsaStaffV8") as Record<string, unknown> | null;
+      const users = Array.isArray(store?.users) ? store.users as StaffUser[] : [];
+      const rows = new Map<string, Record<string, unknown>>();
+      buildClockSessions(store, users).forEach(session => {
+        const key = `${session.uid}|${session.clockIn}|${session.mode}`;
+        const row = rows.get(key) || {
+          uid: session.uid, Employee: session.employee, Type: session.mode,
+          In: session.clockIn, Out: session.clockOut, Hours: 0,
+          PresenceHours: 0, BreakHours: 0, Open: false, Review: false,
+        };
+        row.Hours = Number(row.Hours) + session.hours;
+        row.PresenceHours = Number(row.PresenceHours) + session.presenceHours;
+        row.BreakHours = Number(row.BreakHours) + session.breakHours;
+        row.Open = Boolean(row.Open || session.open);
+        row.Review = Boolean(row.Review || session.stale || session.unclosed || session.long);
+        rows.set(key, row);
+      });
+      return Array.from(rows.values());
+    };
+    holder.__larsaAttendanceSessions = readSessions;
+    return () => { if (holder.__larsaAttendanceSessions === readSessions) delete holder.__larsaAttendanceSessions; };
+  }, []);
   /* A timed-out RPC stays in the per-user durable queue. Resume it on startup,
      reconnect, return to the tab, and while this session remains open; the
      stable event id makes every retry safe if the earlier request actually
