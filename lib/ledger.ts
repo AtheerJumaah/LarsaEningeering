@@ -104,13 +104,36 @@ export async function flushLedgerQueue(): Promise<void> {
   if (!queue.length) return;
   flushing = true;
   try {
-    /* ON CONFLICT DO NOTHING via ignoreDuplicates: a retry after a timeout
-       whose insert actually landed must not fail the whole batch. */
-    const { error } = await client
-      .from("attendance_events")
-      .upsert(queue, { onConflict: "client_event_id", ignoreDuplicates: true });
-    if (!error) {
-      const sent = new Set(queue.map((event) => event.client_event_id));
+    /* Every queued event must cross the same authoritative operation as a
+       deliberate punch. A direct table upsert bypassed chronology checks and
+       would also bypass any future server-side identity gate. Process rows
+       individually so one review-required event cannot hold back unrelated
+       retries. `already` is success: it is the normal result after a timeout
+       where the RPC committed before the browser lost its response. */
+    const sent = new Set<string>();
+    for (const event of queue) {
+      const { data, error } = await client.rpc("record_attendance_action", {
+        p_client_event_id: event.client_event_id,
+        p_occurred_at: event.occurred_at,
+        p_uid: event.uid,
+        p_normalized_email: event.normalized_email ?? null,
+        p_person_name: event.person_name ?? null,
+        p_status: event.status,
+        p_work_mode: event.work_mode ?? null,
+        p_note: event.note ?? null,
+        p_clocked_by: event.clocked_by ?? null,
+        p_source: event.source ?? "legacy-local-action",
+        p_removed_ids: [],
+        p_actor_employee_id: event.clocked_by ? event.clocked_by : event.uid,
+        p_device_info: null,
+      });
+      if (error) continue;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row && (row.outcome === "recorded" || row.outcome === "already")) {
+        sent.add(event.client_event_id);
+      }
+    }
+    if (sent.size) {
       const remaining = readJson<LedgerEvent[]>(QUEUE_KEY, []).filter(
         (event) => !sent.has(event.client_event_id),
       );
