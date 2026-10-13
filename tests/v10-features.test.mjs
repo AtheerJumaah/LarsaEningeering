@@ -438,7 +438,7 @@ test("a browser that opens after a remote change actually shows it", () => {
   // catch-up exactly like a live remote change once it completes.
   const sync = readFileSync(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
   assert.match(sync, /const caughtUpKeys: SyncedKey\[\] = \[\];/);
-  assert.match(sync, /if \(text !== before\) caughtUpKeys\.push\(key\);/);
+  assert.match(sync, /if \(nextText !== before\) caughtUpKeys\.push\(key\);/);
   assert.match(sync, /caughtUpKeys\.forEach\(\(key\) => options\.onRemoteChange\?\.\(key\)\);/);
 });
 
@@ -453,7 +453,7 @@ test("the sync engine never pushes a write it just applied from Supabase", () =>
      needs that same value (see lib/supabase/merge.ts). */
   assert.match(sync, /const base = lastKnown\.get\(key\) \?\? null;/);
   assert.match(sync, /if \(raw === base\) return; \/\/ nothing new since our last push/);
-  assert.match(sync, /if \(lastKnown\.get\(key\) === text\) \{/);
+  assert.match(sync, /if \(lastKnown\.get\(key\) === text && localStorage\.getItem\(key\) === text\) \{/);
   /* A remote arrival is only pushed back when the merge left this device
      holding something the server has not got — never as a bare echo. */
   assert.match(sync, /if \(nextText !== text\) schedulePush\(key\);/);
@@ -461,7 +461,7 @@ test("the sync engine never pushes a write it just applied from Supabase", () =>
   assert.match(sync, /setTimeout\(\(\) => \{ pushKey\(key\)\.catch/);
   // Cleanup always restores the original setItem, so a second init (e.g. a
   // route change) can't stack patches on top of each other.
-  assert.match(sync, /window\.localStorage\.setItem = originalSetItem;/);
+  assert.match(sync, /if \(methodOwner\.setItem === patchedSetItem\) methodOwner\.setItem = previousMethod;/);
 });
 
 const schemaSql = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");

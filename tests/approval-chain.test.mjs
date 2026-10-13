@@ -57,7 +57,11 @@ test("nothing is written into the records until the chain finishes", () => {
   /* This is the half that would actually corrupt data: a mid-chain approval
      used to be indistinguishable from a final one, so an attendance
      correction or a late points entry would be written on the first yes. */
-  assert.match(body, /if \(settled === "Approved" && CORRECTIONS\.includes\(String\(record\.type\)\) && !updated\.materialised\)/);
+  /* Materialisation is now driven by the validated correction plan. That plan
+     is only created when `settled` is Approved, so a non-final chain step
+     cannot write attendance records. */
+  assert.match(body, /const correctionPlan = settled === "Approved" && CORRECTIONS\.includes\(String\(record\.type\)\)/);
+  assert.match(body, /if \(correctionPlan\?\.ok && !updated\.materialised && !updated\.materialized\)/);
   assert.match(body, /if \(settled === "Approved" && record\.type === "Points Unlock" && record\.entry && !updated\.materialised\)/);
   assert.doesNotMatch(body, /if \(status === "Approved" &&/);
 });

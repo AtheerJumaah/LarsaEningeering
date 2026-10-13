@@ -14,7 +14,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+// Source files are checked out with CRLF on Windows; normalize it so the
+// structural matcher tests the code shape rather than line-ending metadata.
+const page = (await readFile(new URL("../app/page.tsx", import.meta.url), "utf8"))
+  .replace(/\r\n/g, "\n");
 
 /* The sidebar for an area is built from channelGroups, so that is what to read
    to know what somebody actually sees, in what order. */

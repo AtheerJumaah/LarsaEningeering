@@ -15,8 +15,9 @@ import { readFile } from "node:fs/promises";
 const root = new URL("..", import.meta.url);
 
 async function loadEngineTemplate() {
-  const raw = await readFile(new URL("public/engines/timeclock.html", root), "utf8");
-  const match = raw.match(/<script type="__bundler\/template">\n(.*?)\n {2}<\/script>/s);
+  const raw = (await readFile(new URL("public/engines/timeclock.html", root), "utf8"))
+    .replace(/\r\n/g, "\n");
+  const match = raw.match(/<script type="__bundler\/template">\n(.*?)\n\s*<\/script>/s);
   assert.ok(match, "the engine must carry its bundler template");
   return JSON.parse(match[1]);
 }

@@ -76,7 +76,7 @@ test("the clock decides from the last CLOCK punch, not the last log", () => {
 test("an unclosed shift is kept, not silently replaced", () => {
   /* The pairing did `if(status==='In') open=l`, so a second In threw the
      first one's hours away with no trace — "it didn't record my hours". */
-  const kept = engine.match(/if\(l\.status==='In'\)\{if\(open\)return;open=l\}/g) || [];
-  assert.equal(kept.length, 2, "both copies of sessions() must keep the earlier open punch");
+  const kept = engine.match(/if\(l\.status==='In'\)\{if\(open!==null&&t-open<12\*3600000\)return;if\(open!==null\)spans\.push\(\[open,t\]\);open=t;\}/g) || [];
+  assert.equal(kept.length, 1, "the session builder must keep a recent earlier open punch");
   assert.doesNotMatch(engine, /arr\.forEach\(l=>\{if\(l\.status==='In'\)open=l;else/);
 });

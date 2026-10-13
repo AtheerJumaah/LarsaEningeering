@@ -60,8 +60,9 @@ test("a suppressed repeat stays quiet rather than saying it failed", () => {
 // because ensureV21() runs during the engine's own bootstrap.
 
 async function decodedEngine() {
-  const raw = await readFile(new URL("public/engines/timeclock.html", root), "utf8");
-  const wrapped = raw.match(/<script type="__bundler\/template">\n([\s\S]*?)\n {2}<\/script>/);
+  const raw = (await readFile(new URL("public/engines/timeclock.html", root), "utf8"))
+    .replace(/\r\n/g, "\n");
+  const wrapped = raw.match(/<script type="__bundler\/template">\n([\s\S]*?)\n\s*<\/script>/);
   assert.ok(wrapped, "the bundled template script could not be found");
   return JSON.parse(wrapped[1]);
 }
