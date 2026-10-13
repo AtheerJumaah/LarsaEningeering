@@ -11,12 +11,14 @@ const sql = await read("supabase/migrations/repair_014_attendance_chronology_aud
 const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
 assert.ok(punch.length > 500, "punchClock could not be isolated");
 
-test("each press carries its displayed intent to the atomic server transition", () => {
+test("explicit presses preserve displayed intent while intent-free calls confirm server state", () => {
   assert.match(page, /import \{ recordAttendancePunch, type AttendancePunchInput \} from "\.\.\/lib\/attendance-punch";/);
-  assert.match(punch, /const decided: AttendancePunchInput\["status"\] = intent \?\? \(currentLog\?\.status === "In" \? "Out" : "In"\);/);
+  assert.match(punch, /let decided: AttendancePunchInput\["status"\];/);
+  assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
+  assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;[\s\S]*decided = confirmed\.status === "In" \? "Out" : "In";/);
+  assert.match(punch, /\} else \{\s*decided = intent;\s*\}/);
   assert.match(punch, /status: decided,/);
   assert.match(punch, /await recordAttendancePunch\(event\)/);
-  assert.doesNotMatch(punch, /confirmClockState|trueStatus|clockRefusals/);
 });
 
 test("a same-state retry is idempotent and concurrent devices serialize by employee", () => {

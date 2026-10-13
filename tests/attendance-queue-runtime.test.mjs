@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-function writer(review=false){
+function writer(review=false, confirmation={reached:true,status:'Out'}){
   const page=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
   const source=ts.createSourceFile('page.tsx',page,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const declarations=new Map();
@@ -11,10 +11,11 @@ function writer(review=false){
   visit(source);assert.equal(declarations.size,2);
   const user={id:'e',name:'Employee',enabled:true};
   const data=new Map([['larsaStaffV8',JSON.stringify({users:[user],logs:[]})]]);
-  const events=[];let release;
+  const events=[];const confirmCalls=[];let release;
   const context=vm.createContext({useCallback:fn=>fn,sessionUserRef:{current:user},punchLock:{current:false},accessUsers:[user],
     attendancePunchQueueKey:uid=>'queue:'+uid,parseStore:key=>JSON.parse(data.get(key)||'null'),
     localStorage:{setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
+    confirmClockState:async(...args)=>{confirmCalls.push(args);return confirmation;},
     notify(){},pushSyncedKeyNow(){},refreshStaffEngine(){},setStorageTick(){},
     recordAttendancePunch:async event=>{
       events.push(event);
@@ -23,7 +24,7 @@ function writer(review=false){
     },
   });
   vm.runInContext(ts.transpileModule(`const ${declarations.get('punchClock')};const ${declarations.get('punchClockGuarded')};this.guard=punchClockGuarded;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-  return {context,data,events,release:()=>release()};
+  return {context,data,events,confirmCalls,release:()=>release()};
 }
 const settle=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
 for(const review of [false,true])test(`a deliberate Out during an in-flight save survives ${review?'review rejection':'confirmation'} of the earlier event`,async()=>{
@@ -46,6 +47,33 @@ test('same-intent clicks while saving reuse the one pending event',async()=>{
   await w.context.guard('Office','second click','In');
   assert.equal(JSON.parse(w.data.get('queue:e')).length,1);
   w.release();await first;assert.equal(w.events.length,1);
+});
+
+test('explicit In preserves the displayed intent and skips confirmation',async()=>{
+  const w=writer(false,{reached:true,status:'In'});
+  const pending=w.context.guard('Office','deliberate clock in','In');await settle();
+  assert.equal(w.confirmCalls.length,0);
+  assert.equal(w.events[0].status,'In');
+  w.release();await pending;
+});
+
+test('an intent-free compatibility punch uses the confirmed server state',async()=>{
+  const w=writer(false,{reached:true,status:'In'});
+  const pending=w.context.guard('Office','compatibility caller');await settle();
+  assert.equal(w.confirmCalls.length,1);
+  assert.equal(w.confirmCalls[0][0],'e');
+  assert.equal(w.confirmCalls[0][1].length,0);
+  assert.equal(w.events[0].status,'Out');
+  w.release();await pending;
+});
+
+test('an intent-free punch fails safely when server confirmation is unavailable',async()=>{
+  const w=writer(false,{reached:false,status:null});
+  const result=await w.context.guard('Office','compatibility caller');
+  assert.equal(result,false);
+  assert.equal(w.confirmCalls.length,1);
+  assert.equal(w.events.length,0);
+  assert.equal(w.data.has('queue:e'),false);
 });
 
 test('switching accounts stops the old employee queue without discarding its original Out',async()=>{

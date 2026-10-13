@@ -8,6 +8,7 @@
 - Production database: larsa-control, fqxknodpkjdmueevafdk, us-east-1.
 - Starting production commit: 985e23ebcf4f01c6065c17aa1702ad8a96a56fb0.
 - First verified release: 57f07bbeb28651d943c2358ff512f24db6eedc33, deployment dpl_H2yofqy67M311Zmhrrz95HXS5PXk, READY with larsaeng.app alias. A follow-up adds bounded RPC cancellation and query materialization; its final deployed SHA is supplied in the delivery message.
+- Final production release: 1c7a0f0fe1ed1cf484e6cdfdc4df02085cfad461, deployment dpl_7UVVDSf3LKEhu16DbhMMADraiC3o, READY, source GitHub main, larsaeng.app alias confirmed. The already-open signed-in tab automatically loaded this deployment without Ctrl + Shift + R. Database repairs 014–019 are installed in the verified production project.
 
 ## Checklist
 
@@ -23,7 +24,7 @@
 | Records/hours unexpectedly change | Reported | Fixed delayed-time substitution, unfinished-break bleed, and correction timezone reinterpretation; calculation and transactional tests passed. Historical payroll repair was not performed. |
 | Timeouts/offline | Risk to investigate | Confirmed offline time loss, fixed. Browser verified failed request and commit-before-timeout retry. Original-time review queue retained for ambiguous/older-than-36-hour actions. |
 | Devices/tabs/embedded panel conflicts | Risk to investigate | Atomic employee lock and stable IDs; strict panel identity and intent; browser verified second-tab update. Physical independent-device testing pending. |
-| Old caches/service workers | Risk to investigate | Network-first engine loading retained; worker v48; idle-only replacement reload and minute update checks. Live browser upgraded automatically after another tab installed the new worker. Mobile/old browser matrix unverified. |
+| Old caches/service workers | Risk to investigate | Network-first engine loading retained; final worker v51; idle-only replacement reload and minute update checks. Live browser upgraded automatically, including the final release, without a hard refresh. Mobile/old browser matrix unverified. |
 | Storage failure / reconciliation | Risk to investigate | Startup replay removed, flag-only reconciliation now repaints. Browser verified storage failure blocks unqueued punch. Persistent denial of all browser storage remains unsupported; do not claim offline durability in that state. |
 | Wrong employee / stale login | Risk to investigate | Unsigned/different panel identity rejected; disabled/missing cached account rejected; account-switch guard stops draining another user's queue. Server staff identity security remains unresolved (see below). |
 | Forgotten/long/overnight/timezones/DST | Risk to investigate | 35 runtime/calculation/correction tests passed; server-corrected durations, stale/long flags, no automatic Clock Out, overnight requests capture exact instants. |
@@ -40,7 +41,7 @@
 6. Open breaks were clamped separately to every future session. They now stop at Clock Out/new In. The real session builder is exercised by runtime tests, not a mirror implementation.
 7. Corrections converted date/time in the reviewer’s timezone and generated non-stable materialization IDs. New requests freeze UTC instants/timezone at submission, support overnight work, retain actor and stable correction IDs, and refuse overlaps with other sessions. Native and embedded approval paths were updated.
 8. Uncertain requests continued after their eight-second UI deadline. Follow-up aborts the RPC at that deadline and prevents an auth lookup finishing later from starting an abandoned punch. Retries still reuse the original event ID and instant. Effective-event SQL materializes the correction map and converted row once; no performance improvement is claimed from the variable live timing measurements.
-9. Live embedded Timesheet showed gross duration (0.15 h) for the test shift instead of net duration (281.252 seconds). A test invoking the actual packed sessions23 function failed before the fix. Ten packed session calculators now consume the native parent calculation, including break deductions and review flags; they no longer maintain conflicting calculations. Live recheck confirmed 0.08 h (rounded net) rather than 0.15 h. Home also said “No shift recorded” after a saved shift; it now correctly says “Off the clock,” without implying that history is missing. The parent bridge re-checks the acting employee and data scope, retains historical disabled staff for authorized viewers, and refuses signed-out/disabled actors. Final worker cache v50 delivers these changes.
+9. Live embedded Timesheet showed gross duration (0.15 h) for the test shift instead of net duration (281.252 seconds). A test invoking the actual packed sessions23 function failed before the fix. Ten packed session calculators now consume the native parent calculation, including break deductions and review flags; they no longer maintain conflicting calculations. Live recheck confirmed 0.08 h (rounded net) rather than 0.15 h. Home also said “No shift recorded” after a saved shift; it now correctly says “Off the clock,” without implying that history is missing. The parent bridge re-checks the acting employee and data scope, retains historical disabled staff for authorized viewers, and refuses signed-out/disabled actors. Final worker cache v51 delivers these changes.
 10. During a slow break save, Clock Out appeared available but the shared writer lock rejected it. A new browser test and two tests invoking the actual writer failed before the fix. A deliberate different action now enters the durable queue immediately without starting another concurrent server writer. Both confirmed and review-rejected preceding events consume only their own IDs, preserving the subsequent Out. Same-intent clicks remain one event; account switching stops the prior queue without discarding it.
 11. Supabase logs for 08:50–09:03 UTC confirm 56 shared-state statement timeouts, nine PostgREST PGRST003 connection-pool timeouts, and multiple API 500/504s. Punch origin time reached 98,261 ms while successfully completed database punch SQL executions were at most 2,863 ms. Do not attribute this to employees' connections. A real sync-module test reproduced overlapping same-key writes; they now serialize while retaining later edits. A production rollback SQL test reproduced identical JSON saves advancing server stamps and broadcasting redundant realtime changes; an installed additive migration now returns the unchanged row without UPDATE. Both regressions pass after repair. These remove demonstrable waste; underlying sustained-load performance and service capacity still require verification.
 
@@ -48,7 +49,7 @@
 
 New atomic punches carry employee ID, declared acting employee ID, action source, stable event ID, original instant, server receipt timestamp, Supabase auth session ID and device ID/user-agent. An insert trigger captures receipt/session metadata for all legacy/import writers too. Historical records lacking actor metadata were not retroactively attributed.
 
-**Unresolved:** existing Supabase policies allow anon/authenticated direct attendance INSERT and public SELECT. Staff login is separate from the Supabase anonymous session. A declared acting employee ID is not cryptographic proof of employee identity, and an older/custom client can bypass the new RPC. Closing this safely requires migrating employee authentication/authorization and legacy correction/import writers together. The new audit helps investigation but does not eliminate this security gap. No claim is made that all unauthorized writes are prevented.
+**Unresolved:** existing attendance policies have unconditional SELECT/INSERT predicates for anon/authenticated, but policies alone do not establish API access. A follow-up privilege inspection confirmed authenticated has SELECT/INSERT grants, while anon has neither grant. Supabase anonymous sign-ins assume the authenticated role, and staff login is separate from that session. A declared acting employee ID is not cryptographic proof of employee identity, and an older/custom authenticated client can bypass the new RPC. A separate legacy SECURITY DEFINER punch function is callable by anon and authenticated despite the direct-table anon restriction. Closing this safely requires migrating employee authentication/authorization and legacy correction/import writers together. The new audit helps investigation but does not eliminate this security gap. No claim is made that all unauthorized writes are prevented.
 
 ## Verification evidence
 
@@ -81,6 +82,22 @@ All four have matching document IDs/status/timestamps, actor u1, source, Supabas
 
 The long live delays prevent a claim that all response-time problems are solved. Supabase API/database logs confirm server-side failures. The tests demonstrate pending/retry safety and original-time preservation, not fast service under sustained production load.
 
+### Final-release live recheck
+
+On deployment dpl_7UVVDSf3LKEhu16DbhMMADraiC3o, the same designated test employee deliberately recorded In → Break Start → Out, each with one click and diagnostic notes. Out closes the break span without fabricating a Break End event.
+
+| Action | Original UTC instant | Server receipt UTC | Receipt delay |
+|---|---|---|---|
+| In | 09:55:38.836 | 09:55:39.365 | 0.529 s |
+| Break Start | 09:56:02.690 | 09:56:03.137 | 0.447 s |
+| Out | 09:56:08.758 | 09:56:09.393 | 0.635 s |
+
+All three events match the document's IDs/status/timestamps and have actor/source/session/device metadata. The UI ended Off the clock, Clock In available, no pending banner. This short session adds 23.854 net seconds; combined with the earlier test, 305.106 net seconds display as five minutes. Seven distinct events exist across the two deliberate test shifts; no extras were created by startup, upgrades, refresh or retries. Neither test shift was deleted.
+
+Post-release Supabase log sample starting 09:55 UTC: four punch requests, all HTTP 200 (maximum origin time 396 ms), and 19 shared-state saves, all HTTP 200 (maximum 4,658 ms). This is a healthy short sample, not a peak-load soak test. The deliberately overlapping slow-save case was proved in the isolated browser and actual-writer tests; the fast final live requests do not prove that timing overlap occurred in production.
+
+Local screenshot evidence: attendance-production-proof-2026-10-12.jpg, showing the designated employee off the clock. Screenshot and this final evidence addendum are local delivery artifacts, not additional production code changes.
+
 ## Remaining verification / limitations
 
 - Physical second device, real device sleep/resume and mobile browser cache matrix.
@@ -88,3 +105,42 @@ The long live delays prevent a claim that all response-time problems are solved.
 - GitHub/Vercel runtime logs were unavailable to the connected account (403); no clean runtime-log scan is claimed.
 - The full legacy source-assertion suite is not green; separate passing behavioral tests are not a substitute for maintaining that suite.
 - For historical complaints, employees/event dates are needed to attribute each individual change; legacy audit gaps cannot be invented away.
+
+## Connected Supabase follow-up review — 10:55–10:58 UTC
+
+The Supabase security and Postgres skills guided an additional read-only advisor, function, privilege and log review. No production rows, policies, grants, sign-in flows or database configuration were changed during this follow-up.
+
+### Confirmed access-control findings
+
+- The installed legacy `public.attendance_punch(text,text,text,text,text,text,text[])` is owned by postgres, runs as SECURITY DEFINER, and is executable by anon and authenticated. It inserts a receipt-time In/Out directly, trusts the employee ID supplied by the caller, accepts caller-provided ignored event IDs, and does not delegate to `record_attendance_action`. Its `hashtext(uid)` lock differs from the repaired operation's `hashtextextended(uid,0)` lock, so the two paths do not share an employee lock. The current source has no caller of this legacy function, and no other public function body was found referencing it. No claim is made that a particular historical complaint used this path. [Supabase remediation](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable).
+- `app_state_put` is also owned by postgres and SECURITY DEFINER. Authenticated can execute it; anon cannot. The authenticated role also has direct attendance SELECT/INSERT privileges. Neither database path is bound to the locally selected staff identity. Restricting only anon would therefore leave the employee-identity gap open. [Authenticated privileged-function guidance](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable).
+- RLS is enabled on all three active tables: attendance_events, app_state and staff_accounts. Broad table grants alone are not evidence of a successful write where RLS has no matching policy. Likewise, the advisor's missing-primary-key notices concern backup schemas; all three active tables have primary keys. These notices were not treated as reproduced attendance defects.
+
+Recommended rollout: bind the existing employee sign-in screen to server-verified staff sessions; enforce employee/manager/correction permissions on each server write; migrate remaining correction/import/shared-state writers; then remove direct employee ledger INSERT and retire the unused legacy RPC. Preserve the current PIN/password user experience where feasible, but test account recovery, disabled accounts, manager permissions and existing open/offline clients before enforcement. Do not revoke permissions piecemeal and lock out employees.
+
+### Additional post-release service evidence
+
+For 10:00–10:55 UTC, Supabase edge logs show two repaired attendance RPC requests, both HTTP 200, maximum origin time 287 ms. There were 46 shared-state RPC requests, all HTTP 200, mean origin time 2,255.3 ms and maximum 18,991 ms. No legacy attendance_punch request appeared in this window. This is a low-volume observed sample, not a load test: shared-state latency still needs investigation and peak-load reliability remains unverified.
+
+At 10:57 UTC, the designated test employee had no attendance events after the verified final Out at 09:56:08.758 UTC. The read-only follow-up created no punches. Database connection snapshot: 20 connections, including two active; it does not explain the earlier pool exhaustion by itself.
+
+## Current release follow-up — 13 October 2026
+
+- Commit `bd52dc9` retired the unused legacy `attendance_punch` writer in production: it is now SECURITY INVOKER, anonymous execution is revoked, and only authenticated execution remains for compatibility. A transaction-only smoke call succeeded and rolled back with zero residual rows.
+- Commit `3333a3b` fixed the remaining native break-button race: QuickClock Start Break and End Break now use the same guarded writer as Clock In/Out and the embedded panel. Supervisor review confirmed no raw native `punchBreak` calls remain outside the guarded wrapper.
+- Production deployment `dpl_BstE1WoWVa1KhuaSpwAUjj91k9GQ` is READY and serves `larsaeng.app` from GitHub commit `3333a3bf0eb4747fa6ddfa993658352bb3bf9238`.
+- Live recheck on the designated Atheer Jumaah account: one Clock In showed `Clocked in since 01:33 AM · Office` and one Clock Out returned `Off the clock`, a new closed 0-minute session, and no pending banner. The database contains matching In/Out events with unique client event IDs, actor `u1`, source `employee-punch`, auth-session and device metadata. A global duplicate-client-event query returned zero duplicate groups.
+- Targeted attendance/contract checks: 66 passed; TypeScript compilation passed. Full repository suite remains 532 passed / 19 failed out of 551; the failures are separate stale contracts/environment issues and are not claimed fixed by this release.
+
+Remaining risks are unchanged: the compatibility wrapper still has no original client timestamp in its old signature, and server-side employee identity/permission enforcement remains client-supplied until the coordinated authentication migration is completed.
+
+### Identity/permission audit — read-only follow-up
+
+The production audit confirms that local `larsaStaffV8` login identity is separate from Supabase's anonymous session: `auth.uid()` is not the employee ID. `record_attendance_action` remains SECURITY INVOKER but executable by anon/authenticated, and stores the client-provided employee/actor IDs. Attendance RLS policies and authenticated direct table grants therefore do not yet enforce employee or manager authorization. The safe next boundary is a shadow `staff_auth_identity` mapping, one controlled-account migration, then server-side RPC authorization and only afterward removal of direct grants. No permissions were revoked in this block.
+
+### Test-suite cleanup follow-up — 13 October 2026
+
+- Windows/compiler and stale attendance/sync contracts were updated without production runtime changes.
+- Full repository suite now passes: **578 tests, 0 failures**; TypeScript and diff checks pass, including the explicit-intent regression added in this follow-up.
+- Commit `a6098ce` is deployed as Vercel production deployment `dpl_CtD95gTBbcEstoE8PcjCG7femLyE`, READY, with `larsaeng.app` returning HTTP 200.
+- These test-only changes do not alter the previously verified Clock In/Out runtime path.

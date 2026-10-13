@@ -12,8 +12,10 @@ const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.in
  test("a clock action is recorded by the atomic server writer", () => {
   assert.match(punch, /await recordAttendancePunch\(event\)/);
   assert.match(punch, /status: decided,/);
+  assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
+  assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;/);
+  assert.match(punch, /\} else \{\s*decided = intent;\s*\}/);
   assert.match(client, /client\.rpc\("record_attendance_action"/);
-  assert.doesNotMatch(punch, /confirmClockState|trueStatus|clockRefusals/);
 });
 
 test("a retry reuses the pending event and does not lose the employee's note", () => {

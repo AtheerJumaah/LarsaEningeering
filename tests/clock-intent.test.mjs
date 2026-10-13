@@ -12,10 +12,11 @@ const engine = JSON.parse(tpl);
 const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
 
 test("the app sends the button intent as the atomic event status", () => {
-  assert.match(punch, /const decided: AttendancePunchInput\["status"\] = intent \?\? \(currentLog\?\.status === "In" \? "Out" : "In"\);/);
+  assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
+  assert.match(punch, /\} else \{\s*decided = intent;\s*\}/);
   assert.match(punch, /status: decided,/);
   assert.match(punch, /await recordAttendancePunch\(event\)/);
-  assert.doesNotMatch(punch, /if \(trueStatus !== null && trueStatus === decided/);
+  assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;/);
 });
 
 test("the clock button hands over the action it displayed", () => {

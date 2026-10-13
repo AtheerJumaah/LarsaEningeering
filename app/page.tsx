@@ -7076,10 +7076,21 @@ export default function Home() {
       if (!quiet) notify("Your employee account is unavailable or disabled in the current attendance records. Sign in again; no punch was created.");
       return false;
     }
-    const currentLog = (initialStore?.logs || [])
-      .filter((log) => log.uid === user.id && (log.status === "In" || log.status === "Out"))
-      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
-    const decided: AttendancePunchInput["status"] = intent ?? (currentLog?.status === "In" ? "Out" : "In");
+    let decided: AttendancePunchInput["status"];
+    /* The normal clock buttons pass an explicit displayed intent and must
+       preserve it exactly. Compatibility callers that omit intent must first
+       resolve the authoritative server state; never guess from stale local
+       state or create a punch when that confirmation is unavailable. */
+    if (intent === undefined) {
+      const confirmed = await confirmClockState(user.id, initialStore?.removedLogIds || []);
+      if (!confirmed.reached || !confirmed.status) {
+        if (!quiet) notify("We could not confirm your current clock status. Choose Clock In or Clock Out and try again.");
+        return false;
+      }
+      decided = confirmed.status === "In" ? "Out" : "In";
+    } else {
+      decided = intent;
+    }
     const queueKey = attendancePunchQueueKey(user.id);
     const storedQueue = parseStore(queueKey);
     const queue: AttendancePunchInput[] = Array.isArray(storedQueue)
