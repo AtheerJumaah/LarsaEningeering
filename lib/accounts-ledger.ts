@@ -64,6 +64,28 @@ type LedgerRow = {
 
 const QUEUE_KEY = "larsaAccountQueueV1";
 const SENT_KEY = "larsaAccountSentV1";
+const ACCOUNT_UPSERT_RPC = "staff_account_upsert";
+const ACCOUNT_TOMBSTONE_RPC = "staff_account_tombstone";
+const ACCOUNT_UNTOMBSTONE_RPC = "staff_account_untombstone";
+
+type SupabaseClientLike = NonNullable<ReturnType<typeof getSupabaseClient>>;
+
+/* The local staff record is not an authorization principal. Account ledger
+ * writes therefore wait for a non-anonymous Supabase Auth identity and use
+ * that Auth UUID for legacy audit parameters. The production RPC must still
+ * be migrated to derive/verify this identity server-side before its direct
+ * grants are removed; this client boundary prevents callers from choosing a
+ * local email, name, or staff id as the actor in the meantime. */
+async function authenticatedActor(client: SupabaseClientLike): Promise<{ authUserId: string } | null> {
+  try {
+    const { data, error } = await client.auth.getUser();
+    if (error || !data.user || data.user.is_anonymous === true) return null;
+    const authUserId = String(data.user.id || "");
+    return authUserId ? { authUserId } : null;
+  } catch {
+    return null;
+  }
+}
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -119,9 +141,13 @@ export async function flushAccountQueue(): Promise<void> {
   if (!client) return;
   const queue = readJson<QueuedAccount[]>(QUEUE_KEY, []);
   if (!queue.length) return;
+  /* Auth unavailable is a safe pending state: do not drain the queue under a
+     local/staff identity or silently turn an outage into data loss. */
+  const actor = await authenticatedActor(client);
+  if (!actor) return;
   flushing = true;
   try {
-    const { error } = await client.rpc("staff_account_upsert", { p_accounts: queue });
+    const { error } = await client.rpc(ACCOUNT_UPSERT_RPC, { p_accounts: queue });
     if (!error) {
       const sent = new Set(queue.map((row) => row.uid + "|" + signatureOf(row.record)));
       const remaining = readJson<QueuedAccount[]>(QUEUE_KEY, []).filter(
@@ -291,12 +317,20 @@ export function markAccountsRemoved(store: StaffStoreLike, ids: string[]) {
  * document: under the repair_008 healing rules an account that leaves the
  * document without a server-side tombstone is put straight back, so deleting
  * locally first would only produce a delete that undoes itself. */
-export async function tombstoneAccount(uid: string, by: string, reason: string): Promise<boolean> {
+export async function tombstoneAccount(uid: string, reason: string): Promise<boolean> {
   if (!uid || !supabaseConfigured()) return false;
   const client = getSupabaseClient();
   if (!client) return false;
+  const actor = await authenticatedActor(client);
+  if (!actor) return false;
   try {
-    const { error } = await client.rpc("staff_account_tombstone", { p_uid: uid, p_by: by, p_reason: reason });
+    const { error } = await client.rpc(ACCOUNT_TOMBSTONE_RPC, {
+      p_uid: uid,
+      /* Legacy audit field: this is the verified Auth UID, never a client
+         supplied staff email/name/id. */
+      p_by: actor.authUserId,
+      p_reason: reason,
+    });
     return !error;
   } catch {
     return false;
@@ -305,12 +339,14 @@ export async function tombstoneAccount(uid: string, by: string, reason: string):
 
 /* Reactivating a permanently deleted account (restoring from the bin) has to
  * lift the tombstone, or reconciliation would keep refusing to bring it back. */
-export async function untombstoneAccount(uid: string, by: string): Promise<void> {
+export async function untombstoneAccount(uid: string): Promise<void> {
   if (!uid || !supabaseConfigured()) return;
   const client = getSupabaseClient();
   if (!client) return;
+  const actor = await authenticatedActor(client);
+  if (!actor) return;
   try {
-    await client.rpc("staff_account_untombstone", { p_uid: uid, p_by: by });
+    await client.rpc(ACCOUNT_UNTOMBSTONE_RPC, { p_uid: uid, p_by: actor.authUserId });
   } catch {
     /* retried the next time the account is saved */
   }

@@ -7,9 +7,10 @@
  * How it works. The staff blob (larsaStaffV8) stays the app's working state,
  * exactly as before. But every clock log that APPEARS in that blob — from
  * the quick-clock buttons, from clocking somebody else, from an approved
- * correction, even from the legacy Timeclock engine iframe — is also
- * appended to public.attendance_events, an INSERT-only Supabase table that
- * nothing and nobody can update or delete (enforced by a database trigger).
+ * correction, even from the legacy Timeclock engine iframe — is also sent
+ * through the explicit attendance RPC boundary. The RPC appends to
+ * public.attendance_events, an INSERT-only Supabase table that nothing and
+ * nobody can update or delete (enforced by a database trigger).
  * On boot, the app reads the recent ledger back and restores any event the
  * blob has lost. So even if a stale device replaced the blob wholesale (the
  * Aug 6–7 incident), the punches survive in the ledger and walk right back
@@ -96,6 +97,49 @@ function normalizeEmail(value: unknown): string | null {
 
 let flushing = false;
 
+/* Compatibility boundary only. This keeps all ledger writes behind one named
+ * server operation while Gate B identity binding is still pending. The
+ * current production RPC retains legacy client fields for compatibility and
+ * is not, by itself, proof of employee authorization. The production
+ * prerequisite for removing direct attendance grants is a server-derived
+ * Auth-to-staff mapping plus an authorized replay/import operation. */
+const LEDGER_WRITE_RPC = "record_attendance_action" as const;
+
+type LedgerWriteResult = { outcome: "recorded" | "already" } | { outcome: "unavailable" };
+
+async function submitLedgerEvent(client: ReturnType<typeof getSupabaseClient>, event: LedgerEvent): Promise<LedgerWriteResult> {
+  if (!client) return { outcome: "unavailable" };
+  try {
+    const { data, error } = await client.rpc(LEDGER_WRITE_RPC, {
+      p_client_event_id: event.client_event_id,
+      p_occurred_at: event.occurred_at,
+      p_uid: event.uid,
+      p_normalized_email: event.normalized_email ?? null,
+      p_person_name: event.person_name ?? null,
+      p_status: event.status,
+      p_work_mode: event.work_mode ?? null,
+      p_note: event.note ?? null,
+      p_clocked_by: event.clocked_by ?? null,
+      p_source: event.source ?? "ledger-replay",
+      p_removed_ids: [],
+      /* Compatibility only: the current RPC records this field, but Gate B
+         must replace it with the server-derived actor before cutover. */
+      p_actor_employee_id: event.clocked_by || event.uid,
+      p_device_info: null,
+    });
+    if (error) return { outcome: "unavailable" };
+    const row = (Array.isArray(data) ? data[0] : data) as { outcome?: unknown } | null;
+    if (row?.outcome === "recorded" || row?.outcome === "already") {
+      return { outcome: row.outcome };
+    }
+  } catch {
+    /* Network, timeout, missing-RPC, and authorization errors all remain
+       pending. The queue is the safe source of truth until an operator can
+       review the event through the authorized path. */
+  }
+  return { outcome: "unavailable" };
+}
+
 export async function flushLedgerQueue(): Promise<void> {
   if (flushing || !supabaseConfigured()) return;
   const client = getSupabaseClient();
@@ -104,13 +148,16 @@ export async function flushLedgerQueue(): Promise<void> {
   if (!queue.length) return;
   flushing = true;
   try {
-    /* ON CONFLICT DO NOTHING via ignoreDuplicates: a retry after a timeout
-       whose insert actually landed must not fail the whole batch. */
-    const { error } = await client
-      .from("attendance_events")
-      .upsert(queue, { onConflict: "client_event_id", ignoreDuplicates: true });
-    if (!error) {
-      const sent = new Set(queue.map((event) => event.client_event_id));
+    /* Submit one event at a time so a temporary failure leaves that event and
+       every later event pending. A recorded/already response is the only
+       result that consumes an idempotency key. */
+    const sent = new Set<string>();
+    for (const event of queue) {
+      const result = await submitLedgerEvent(client, event);
+      if (result.outcome === "unavailable") break;
+      sent.add(event.client_event_id);
+    }
+    if (sent.size) {
       const remaining = readJson<LedgerEvent[]>(QUEUE_KEY, []).filter(
         (event) => !sent.has(event.client_event_id),
       );

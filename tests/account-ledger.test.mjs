@@ -63,6 +63,22 @@ test("every blob write delivers its accounts to the ledger, with retry", () => {
   assert.match(ledger, /const previousSetItem = window\.localStorage\.setItem\.bind\(window\.localStorage\);/);
 });
 
+test("account writes require a non-anonymous Auth actor and preserve pending queues", () => {
+  assert.match(ledger, /const ACCOUNT_UPSERT_RPC = "staff_account_upsert";/);
+  assert.match(ledger, /async function authenticatedActor\(client/);
+  assert.match(ledger, /client\.auth\.getUser\(\)/);
+  assert.match(ledger, /if \(error \|\| !data\.user \|\| data\.user\.is_anonymous === true\) return null;/);
+  assert.match(ledger, /const actor = await authenticatedActor\(client\);\s*\n\s*if \(!actor\) return;/);
+  assert.match(ledger, /const \{ error \} = await client\.rpc\(ACCOUNT_UPSERT_RPC, \{ p_accounts: queue \}\);/);
+});
+
+test("account tombstones use the verified Auth UUID, never a local actor argument", () => {
+  assert.match(ledger, /export async function tombstoneAccount\(uid: string, reason: string\)/);
+  assert.match(ledger, /p_by: actor\.authUserId/);
+  assert.doesNotMatch(ledger, /tombstoneAccount\([^)]*\bby\s*:/);
+  assert.match(ledger, /export async function untombstoneAccount\(uid: string\)/);
+});
+
 test("the app installs both ledgers and restores accounts on every sync settle", () => {
   assert.match(page, /const cleanupLedger = initAttendanceLedger\(\);\s*\n\s*const cleanupAccounts = initAccountLedger\(\);/);
   assert.match(page, /cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);/);
@@ -79,7 +95,7 @@ test("a permanent delete tombstones on the server as well as locally", () => {
      delete outright — under the repair_008 healing rules an account that
      left the document without a server-side tombstone would simply be put
      back, so deleting locally first produced a delete that undid itself. */
-  assert.match(page, /await tombstoneAccount\(target\.id, actor\.email \|\| actor\.name \|\| actor\.id,/);
+  assert.match(page, /await tombstoneAccount\(target\.id, "Permanently deleted by the authenticated administrator"\)/);
   assert.match(page, /if \(!recorded\) \{/);
   // And it is still Super-Admin-only, and still refuses the owner account.
   assert.match(page, /if \(!actor \|\| actor\.access !== "Super Admin"\) \{\s*\n\s*notify\("Only the Super Admin can permanently delete an account\."\);/);

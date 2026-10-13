@@ -76,6 +76,19 @@ test('an intent-free punch fails safely when server confirmation is unavailable'
   assert.equal(w.data.has('queue:e'),false);
 });
 
+test('a forbidden Auth identity is held for review and removed from the retry queue',async()=>{
+  const w=writer();
+  w.context.recordAttendancePunch=async()=>({outcome:'forbidden',reason:'anonymous_session'});
+  const result=await w.context.guard('Office','anonymous attempt','In');
+  assert.equal(result,false);
+  assert.equal(w.data.has('queue:e'),true);
+  assert.equal(JSON.parse(w.data.get('queue:e')).length,0);
+  const denied=JSON.parse(w.data.get('larsaAttendancePunchDeniedV1:e'));
+  assert.equal(denied.length,1);
+  assert.equal(denied[0].status,'In');
+  assert.equal(denied[0].review_reason,'anonymous_session');
+});
+
 test('switching accounts stops the old employee queue without discarding its original Out',async()=>{
   const w=writer();const first=w.context.guard('Office','first','In');await settle();
   await w.context.guard('Office','deliberate close','Out');

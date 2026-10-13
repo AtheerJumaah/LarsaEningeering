@@ -7,7 +7,7 @@ import {isSuspiciousClosedSession} from '../lib/attendance.mjs';
 import {planAttendanceCorrection} from '../lib/attendance-corrections.mjs';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-function runtime(path, client, seed = {}) {
+function runtime(path, client, seed = {}, authBindingFlag = "") {
   const data = new Map(Object.entries(seed));
   const timers = [];
   const listeners = new Map();
@@ -15,6 +15,7 @@ function runtime(path, client, seed = {}) {
   const events = { addEventListener: (k,f) => listeners.set(k,f), removeEventListener: k => listeners.delete(k) };
   const exports = {};
   const context = vm.createContext({ exports, module: { exports }, console: { log(){},warn(){},error(){} },
+    process: { env: { NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING: authBindingFlag } },
     require: name => name.includes('client') ? { getSupabaseClient: () => client, supabaseConfigured: () => true }
       : name.includes('merge') ? { mergeStoreText: (_base,local,remote) => ({...remote,...JSON.parse(local)}), protectOutgoing: x => x }
       : (() => {throw new Error(name)})(),
@@ -105,18 +106,94 @@ test('the packed clock passes employee identity before consulting stale state',(
 });
 
 test('confirmed punch client distinguishes a missing RPC from an offline connection',async()=>{
-  const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:()=>({abortSignal:async()=>({error:{code:'PGRST202',message:'function unavailable'}})})};
-  const r=runtime('lib/attendance-punch.ts',client);
+  const client={auth:{getUser:async()=>({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null})},rpc:()=>({abortSignal:async()=>({error:{code:'PGRST202',message:'function unavailable'}})})};
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
   const result=await r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
   assert.equal(result.outcome,'configuration_error');
 });
 
+test('Auth-binding flag OFF preserves anonymous bootstrap compatibility',async()=>{
+  let anonymousFallbacks=0;
+  let rpcCalls=0;
+  const client={
+    auth:{
+      getSession:async()=>({data:{session:null}}),
+      signInAnonymously:async()=>{anonymousFallbacks++;return {error:null};},
+    },
+    rpc:()=>{rpcCalls++;return {abortSignal:async()=>({data:{outcome:'recorded',current_status:'In',current_at:'2026-10-12T09:00:00Z',event_id:'legacy-event'},error:null})};},
+  };
+  const r=runtime('lib/attendance-punch.ts',client);
+  const result=await r.api.recordAttendancePunch({client_event_id:'legacy-event',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'recorded');
+  assert.equal(anonymousFallbacks,1);
+  assert.equal(rpcCalls,1);
+});
+
+test('Auth-binding flag OFF reuses an existing anonymous session',async()=>{
+  let getUserCalls=0;
+  const client={
+    auth:{
+      getSession:async()=>({data:{session:{user:{id:'anonymous-fixture'}}}}),
+      getUser:async()=>{getUserCalls++;throw new Error('strict Auth lookup must not run while flag is off');},
+    },
+    rpc:()=>({abortSignal:async()=>({data:{outcome:'recorded',current_status:'In',current_at:'2026-10-12T09:00:00Z',event_id:'existing-anon-event'},error:null})}),
+  };
+  const r=runtime('lib/attendance-punch.ts',client,{},'false');
+  const result=await r.api.recordAttendancePunch({client_event_id:'existing-anon-event',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'recorded');
+  assert.equal(getUserCalls,0);
+});
+
+test('anonymous attendance identity is denied without anonymous fallback or an RPC call',async()=>{
+  let anonymousFallbacks=0;
+  let rpcCalls=0;
+  const client={
+    auth:{
+      getUser:async()=>({data:{user:{id:'00000000-0000-4000-8000-000000000003',is_anonymous:true}},error:null}),
+      signInAnonymously:async()=>{ anonymousFallbacks++; return {data:{},error:null}; },
+    },
+    rpc:()=>{ rpcCalls++; return {abortSignal:async()=>({data:null,error:null})}; },
+  };
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
+  const result=await r.api.recordAttendancePunch({client_event_id:'anon-denied',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'forbidden');
+  assert.equal(result.reason,'anonymous_session');
+  assert.equal(anonymousFallbacks,0);
+  assert.equal(rpcCalls,0);
+});
+
+test('enabled Auth-binding keeps transient Auth failures retryable',async()=>{
+  let rpcCalls=0;
+  const client={
+    auth:{getUser:async()=>({data:{user:null},error:{code:'network_error',name:'AuthRetryableFetchError'}})},
+    rpc:()=>{rpcCalls++;return {abortSignal:async()=>({data:null,error:null})};},
+  };
+  const r=runtime('lib/attendance-punch.ts',client,{},'enabled');
+  const result=await r.api.recordAttendancePunch({client_event_id:'auth-retry',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'unavailable');
+  assert.equal(result.reason,'auth_unavailable');
+  assert.equal(rpcCalls,0);
+});
+
+test('an approved non-anonymous Auth user reaches the RPC with the original event id',async()=>{
+  let payload;
+  const client={
+    auth:{getUser:async()=>({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null})},
+    rpc:(_name,p)=>{ payload=p; return {abortSignal:async()=>({data:{outcome:'recorded',current_status:'In',current_at:'2026-10-12T09:00:00Z',event_id:p.p_client_event_id},error:null})}; },
+  };
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
+  const result=await r.api.recordAttendancePunch({client_event_id:'mapped-event',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'recorded');
+  assert.equal(payload.p_client_event_id,'mapped-event');
+  assert.equal(payload.p_uid,'employee');
+});
+
 test('uncertain punch timeout aborts the request, preserving original intent and event id',async()=>{
   let signal, payload;
-  const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:(_name,p)=>{
+  const client={auth:{getUser:async()=>({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null})},rpc:(_name,p)=>{
     payload=p;return {abortSignal:s=>{signal=s;return new Promise(()=>{});}};
   }};
-  const r=runtime('lib/attendance-punch.ts',client);
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
   const input={client_event_id:'stable',uid:'employee',status:'Out',occurred_at:'2026-10-12T09:00:00Z'};
   const pending=r.api.recordAttendancePunch(input);await settle();
   r.timers.find(t=>t.ms===8000).fn();
@@ -128,11 +205,11 @@ test('uncertain punch timeout aborts the request, preserving original intent and
 
 test('auth lookup finishing after timeout cannot send an abandoned punch',async()=>{
   let release,calls=0;
-  const client={auth:{getSession:()=>new Promise(resolve=>{release=resolve;})},rpc:()=>{calls++;}};
-  const r=runtime('lib/attendance-punch.ts',client);
+  const client={auth:{getUser:()=>new Promise(resolve=>{release=resolve;})},rpc:()=>{calls++;}};
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
   const pending=r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
   r.timers.find(t=>t.ms===8000).fn();assert.equal((await pending).outcome,'unavailable');
-  release({data:{session:{}}});await settle();assert.equal(calls,0);
+  release({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null});await settle();assert.equal(calls,0);
 });
 
 test('native correction planner refuses overlap and legacy ambiguous timezone, preserving current shift',()=>{

@@ -215,7 +215,9 @@ test("13. unread state syncs across devices without leaking content", () => {
 });
 
 test("14. signing out clears the view but not the person's alerts", () => {
-  const out = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("const signOut = useCallback") + 1400);
+  const signOutStart = page.indexOf("const signOut = useCallback");
+  const signOutEnd = page.indexOf("\n  }, []);", signOutStart) + "\n  }, []);".length;
+  const out = page.slice(signOutStart, signOutEnd);
   /* What signing out still does: nothing of the last person stays on screen. */
   assert.match(out, /setBellOpen\(false\)/);
   assert.match(out, /setNotifyCounts\(EMPTY_COUNTS\)/);
@@ -542,7 +544,9 @@ test("alerts stay on until the person turns them off", () => {
   /* Signing out used to cancel this browser's push subscription, and the app
      signs people out by itself when a verification interval lapses — so alerts
      switched themselves off and had to be turned on again and again. */
-  const signOut = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("const signOut = useCallback") + 1400);
+  const signOutStart = page.indexOf("const signOut = useCallback");
+  const signOutEnd = page.indexOf("\n  }, []);", signOutStart) + "\n  }, []);".length;
+  const signOut = page.slice(signOutStart, signOutEnd);
   assert.doesNotMatch(signOut, /unsubscribeFromPush/,
     "signing out must not cancel alerts the person switched on");
   // Turning them off by hand is still the one thing that does.

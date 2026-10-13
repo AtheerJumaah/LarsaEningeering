@@ -20,8 +20,13 @@ test("every staff-blob write is tapped and new punches are queued idempotently",
   assert.match(ledger, /const patchedSetItem = function\(this: Storage, key: string, value: string\)/);
   assert.match(ledger, /owner\.setItem = patchedSetItem;/);
   assert.match(ledger, /key === "larsaStaffV8"/);
-  // Idempotent delivery: the punch's own entropy-rich id is the conflict key.
-  assert.match(ledger, /\.upsert\(queue, \{ onConflict: "client_event_id", ignoreDuplicates: true \}\)/);
+  // The client no longer writes the ledger table directly. Every event crosses
+  // the explicit RPC boundary; idempotency remains owned by client_event_id.
+  assert.match(ledger, /const LEDGER_WRITE_RPC = "record_attendance_action"/);
+  assert.match(ledger, /client\.rpc\(LEDGER_WRITE_RPC, \{/);
+  assert.doesNotMatch(ledger, /from\("attendance_events"\)[\s\S]{0,240}\.upsert\(/);
+  assert.match(ledger, /if \(result\.outcome === "unavailable"\) break;/);
+  assert.match(ledger, /sent\.add\(event\.client_event_id\)/);
   // Offline safety: a queue in localStorage, flushed on write, timer, and reconnect.
   assert.match(ledger, /larsaLedgerQueueV1/);
   assert.match(ledger, /addEventListener\("online", onOnline\)/);

@@ -18,7 +18,8 @@ export type AttendancePunchInput = {
 };
 
 export type AttendancePunchResult = {
-  outcome: "recorded" | "already" | "needs_review" | "configuration_error" | "unavailable";
+  outcome: "recorded" | "already" | "needs_review" | "forbidden" | "configuration_error" | "unavailable";
+  reason?: "anonymous_session" | "missing_session" | "auth_unavailable" | "identity_required";
   status?: AttendancePunchInput["status"] | null;
   at?: string | null;
   eventId?: string | null;
@@ -26,6 +27,18 @@ export type AttendancePunchResult = {
   note?: string | null;
   clockedBy?: string | null;
 };
+
+/* Compatibility switch for the identity-binding cutover. It is intentionally
+   build-time configuration, not localStorage or a URL parameter: a device
+   must not be able to turn server authorization off for itself. Unset/unknown
+   values are legacy-compatible (OFF); an explicit true value enables the
+   fail-closed Auth path below. */
+export function attendanceAuthBindingEnabled(): boolean {
+  const raw = typeof process !== "undefined"
+    ? String(process.env?.NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING || "").trim().toLowerCase()
+    : "";
+  return raw === "1" || raw === "true" || raw === "on" || raw === "enabled";
+}
 
 /* The server owns the state transition. A timeout is reported as uncertain,
    never as success; a caller can safely retry with the same event id. */
@@ -38,13 +51,36 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
   const controller = new AbortController();
   try {
     const request = (async () => {
-      /* The app's shared sync bootstrap signs into Supabase anonymously. A
-         first clock action can happen before that async bootstrap completes,
-         so establish the same session here before calling the invoker RPC. */
-      const { data: auth } = await client.auth.getSession();
-      if (!auth.session) {
-        const { error: signInError } = await client.auth.signInAnonymously();
-        if (signInError) return { outcome: "unavailable" as const };
+      if (attendanceAuthBindingEnabled()) {
+        /* Enabled identity-binding mode is deliberately fail-closed.
+           Anonymous sessions remain useful for pre-sign-in read/bootstrap
+           work, but they are never an employee identity and cannot write a
+           punch. Auth-service failures remain retryable; missing or anonymous
+           identity is a hard, non-queued denial. */
+        const { data: auth, error: authError } = await client.auth.getUser();
+        if (authError) {
+          const authCode = String(authError.code || "").toLowerCase();
+          const authName = String(authError.name || "").toLowerCase();
+          if (authCode.includes("session") || authName.includes("sessionmissing")) {
+            return { outcome: "forbidden" as const, reason: "missing_session" as const };
+          }
+          return { outcome: "unavailable" as const, reason: "auth_unavailable" as const };
+        }
+        if (!auth.user) return { outcome: "forbidden" as const, reason: "missing_session" as const };
+        if (auth.user.is_anonymous === true) {
+          return { outcome: "forbidden" as const, reason: "anonymous_session" as const };
+        }
+      } else {
+        /* Production-default-OFF compatibility mode. Keep the existing
+           anonymous bootstrap so the reliability fixes can ship without
+           breaking the current local-PIN/anonymous attendance deployment.
+           This branch is temporary and is not an identity authorization
+           claim; enabling the flag selects the strict path above. */
+        const { data: auth } = await client.auth.getSession();
+        if (!auth.session) {
+          const { error: signInError } = await client.auth.signInAnonymously();
+          if (signInError) return { outcome: "unavailable" as const };
+        }
       }
       // A timed-out auth lookup must not start a late, abandoned RPC.
       if (controller.signal.aborted) return { outcome: "unavailable" as const };

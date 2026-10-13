@@ -8,15 +8,16 @@ const executablePath = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrom
 assert.ok(existsSync(executablePath));
 const user = {id:'attendance-browser-test',name:'Attendance Browser Test',email:'attendance@example.invalid',role:'Engineer',access:'Engineer',enabled:true,active:true};
 let staff={users:[user],logs:[]}; let stamp=new Date().toISOString();
-const events=[]; let delay=0; let fail=false; const ids=[]; const passed=[];
+const events=[]; let delay=0; let fail=false; let authSignOutCalls=0; const ids=[]; const passed=[];
 const browser=await chromium.launch({executablePath,headless:true});
 const context=await browser.newContext({serviceWorkers:'block'});
 await context.route('**/*.supabase.co/**',async route=>{
   const req=route.request(); const url=new URL(req.url());
   let body=[];
   if(url.pathname.includes('/auth/')) {
+    if(url.pathname.endsWith('/logout')) authSignOutCalls++;
     const payload=Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+3600,sub:'00000000-0000-4000-8000-000000000001',role:'authenticated'})).toString('base64url');
-    body={access_token:`eyJhbGciOiJIUzI1NiJ9.${payload}.test`,refresh_token:'test',token_type:'bearer',expires_in:3600,user:{id:'00000000-0000-4000-8000-000000000001',aud:'authenticated',role:'authenticated',is_anonymous:true}};
+    body={access_token:`eyJhbGciOiJIUzI1NiJ9.${payload}.test`,refresh_token:'test',token_type:'bearer',expires_in:3600,user:{id:'00000000-0000-4000-8000-000000000001',aud:'authenticated',role:'authenticated',is_anonymous:false}};
   } else if(url.pathname.endsWith('/rpc/server_now')) body=new Date().toISOString();
   else if(url.pathname.endsWith('/rpc/record_attendance_action')) {
     const p=req.postDataJSON(); ids.push(p.p_client_event_id);
@@ -56,11 +57,13 @@ async function clockPage(){
 }
 const label=page=>page.locator('.native.active button.clock-punch');
 const waitLabel=(page,text)=>page.waitForFunction(text=>document.querySelector('.native.active button.clock-punch')?.textContent.includes(text),text,{timeout:20000});
+const waitForEventCount=async count=>{const deadline=Date.now()+12000;while(events.length<count&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,100));assert.equal(events.length,count);};
 try {
   const page=await clockPage();
   await waitLabel(page,'Clock In');
   delay=1200;
   await label(page).click();
+  await page.waitForFunction(() => Boolean(document.querySelector('.native.active button.clock-punch')?.disabled), null, {timeout:2000});
   assert.equal(await label(page).isDisabled(),true,'saving disables duplicate presses');
   await waitLabel(page,'Clock Out');assert.equal(events.length,1);passed.push('one slow deliberate In, immediate Saving, no duplicate');delay=0;
   await page.getByRole('button',{name:'Start Break',exact:true}).click();
@@ -79,7 +82,7 @@ try {
   assert.equal(events.length,5);assert.equal(events.at(-1).client_event_id,pendingId);passed.push('offline action pending, reconnect uses same ID and original time');
   delay=9500;const before=events.length;await label(second).click();
   await second.getByText(/Pending synchronization: 1 action/).waitFor({timeout:15000});
-  assert.equal(events.length,before+1);const committedId=events.at(-1).client_event_id;
+  await waitForEventCount(before+1);const committedId=events.at(-1).client_event_id;
   delay=0;await second.evaluate(()=>window.dispatchEvent(new Event('online')));
   await waitLabel(second,'Clock In');assert.equal(events.length,before+1);
   await second.waitForFunction(()=>JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]').length===0);
@@ -101,11 +104,16 @@ try {
   await second.waitForFunction(()=>{
     const queue=JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]');
     return queue.some(event=>event.status==='Out');
-  },null,{timeout:1500});
+  },null,{timeout:5000});
   delay=0;
   await second.waitForFunction(()=>JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]').length===0,{timeout:20000});
   await waitLabel(second,'Clock In');
   assert.deepEqual(events.slice(-3).map(e=>e.status),['In','Break Start','Out']);
   passed.push('deliberate Out during slow break save is queued once and confirmed in order');
+  const logoutRequest=second.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/logout'));
+  await second.getByRole('button',{name:'Sign out'}).last().click();
+  await second.waitForFunction(()=>!sessionStorage.getItem('larsa-control-session'));
+  await logoutRequest;
+  assert.equal(authSignOutCalls,1);passed.push('sign-out clears the local shell and calls Supabase Auth logout');
   console.log(JSON.stringify({passed,events:events.length,finalStatus:events.at(-1).status},null,2));
 } finally {await browser.close();}

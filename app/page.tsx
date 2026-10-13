@@ -6311,6 +6311,12 @@ export default function Home() {
   };
 
   const signOut = useCallback(() => {
+    /* Staff sign-in is still locally verified during the migration, but any
+       Supabase Auth session must be cleared at the same time. Do not wait for
+       the network before clearing the local shell; a failed remote sign-out
+       must not leave this browser displaying the employee session. */
+    const client = getSupabaseClient();
+    if (client) { void client.auth.signOut().catch(() => { /* local cleanup remains authoritative for this shell */ }); }
     sessionStorage.removeItem("larsa-control-session");
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.
@@ -7165,6 +7171,35 @@ export default function Home() {
         } catch { notify("A pending punch needs review, but this device cannot store it safely. No time was substituted."); return false; }
         notify("A delayed clock action needs an attendance correction. Its original time was preserved for review; it was not changed to the reconnection time.");
         continue;
+      }
+      if (result.outcome === "forbidden") {
+        /* A missing/anonymous Auth identity is a hard denial, not an outage.
+           Preserve the original intent in a local review holding area, remove
+           it from the retry queue, and require an approved sign-in before any
+           later retry. Never replay it through an anonymous session. */
+        try {
+          const deniedKey = `larsaAttendancePunchDeniedV1:${actor.id}`;
+          const denied = parseStore(deniedKey);
+          const items = Array.isArray(denied) ? denied : [];
+          if (!items.some(item => item.client_event_id === event.client_event_id)) {
+            items.push({
+              ...event,
+              needs_review: true,
+              review_reason: result.reason || "An approved employee Auth session is required before attendance can be submitted.",
+            });
+          }
+          localStorage.setItem(deniedKey, JSON.stringify(items));
+          const sharedQueue = parseStore(queueKey);
+          const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
+          pending.splice(0, pending.length, ...remaining);
+          localStorage.setItem(queueKey, JSON.stringify(pending));
+        } catch {
+          notify("Attendance was denied because this device is not signed in with an approved employee account. The original action could not be held safely.");
+          return false;
+        }
+        setStorageTick(value => value + 1);
+        if (!quiet) notify("Attendance was not submitted because an approved employee sign-in is required. The original action was held for review; sign in before retrying.");
+        return false;
       }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
         setStorageTick(value => value + 1);
@@ -9176,8 +9211,7 @@ export default function Home() {
        refused rather than left half-done — the failure direction this app
        always chooses is "the account survives". */
     const recorded = supabaseConfigured()
-      ? await tombstoneAccount(target.id, actor.email || actor.name || actor.id,
-        `Permanently deleted by ${actor.name || actor.email || actor.id}`)
+      ? await tombstoneAccount(target.id, "Permanently deleted by the authenticated administrator")
       : true;
     if (!recorded) {
       notify("The deletion could not be recorded on the server. Check the connection and try again — nothing was changed.");
