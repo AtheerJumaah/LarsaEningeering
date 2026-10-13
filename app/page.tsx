@@ -8,6 +8,7 @@ import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confir
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
+import { resolveClockDisplay } from "../lib/attendance-display.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
@@ -18360,7 +18361,8 @@ function QuickClock({
   const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
   const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
-  const clockedIn = (pendingPunch?.status || latestPunch?.status) === "In";
+  const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
+  const clockedIn = displayClock.status === "In";
   /* Once a shift is open, the selected mode is no longer a device-local
      preference. It is part of the authoritative punch that all devices must
      display. Keep the local selection for the next Clock In only, but make the
@@ -18371,7 +18373,7 @@ function QuickClock({
      it must win over that local queue so the mode highlight cannot disagree
      with the server-backed banner. The pending event remains a fallback only
      during the short hand-off before the open session is visible locally. */
-  const actionMode = open?.mode || latestPunch?.type || pendingPunch?.work_mode || mode;
+  const actionMode = displayClock.mode || mode;
   const displayMode = clockedIn ? actionMode : mode;
   const reviewActions = user ? parseStore(`larsaAttendancePunchReviewV1:${user.id}`) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
