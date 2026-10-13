@@ -52,6 +52,14 @@ test("clock-in/out remains usable during the first sync, and the iframe uses the
   assert.match(page, /void punchClockGuarded\(mode, note \|\| "", intent\);/);
 });
 
+test("an open shift highlights the authoritative work mode on every device", () => {
+  assert.match(page, /const actionMode = pendingPunch\?\.work_mode \|\| open\?\.mode \|\| latestPunch\?\.type \|\| mode;/);
+  assert.match(page, /const displayMode = clockedIn \? actionMode : mode;/);
+  const modes = page.slice(page.indexOf('<div className="clock-modes"'), page.indexOf('</div>', page.indexOf('<div className="clock-modes"')));
+  assert.match(modes, /displayMode === item\.id/);
+  assert.doesNotMatch(modes, /className=\{`mode-\$\{item\.tone\}\$\{mode === item\.id/);
+});
+
 
 test("recent sessions explain when suspicious or unclosed hours are excluded", () => {
   const heading = page.indexOf("<h3>Your recent sessions</h3>");

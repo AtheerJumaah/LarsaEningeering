@@ -18349,7 +18349,13 @@ function QuickClock({
   const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
   const clockedIn = (pendingPunch?.status || latestPunch?.status) === "In";
-  const actionMode = pendingPunch?.work_mode || latestPunch?.type || mode;
+  /* Once a shift is open, the selected mode is no longer a device-local
+     preference. It is part of the authoritative punch that all devices must
+     display. Keep the local selection for the next Clock In only, but make the
+     active mode highlight follow the confirmed/pending server event while the
+     current shift is open. */
+  const actionMode = pendingPunch?.work_mode || open?.mode || latestPunch?.type || mode;
+  const displayMode = clockedIn ? actionMode : mode;
   const reviewActions = user ? parseStore(`larsaAttendancePunchReviewV1:${user.id}`) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
@@ -18416,7 +18422,7 @@ function QuickClock({
             <button
               type="button"
               key={item.id}
-              className={`mode-${item.tone}${mode === item.id ? " active" : ""}`}
+              className={`mode-${item.tone}${displayMode === item.id ? " active" : ""}`}
               onClick={() => setMode(item.id)}
               disabled={clockedIn}
             ><i aria-hidden="true" />{item.label}</button>
