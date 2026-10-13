@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /* The shared-document merge (lib/supabase/merge.ts).
  *
@@ -26,11 +27,15 @@ const source = readFileSync(new URL("../lib/supabase/merge.ts", import.meta.url)
 const dir = mkdtempSync(join(tmpdir(), "larsa-merge-"));
 const tsPath = join(dir, "merge.ts");
 writeFileSync(tsPath, source);
-execFileSync("npx", ["tsc", tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
-  cwd: new URL("..", import.meta.url).pathname,
+/* `npx` is not on PATH in the Windows test runner. Invoke the checked-in
+ * TypeScript compiler directly so the behavior test remains runnable without
+ * changing the project or relying on a shell shim. */
+const tsc = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+execFileSync(process.execPath, [tsc, tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
+  cwd: fileURLToPath(new URL("..", import.meta.url)),
   stdio: "pipe",
 });
-const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped } = await import(join(dir, "merge.js"));
+const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped } = await import(pathToFileURL(join(dir, "merge.js")).href);
 
 const user = (id, extra = {}) => ({ id, name: id.toUpperCase(), enabled: true, ...extra });
 

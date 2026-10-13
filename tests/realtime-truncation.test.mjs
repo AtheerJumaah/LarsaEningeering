@@ -24,7 +24,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const sync = await readFile(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
+/* Git checkout line endings are environment-dependent (the Windows checkout
+ * is CRLF). Normalize before isolating the handler so this test exercises the
+ * source contract instead of making LF a hidden prerequisite. */
+const sync = (await readFile(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8"))
+  .replace(/\r\n/g, "\n");
 
 const handler = sync.slice(
   sync.indexOf('.on(\n        "postgres_changes"'),

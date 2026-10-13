@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+/* Keep source-contract assertions independent of the checkout's line-ending
+ * convention (the Windows checkout is CRLF). */
+const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8"))
+  .replace(/\r\n/g, "\n");
 
 /* The durable attendance ledger and the write-path hardening: the permanent
  * fixes for the Aug 6–7 account/attendance loss. Attendance survives blob
@@ -11,8 +14,12 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
 test("every staff-blob write is tapped and new punches are queued idempotently", async () => {
   const ledger = await read("lib/ledger.ts");
-  assert.match(ledger, /window\.localStorage\.setItem = function ledgerPatchedSetItem/);
-  assert.match(ledger, /if \(key === "larsaStaffV8"\)/);
+  /* The tap now wraps Storage.prototype.setItem so it composes with the sync
+     and account-ledger wrappers and also observes iframe storage writes. */
+  assert.match(ledger, /const owner = typeof Storage !== "undefined" \? Storage\.prototype : window\.localStorage;/);
+  assert.match(ledger, /const patchedSetItem = function\(this: Storage, key: string, value: string\)/);
+  assert.match(ledger, /owner\.setItem = patchedSetItem;/);
+  assert.match(ledger, /key === "larsaStaffV8"/);
   // Idempotent delivery: the punch's own entropy-rich id is the conflict key.
   assert.match(ledger, /\.upsert\(queue, \{ onConflict: "client_event_id", ignoreDuplicates: true \}\)/);
   // Offline safety: a queue in localStorage, flushed on write, timer, and reconnect.
@@ -32,7 +39,7 @@ test("boot reconciliation restores ledger events the blob lost, honouring delibe
   assert.match(ledger, /openByUid\.forEach\(\(log\) => \{ if \(log\) openLogs\.add\(log\); \}\);/);
   assert.match(ledger, /if \(restored \|\| flagsChanged\) \{/);
   const page = await read("app/page.tsx");
-  assert.match(page, /reconcileStoreFromLedger\(\)\.then\(\(\{ restored \}\) => \{/);
+  assert.match(page, /reconcileStoreFromLedger\(\)\.then\(\(\{ restored, changed \}\) => \{/);
   assert.match(page, /const cleanupLedger = initAttendanceLedger\(\);/);
 });
 

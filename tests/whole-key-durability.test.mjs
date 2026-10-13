@@ -26,15 +26,19 @@ import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const source = readFileSync(new URL("../lib/supabase/merge.ts", import.meta.url), "utf8");
 const dir = mkdtempSync(join(tmpdir(), "larsa-wholekey-"));
 const tsPath = join(dir, "merge.ts");
 writeFileSync(tsPath, source);
-execFileSync("npx", ["tsc", tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
-  cwd: new URL("..", import.meta.url).pathname,
+/* Windows test runners may not expose the `npx` shim. Use the repository's
+ * compiler through the current Node executable instead. */
+const tsc = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+execFileSync(process.execPath, [tsc, tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
+  cwd: fileURLToPath(new URL("..", import.meta.url)),
 });
-const { mergeStoreText, protectOutgoing } = await import(join(dir, "merge.js"));
+const { mergeStoreText, protectOutgoing } = await import(pathToFileURL(join(dir, "merge.js")).href);
 
 const text = (value) => JSON.stringify(value);
 
