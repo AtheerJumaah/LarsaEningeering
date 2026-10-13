@@ -3,7 +3,7 @@
 **Owner:** CTO / Engineering Director
 **Requested by:** CEO / Chief of Staff (`/root`)
 **Baseline:** `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
-**Candidate state:** clean pushed HEAD `69a23ca7b2ab5d7ca55b715f71eff4713e33630e` on `release/attendance-compat-default-off`; the application hardening is included through parent commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`, and this documentation reconciliation is included in the current pushed commit. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
+**Candidate state:** clean pushed HEAD `b6a7f28` on `release/attendance-compat-default-off`; the application hardening is included through the parent commits, including the cross-tab retry guard. Staging schema documentation is included, while no production grant change, Auth enrollment, or production data change was made.
 
 ## Decision
 
@@ -53,7 +53,7 @@ No migration file is modified or added by this candidate. The SQL file above is 
 - `node --test tests/*.test.mjs`: **603 passed, 0 failed**.
 - `node --test tests/attendance-queue-runtime.test.mjs tests/red/attendance-identity-binding.red.test.mjs`: **25 passed, 0 failed** (14 strict recovery/runtime cases plus 11 identity red contracts).
 - `node --test tests/red/attendance-strict-browser.red.mjs`: **8 passed, 0 failed** against a local synthetic Vite preview.
-- Combined local behavioral verification: **611 passed, 0 failed** (603 standard tests + 8 red browser contracts). The red SQL contracts remain review-only and were not executed.
+- Strict local browser verification: **8 passed, 0 failed** against a local Vite preview with synthetic Supabase routes and strict Auth-binding enabled. The red SQL contracts remain review-only and were not executed.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
 - `git diff --check`: clean after the documentation-only whitespace cleanup; Git may still print Windows LF/CRLF normalization notices, which are not content warnings.
 - `node --check` for the new runtime and red tests: passed.
@@ -64,7 +64,7 @@ The local checks cover both modes of the attendance Auth-binding flag: default-O
 
 ## Preview authorization gate and command checklist
 
-The sole external dependency is Vercel preview authorization. The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team scope `team_lg17gfhawQFaFbcXXzRUBvIH`. The pushed branch `release/attendance-compat-default-off` is verified at commit `69a23ca7b2ab5d7ca55b715f71eff4713e33630e`. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate. There is no local `.vercel/project.json` and the `vercel` CLI was not available in this shell, so no deployment or environment inspection was attempted.
+The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`). The pushed branch `release/attendance-compat-default-off` is verified at commit `b6a7f28`. The current Preview is deployment-protected, so authenticated application-level testing still requires an authorized Vercel session; do not broaden production permissions to satisfy this gate.
 
 ### Preview-only prerequisites
 
@@ -83,15 +83,15 @@ After permission and staging values are configured, run this checklist from a cl
 $team = "team_lg17gfhawQFaFbcXXzRUBvIH"
 $project = "larsa-eningeering"
 $branch = "release/attendance-compat-default-off"
-$commit = "69a23ca7b2ab5d7ca55b715f71eff4713e33630e"
+$commit = "b6a7f28"
 git status --short
 git show --no-patch $commit
 git ls-remote --heads origin $branch
 vercel --scope $team link --project $project --yes
 vercel --scope $team env ls preview
-$stage = Join-Path $env:TEMP "larsa-preview-69a23ca"
+$stage = Join-Path $env:TEMP "larsa-preview-b6a7f28"
 New-Item -ItemType Directory -Force $stage | Out-Null
-$archive = Join-Path $env:TEMP "larsa-preview-69a23ca.tar"
+$archive = Join-Path $env:TEMP "larsa-preview-b6a7f28.tar"
 git archive --format=tar --output=$archive $commit
 tar -xf $archive -C $stage
 $proofs = Get-ChildItem -LiteralPath (Join-Path $stage "docs") -File -ErrorAction SilentlyContinue |
@@ -132,7 +132,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 ## Evidence that production was not touched
 
-- The release branch is clean and pushed at commit `69a23ca7b2ab5d7ca55b715f71eff4713e33630e`; application hardening is present through parent commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`.
+- The release branch is clean and pushed at commit `b6a7f28`; application hardening includes strict recovery persistence and the final cross-tab retry guard.
 - `git diff --name-only` contains no `supabase/migrations/`, `.env*`, deployment, CI, or platform configuration path.
 - The candidate tests use local source inspection, VM-transpiled modules, synthetic `example.test` identities, and reserved UUIDs. They make no Supabase or production network calls.
 - The build ran locally and produced no tracked source changes.
