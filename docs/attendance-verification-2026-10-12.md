@@ -141,6 +141,6 @@ The production audit confirms that local `larsaStaffV8` login identity is separa
 ### Test-suite cleanup follow-up — 13 October 2026
 
 - Windows/compiler and stale attendance/sync contracts were updated without production runtime changes.
-- Full repository suite now passes: **578 tests, 0 failures**; TypeScript and diff checks pass, including the explicit-intent regression added in this follow-up.
+- Full repository suite now passes: **602 tests, 0 failures**; TypeScript and diff checks pass, including strict recovery and explicit-intent regressions.
 - Commit `a6098ce` is deployed as Vercel production deployment `dpl_CtD95gTBbcEstoE8PcjCG7femLyE`, READY, with `larsaeng.app` returning HTTP 200.
 - These test-only changes do not alter the previously verified Clock In/Out runtime path.

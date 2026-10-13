@@ -37,9 +37,10 @@ The forbidden path preserves the original event in `larsaAttendancePunchDeniedV1
 
 Verification completed locally:
 
-- Full local default suite: **595 passed, 0 failed**.
+- Full local default suite: **602 passed, 0 failed**.
 - Red behavioral contract suite: **11 passed, 0 failed**.
 - Account-ledger/attendance-ledger focused runtime and contract suites: **26 passed, 0 failed**.
+- Strict attendance recovery/runtime plus identity red contracts: **24 passed, 0 failed**.
 - `node --check` passed for the synthetic fixture and red behavioral test.
 - TypeScript no-emit check completed with no diagnostics.
 

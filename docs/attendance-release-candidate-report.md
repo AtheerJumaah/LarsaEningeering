@@ -3,7 +3,7 @@
 **Owner:** CTO / Engineering Director
 **Requested by:** CEO / Chief of Staff (`/root`)
 **Baseline:** `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
-**Candidate state:** clean local HEAD `8a0ee8ddb174656ae1669a235a28d4e3846d9e71` on `release/attendance-compat-default-off`; its application changes are in parent commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`, and the documentation-only follow-up is not pushed. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
+**Candidate state:** clean pushed HEAD `69a23ca7b2ab5d7ca55b715f71eff4713e33630e` on `release/attendance-compat-default-off`; the application hardening is included through parent commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`, and this documentation reconciliation is included in the current pushed commit. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
 
 ## Decision
 
@@ -21,6 +21,7 @@ Modified application and test files:
 - `tests/attendance-browser.smoke.mjs`
 - `tests/attendance-queue-runtime.test.mjs`
 - `tests/attendance-runtime.test.mjs`
+- `tests/red/attendance-strict-browser.red.mjs`
 - `tests/durable-ledger.test.mjs`
 - `tests/notifications.test.mjs`
 
@@ -41,6 +42,7 @@ New local engineering and decision artifacts:
 - `docs/attendance-ceo-signoff-1fdfaeb.md`
 - `docs/attendance-identity-binding-red-test-report.md`
 - `docs/attendance-auth-binding-rollout-rollback.md`
+- `docs/staging-migration-allowlist.md`
 - `docs/attendance-production-proof-2026-10-12.jpg` — restricted/private production evidence; excluded from public and preview artifacts unless privacy-approved and redacted.
 - `docs/attendance-release-candidate-report.md`
 
@@ -49,6 +51,7 @@ No migration file is modified or added by this candidate. The SQL file above is 
 ## Verification record
 
 - `node --test tests/*.test.mjs`: **602 passed, 0 failed**.
+- `node --test tests/attendance-queue-runtime.test.mjs tests/red/attendance-identity-binding.red.test.mjs`: **24 passed, 0 failed** (13 strict recovery/runtime cases plus 11 identity red contracts).
 - `node --test tests/red/attendance-strict-browser.red.mjs`: **8 passed, 0 failed** against a local synthetic Vite preview.
 - Combined local behavioral verification: **610 passed, 0 failed** (602 standard tests + 8 red browser contracts). The red SQL contracts remain review-only and were not executed.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
@@ -61,7 +64,7 @@ The local checks cover both modes of the attendance Auth-binding flag: default-O
 
 ## Preview authorization gate and command checklist
 
-The sole external dependency is Vercel preview authorization. The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team scope `team_lg17gfhawQFaFbcXXzRUBvIH`. The pushed branch `release/attendance-compat-default-off` is verified at commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate. There is no local `.vercel/project.json` and the `vercel` CLI was not available in this shell, so no deployment or environment inspection was attempted.
+The sole external dependency is Vercel preview authorization. The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team scope `team_lg17gfhawQFaFbcXXzRUBvIH`. The pushed branch `release/attendance-compat-default-off` is verified at commit `69a23ca7b2ab5d7ca55b715f71eff4713e33630e`. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate. There is no local `.vercel/project.json` and the `vercel` CLI was not available in this shell, so no deployment or environment inspection was attempted.
 
 ### Preview-only prerequisites
 
@@ -80,15 +83,15 @@ After permission and staging values are configured, run this checklist from a cl
 $team = "team_lg17gfhawQFaFbcXXzRUBvIH"
 $project = "larsa-eningeering"
 $branch = "release/attendance-compat-default-off"
-$commit = "704ef3fce3369872d6586e7fe217adb6ac12ac8c"
+$commit = "69a23ca7b2ab5d7ca55b715f71eff4713e33630e"
 git status --short
 git show --no-patch $commit
 git ls-remote --heads origin $branch
 vercel --scope $team link --project $project --yes
 vercel --scope $team env ls preview
-$stage = Join-Path $env:TEMP "larsa-preview-704ef3f"
+$stage = Join-Path $env:TEMP "larsa-preview-69a23ca"
 New-Item -ItemType Directory -Force $stage | Out-Null
-$archive = Join-Path $env:TEMP "larsa-preview-704ef3f.tar"
+$archive = Join-Path $env:TEMP "larsa-preview-69a23ca.tar"
 git archive --format=tar --output=$archive $commit
 tar -xf $archive -C $stage
 $proofs = Get-ChildItem -LiteralPath (Join-Path $stage "docs") -File -ErrorAction SilentlyContinue |
@@ -129,7 +132,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 ## Evidence that production was not touched
 
-- The release branch is clean at commit `8a0ee8ddb174656ae1669a235a28d4e3846d9e71`; parent application commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb` remains unchanged and neither commit has been pushed.
+- The release branch is clean and pushed at commit `69a23ca7b2ab5d7ca55b715f71eff4713e33630e`; application hardening is present through parent commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`.
 - `git diff --name-only` contains no `supabase/migrations/`, `.env*`, deployment, CI, or platform configuration path.
 - The candidate tests use local source inspection, VM-transpiled modules, synthetic `example.test` identities, and reserved UUIDs. They make no Supabase or production network calls.
 - The build ran locally and produced no tracked source changes.
@@ -141,7 +144,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 1. Preserve this working tree as a review snapshot or dedicated release branch; do not use `git reset --hard` against the shared workspace.
 2. If review rejects the candidate, revert only the listed application/test/documentation patch through an approved patch or restore the pre-candidate snapshot. Leave unrelated user work untouched.
-3. Re-run the full 606-test local behavioral verification (595 standard + 11 red behavioral; SQL contract separately) and type/build checks after any rollback or selective revert.
+3. Re-run the 602-test standard suite, the 11 red identity contracts, and the 8 strict browser recovery scenarios separately (SQL contract separately), plus type/build checks after any rollback or selective revert.
 
 ### If a later production rollout is authorized
 
