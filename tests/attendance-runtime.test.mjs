@@ -112,6 +112,26 @@ test('confirmed punch client distinguishes a missing RPC from an offline connect
   assert.equal(result.outcome,'configuration_error');
 });
 
+test('server Auth and RLS denials are forbidden and never retryable',async()=>{
+  const denials=[
+    {status:401,message:'unauthenticated'},
+    {status:403,message:'forbidden'},
+    {code:'42501',message:'insufficient_privilege'},
+  ];
+  for(const error of denials){
+    let rpcCalls=0;
+    const client={
+      auth:{getUser:async()=>({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null})},
+      rpc:()=>{rpcCalls++;return {abortSignal:async()=>({data:null,error})};},
+    };
+    const r=runtime('lib/attendance-punch.ts',client,{},'on');
+    const result=await r.api.recordAttendancePunch({client_event_id:`denied-${error.status||error.code}`,uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+    assert.equal(result.outcome,'forbidden');
+    assert.equal(result.reason,'server_authorization');
+    assert.equal(rpcCalls,1,'a denied operation must not be retried by the writer');
+  }
+});
+
 test('Auth-binding flag OFF preserves anonymous bootstrap compatibility',async()=>{
   let anonymousFallbacks=0;
   let rpcCalls=0;
@@ -210,6 +230,21 @@ test('auth lookup finishing after timeout cannot send an abandoned punch',async(
   const pending=r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
   r.timers.find(t=>t.ms===8000).fn();assert.equal((await pending).outcome,'unavailable');
   release({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null});await settle();assert.equal(calls,0);
+});
+
+test('account switch cancels a late Auth result before the RPC boundary',async()=>{
+  let release,calls=0,current=true;
+  const client={
+    auth:{getUser:()=>new Promise(resolve=>{release=resolve;})},
+    rpc:()=>{calls++;return {abortSignal:async()=>({data:{outcome:'recorded'},error:null})};},
+  };
+  const r=runtime('lib/attendance-punch.ts',client,{},'on');
+  const pending=r.api.recordAttendancePunch({client_event_id:'switch-safe',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'},{isCurrent:()=>current});
+  await settle();
+  current=false;
+  release({data:{user:{id:'00000000-0000-4000-8000-000000000001',is_anonymous:false}},error:null});
+  assert.equal((await pending).outcome,'unavailable');
+  assert.equal(calls,0,'stale Auth must not cross into the server write boundary');
 });
 
 test('native correction planner refuses overlap and legacy ambiguous timezone, preserving current shift',()=>{

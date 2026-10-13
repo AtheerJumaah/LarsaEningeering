@@ -75,7 +75,7 @@ test("clock punches and breaks stamp with the server-corrected clock, not the de
   assert.match(punchBreak, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
   // The UI timestamp is only a proposed ordering value. Postgres serializes
   // and corrects it against the current ledger timestamp.
-  assert.match(punchClock, /await recordAttendancePunch\(event\)/);
+  assert.match(punchClock, /await recordAttendancePunch\(event(?:\)|,)/);
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchClock), "punchClock must not stamp with the device clock");
   assert.ok(!/const now = new Date\(\)\.toISOString\(\);/.test(punchBreak), "punchBreak must not stamp with the device clock");
 });

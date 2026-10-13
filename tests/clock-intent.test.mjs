@@ -15,7 +15,7 @@ test("the app sends the button intent as the atomic event status", () => {
   assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
   assert.match(punch, /\} else \{\s*decided = intent;\s*\}/);
   assert.match(punch, /status: decided,/);
-  assert.match(punch, /await recordAttendancePunch\(event\)/);
+  assert.match(punch, /await recordAttendancePunch\(event(?:\)|,)/);
   assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;/);
 });
 

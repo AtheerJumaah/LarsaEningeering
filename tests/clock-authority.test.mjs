@@ -12,13 +12,13 @@ const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.in
 assert.ok(punch.length > 500, "punchClock could not be isolated");
 
 test("explicit presses preserve displayed intent while intent-free calls confirm server state", () => {
-  assert.match(page, /import \{ recordAttendancePunch, type AttendancePunchInput \} from "\.\.\/lib\/attendance-punch";/);
+  assert.match(page, /import \{[^}]*recordAttendancePunch,[^}]*type AttendancePunchInput \} from "\.\.\/lib\/attendance-punch";/);
   assert.match(punch, /let decided: AttendancePunchInput\["status"\];/);
   assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
   assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;[\s\S]*decided = confirmed\.status === "In" \? "Out" : "In";/);
   assert.match(punch, /\} else \{\s*decided = intent;\s*\}/);
   assert.match(punch, /status: decided,/);
-  assert.match(punch, /await recordAttendancePunch\(event\)/);
+  assert.match(punch, /await recordAttendancePunch\(event(?:\)|,)/);
 });
 
 test("a same-state retry is idempotent and concurrent devices serialize by employee", () => {

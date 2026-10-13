@@ -76,7 +76,7 @@ test("times are compared as instants, never as text", () => {
 });
 
 test("clock actions have no refusal or press-again gate", () => {
-  assert.match(punch, /await recordAttendancePunch\(event\)/);
+  assert.match(punch, /await recordAttendancePunch\(event(?:\)|,)/);
   assert.match(punch, /const queueKey = attendancePunchQueueKey\(user\.id\);/);
   assert.doesNotMatch(punch, /clockRefusals|insisting/);
   assert.doesNotMatch(punch, /press again and it will be recorded anyway/i);
@@ -90,5 +90,5 @@ test("breaks keep their separate pending direction guard", () => {
 test("breaks get the same guarantee", () => {
   assert.match(breakBody, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
   assert.match(page, /const punchBreakGuarded = useCallback/);
-  assert.match(page, /if \(punchLock\.current\) return punchBreak\(note, intent, true\);/);
+  assert.match(page, /if \(punchLock\.current\) \{[\s\S]*?return punchBreak\(note, intent, true\);/);
 });

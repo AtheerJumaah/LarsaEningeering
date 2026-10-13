@@ -93,7 +93,7 @@ test("an uncertain save stays queued and the same id is retried", () => {
   assert.match(guarded, /finally \{ punchLock\.current = false; \}/);
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
   assert.match(writer, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
-  assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
+  assert.match(writer, /result = await recordAttendancePunch\(event,/);
   const unavailableAt = writer.indexOf("if (result.outcome === \"unavailable\"");
   const confirmedConsumeAt = writer.indexOf("pending.splice", writer.indexOf("lastOutcome = result.outcome;"));
   assert.ok(unavailableAt >= 0 && confirmedConsumeAt > unavailableAt,

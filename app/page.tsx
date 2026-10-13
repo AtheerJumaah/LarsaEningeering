@@ -10,7 +10,7 @@ import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
+import { attendanceAuthBindingEnabled, recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
@@ -1361,6 +1361,10 @@ function parseStore(key: string) {
 function attendancePunchQueueKey(uid: string) {
   return `larsaAttendancePunchQueueV1:${uid}`;
 }
+function attendanceAuthBlockedKey(uid: string) {
+  return `larsaAttendanceAuthBlockedV1:${uid}`;
+}
+const ATTENDANCE_ACTIVE_ACCOUNT_KEY = "larsaAttendanceActiveAccountV1";
 function saveDownload(name: string, body: string, type = "application/json") {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([body], { type }));
@@ -4406,6 +4410,18 @@ export default function Home() {
   const [sessionMethod, setSessionMethod] = useState<SignInMethod | null>(null);
   const sessionMethodRef = useRef<SignInMethod | null>(null);
   const [previewOwner, setPreviewOwner] = useState<StaffUser | null>(null);
+  const [attendanceAuthRecovery, setAttendanceAuthRecovery] = useState<{
+    uid: string;
+    count: number;
+    next: AttendancePunchInput | null;
+    phase: "blocked" | "checking" | "replaying" | "review";
+    message: string;
+  } | null>(null);
+  const attendanceAuthRecoveryLock = useRef(false);
+  const attendanceAuthRecoveryTimer = useRef<number | null>(null);
+  const attendanceAuthReplayEventLock = useRef<string | null>(null);
+  const attendanceCommittedEventIds = useRef<Set<string>>(new Set());
+  const replayBlockedAttendanceRef = useRef<(manual?: boolean) => Promise<boolean>>(async () => false);
   const [navChannel, setNavChannel] = useState<NavChannel>("home");
   const [loginMode, setLoginMode] = useState<SignInMethod>("email");
   const [loginEmail, setLoginEmail] = useState("");
@@ -5841,6 +5857,7 @@ export default function Home() {
       ? { ...user, permissions: staffPermissionsForUser(user) }
       : user;
     persistSession(normalizedUser, method, rememberRef.current);
+    try { localStorage.setItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY, normalizedUser.id); } catch { /* account isolation remains enforced by the in-tab session ref */ }
     sessionUserRef.current = normalizedUser;
     sessionMethodRef.current = method;
     setSessionUser(normalizedUser);
@@ -6317,7 +6334,13 @@ export default function Home() {
        must not leave this browser displaying the employee session. */
     const client = getSupabaseClient();
     if (client) { void client.auth.signOut().catch(() => { /* local cleanup remains authoritative for this shell */ }); }
+    const signedOutId = sessionUserRef.current?.id;
     sessionStorage.removeItem("larsa-control-session");
+    try {
+      if (!signedOutId || localStorage.getItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY) === signedOutId) {
+        localStorage.removeItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY);
+      }
+    } catch { /* storage is best effort; the in-tab identity is still cleared below */ }
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.
     try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
@@ -6335,6 +6358,7 @@ export default function Home() {
     setAppBadge(0);
     sessionUserRef.current = null;
     sessionMethodRef.current = null;
+    setAttendanceAuthRecovery(null);
     setSessionUser(null);
     setSessionMethod(null);
     setPreviewOwner(null);
@@ -7066,6 +7090,10 @@ export default function Home() {
   const punchClock = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string, queueOnly = false) => {
     const actor = sessionUserRef.current;
     if (!actor) return false;
+    try {
+      const activeAccount = localStorage.getItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY);
+      if (activeAccount && activeAccount !== actor.id) return false;
+    } catch { /* the in-tab session ref remains the minimum identity guard */ }
     const user = targetUid ? accessUsers.find(person => person.id === targetUid) : actor;
     if (!user) return false;
     if (user.id !== actor.id) {
@@ -7146,13 +7174,40 @@ export default function Home() {
     let lastOutcome: "recorded" | "already" = "already";
     let lastStatus: AttendancePunchInput["status"] = decided;
     let lastAt: string | null = null;
+    let lastSubmittedEventId: string | null = null;
+    let lastServerEventId: string | null = null;
     let localRefreshFailed = false;
     let reviewCount = 0;
     while (pending.length) {
       if (sessionUserRef.current?.id !== actor.id) return false;
       const event = pending[0];
-      const result = await recordAttendancePunch(event);
+      lastSubmittedEventId = event.client_event_id;
+      if (attendanceCommittedEventIds.current.has(event.client_event_id)) return false;
+      const submissionLockKey = `larsaAttendanceSubmissionV1:${event.client_event_id}`;
+      let claimedSubmissionLock = false;
+      const releaseSubmissionLock = () => {
+        if (!claimedSubmissionLock) return;
+        try { localStorage.removeItem(submissionLockKey); } catch { /* best effort */ }
+        claimedSubmissionLock = false;
+      };
+      try {
+        const marker = localStorage.getItem(submissionLockKey);
+        if (marker === "inflight" || marker?.startsWith("committed:")) return false;
+        localStorage.setItem(submissionLockKey, "inflight");
+        claimedSubmissionLock = true;
+      } catch {
+        /* The per-component punch lock remains the fallback when storage is
+           unavailable; this path never relaxes the identity checks. */
+      }
+      let result: Awaited<ReturnType<typeof recordAttendancePunch>>;
+      try {
+        result = await recordAttendancePunch(event, { isCurrent: () => sessionUserRef.current?.id === actor.id });
+      } catch {
+        releaseSubmissionLock();
+        return false;
+      }
       if (result.outcome === "configuration_error") {
+        releaseSubmissionLock();
         if (!quiet) notify("Attendance saving is unavailable because a required server function is missing. Your action remains pending; contact an administrator.");
         return false;
       }
@@ -7164,44 +7219,84 @@ export default function Home() {
           const items = Array.isArray(review) ? review : [];
           if (!items.some(item => item.client_event_id === event.client_event_id)) items.push({ ...event, needs_review: true, review_reason: "Original punch time conflicts with the server sequence or is outside the automatic retry window." });
           localStorage.setItem(reviewKey, JSON.stringify(items));
+          setAttendanceAuthRecovery({
+            uid: user.id,
+            count: items.length,
+            next: items[0] || event,
+            phase: "review",
+            message: "This delayed attendance action needs an approved correction. Its original event ID and timestamp are preserved; it will not retry automatically.",
+          });
           const sharedQueue = parseStore(queueKey);
           const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
           pending.splice(0, pending.length, ...remaining);
           localStorage.setItem(queueKey, JSON.stringify(pending));
+          releaseSubmissionLock();
         } catch { notify("A pending punch needs review, but this device cannot store it safely. No time was substituted."); return false; }
         notify("A delayed clock action needs an attendance correction. Its original time was preserved for review; it was not changed to the reconnection time.");
         continue;
       }
       if (result.outcome === "forbidden") {
-        /* A missing/anonymous Auth identity is a hard denial, not an outage.
-           Preserve the original intent in a local review holding area, remove
-           it from the retry queue, and require an approved sign-in before any
-           later retry. Never replay it through an anonymous session. */
+        /* A missing/anonymous Auth identity is a blocked-auth recovery state,
+           not an outage. Preserve the original intent in an ordered holding
+           area, remove it from the retry queue, and require an approved
+           sign-in before replay. Server authorization denials use the review
+           area instead: they are terminal until an operator resolves the
+           mapping/policy defect and must never retry forever. */
+        const authRecovery = result.reason === "missing_session" || result.reason === "anonymous_session";
+        const holdingKey = authRecovery ? attendanceAuthBlockedKey(actor.id) : `larsaAttendancePunchReviewV1:${user.id}`;
         try {
           const deniedKey = `larsaAttendancePunchDeniedV1:${actor.id}`;
-          const denied = parseStore(deniedKey);
-          const items = Array.isArray(denied) ? denied : [];
+          const legacyDenied = parseStore(deniedKey);
+          const held = parseStore(holdingKey);
+          const items = [...(authRecovery && Array.isArray(legacyDenied) ? legacyDenied : []), ...(Array.isArray(held) ? held : [])]
+            .filter((item, index, all) => item && typeof item.client_event_id === "string" && all.findIndex(candidate => candidate?.client_event_id === item.client_event_id) === index);
           if (!items.some(item => item.client_event_id === event.client_event_id)) {
             items.push({
               ...event,
-              needs_review: true,
-              review_reason: result.reason || "An approved employee Auth session is required before attendance can be submitted.",
+              needs_review: !authRecovery,
+              review_reason: authRecovery
+                ? "An approved employee Auth session is required before attendance can be replayed."
+                : "The server denied attendance authorization (Auth/RLS policy). An authorized reviewer must resolve it before replay.",
             });
           }
-          localStorage.setItem(deniedKey, JSON.stringify(items));
+          localStorage.setItem(holdingKey, JSON.stringify(items));
+          if (authRecovery) localStorage.removeItem(deniedKey);
           const sharedQueue = parseStore(queueKey);
           const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
           pending.splice(0, pending.length, ...remaining);
           localStorage.setItem(queueKey, JSON.stringify(pending));
+          releaseSubmissionLock();
+          if (authRecovery) {
+            setAttendanceAuthRecovery({
+              uid: actor.id,
+              count: items.length,
+              next: items[0] || event,
+              phase: "blocked",
+              message: "Sign in with an approved employee Auth account, then replay the held action once.",
+            });
+          } else {
+            setAttendanceAuthRecovery({
+              uid: user.id,
+              count: items.length,
+              next: items[0] || event,
+              phase: "review",
+              message: "The server denied this attendance action. It is held for authorized review; no automatic retry will occur.",
+            });
+          }
         } catch {
-          notify("Attendance was denied because this device is not signed in with an approved employee account. The original action could not be held safely.");
+          notify(authRecovery
+            ? "Attendance was denied because this device is not signed in with an approved employee account. The original action could not be held safely."
+            : "The server denied this attendance action. It was not retried; an authorized reviewer must resolve the policy or mapping.");
           return false;
         }
         setStorageTick(value => value + 1);
-        if (!quiet) notify("Attendance was not submitted because an approved employee sign-in is required. The original action was held for review; sign in before retrying.");
+        if (!quiet) notify(authRecovery
+          ? "Attendance is held pending approved Auth sign-in. The original event ID and time are preserved; no extra click is needed."
+          : "The server denied attendance authorization. The original event was held for review and will not retry automatically.");
         return false;
       }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
+        releaseSubmissionLock();
         setStorageTick(value => value + 1);
         if (!quiet) notify("Your clock action is waiting to sync. Keep the app open or reconnect; it will retry automatically. Don't tap again.");
         return false;
@@ -7209,6 +7304,7 @@ export default function Home() {
       lastOutcome = result.outcome;
       lastStatus = result.status;
       lastAt = result.at;
+      lastServerEventId = result.eventId || null;
 
       /* The server has committed (or confirmed) this event. Consume its
          idempotency key before touching the disposable local view: a quota
@@ -7219,6 +7315,11 @@ export default function Home() {
       pending.splice(0, pending.length, ...remaining);
       try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
       catch { /* the server remains authoritative; the same id is safe to retry */ }
+      attendanceCommittedEventIds.current.add(event.client_event_id);
+      if (claimedSubmissionLock) {
+        try { localStorage.setItem(submissionLockKey, `committed:${Date.now()}`); } catch { /* the server remains authoritative */ }
+        claimedSubmissionLock = false;
+      }
 
       /* The transaction response is the authoritative state. Add its exact
          ledger event to the local view only once, then repair all old active
@@ -7271,7 +7372,10 @@ export default function Home() {
       const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
       if (localRefreshFailed) notify(`Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
       else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : lastStatus === "Out" ? `Already clocked out${since}. Your status has been refreshed.` : lastStatus === "Break Start" ? "Already on a break. Your status has been refreshed." : "Break already ended. Your status has been refreshed.");
-      return false;
+      /* Background queue/recovery callers need an idempotent server
+         confirmation to count as success; the interactive button still
+         returns false so it can explain that the state was already current. */
+      return quiet && lastServerEventId === lastSubmittedEventId;
     }
     if (localRefreshFailed) notify(`Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
     else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : lastStatus === "Out" ? `Clocked out — ${mode}` : lastStatus === "Break Start" ? "Break started." : "Break ended.");
@@ -7286,6 +7390,125 @@ export default function Home() {
     try { return await punchClock(mode, note, intent, quiet, targetUid); }
     finally { punchLock.current = false; }
   }, [punchClock, notify]);
+  const replayBlockedAttendance = useCallback(async (manual = false) => {
+    const actor = sessionUserRef.current;
+    if (!actor) return false;
+    if (attendanceAuthRecoveryLock.current) {
+      /* If the mount-time verifier is still checking Auth, a user click is
+         still meaningful: schedule one hand-off after that check completes,
+         without recursively polling or creating a retry loop. */
+      if (manual && attendanceAuthRecoveryTimer.current === null) {
+        attendanceAuthRecoveryTimer.current = window.setTimeout(() => {
+          attendanceAuthRecoveryTimer.current = null;
+          void replayBlockedAttendance(false);
+        }, 600);
+      }
+      return false;
+    }
+    /* Lock before the Auth lookup as well as before the RPC loop. The mount
+       effect and the visible recovery button can overlap while Auth settles;
+       only one verifier/replayer may own the held event at a time. */
+    attendanceAuthRecoveryLock.current = true;
+    try {
+    const blockedKey = attendanceAuthBlockedKey(actor.id);
+    const readBlocked = () => {
+      const value = parseStore(blockedKey);
+      return Array.isArray(value)
+        ? value.filter((event): event is AttendancePunchInput => Boolean(event?.client_event_id && event?.uid && event?.occurred_at && ["In", "Out", "Break Start", "Break End"].includes(event.status)))
+        : [];
+    };
+    let blocked = readBlocked();
+    if (!blocked.length) { setAttendanceAuthRecovery(null); return false; }
+    setAttendanceAuthRecovery({ uid: actor.id, count: blocked.length, next: blocked[0], phase: "checking", message: "Verifying the signed-in Auth identity before replaying the oldest held action." });
+    const client = getSupabaseClient();
+    if (!client) {
+      setAttendanceAuthRecovery({ uid: actor.id, count: blocked.length, next: blocked[0], phase: "blocked", message: "Auth is unavailable. Keep the original action held and retry after the approved Auth service is reachable." });
+      return false;
+    }
+    const { data: auth, error } = await client.auth.getUser();
+    if (error || !auth.user || auth.user.is_anonymous === true) {
+      setAttendanceAuthRecovery({ uid: actor.id, count: blocked.length, next: blocked[0], phase: "blocked", message: "Step 1: sign in with the approved employee Auth account. The local employee PIN alone cannot authorize this replay." });
+      notify("Held attendance is waiting for a verified, non-anonymous Auth sign-in. Nothing was replayed.");
+      /* A manual retry is allowed one delayed re-check so a just-completed
+         Auth sign-in can settle without creating a retry loop. Further
+         attempts remain explicit through the visible recovery button. */
+      if (manual && attendanceAuthRecoveryTimer.current === null) {
+        attendanceAuthRecoveryTimer.current = window.setTimeout(() => {
+          attendanceAuthRecoveryTimer.current = null;
+          void replayBlockedAttendance(false);
+        }, 600);
+      }
+      return false;
+    }
+    attendanceAuthRecoveryLock.current = true;
+    try {
+      for (const event of blocked) {
+        /* Another verifier may have completed this exact event while this
+           invocation was awaiting Auth. Re-read the hold before touching the
+           retry queue; a stale snapshot must never requeue a removed id. */
+        if (!readBlocked().some(candidate => candidate.client_event_id === event.client_event_id)) continue;
+        const replayLockKey = `larsaAttendanceReplayInFlightV1:${event.client_event_id}`;
+        let claimedReplayLock = false;
+        try {
+          if (localStorage.getItem(replayLockKey) === "1") return false;
+          localStorage.setItem(replayLockKey, "1");
+          claimedReplayLock = true;
+        } catch {
+          /* The existing in-memory event lock remains the fallback if this
+             browser refuses the auxiliary coordination marker. */
+        }
+        const queueKey = attendancePunchQueueKey(event.uid);
+        const queueValue = parseStore(queueKey);
+        const queue = Array.isArray(queueValue) ? queueValue as AttendancePunchInput[] : [];
+        if (!queue.some(candidate => candidate.client_event_id === event.client_event_id)) {
+          queue.push(event);
+          localStorage.setItem(queueKey, JSON.stringify(queue));
+        }
+        setAttendanceAuthRecovery({ uid: actor.id, count: blocked.length, next: event, phase: "replaying", message: "Step 2: replaying the oldest held action with its original event ID and time." });
+        /* A second verifier can still be queued by a development StrictMode
+           mount or a concurrent Auth hand-off. Serialize at the event level
+           too, so one held id can never result in two RPC attempts. */
+        if (attendanceAuthReplayEventLock.current === event.client_event_id) return false;
+        attendanceAuthReplayEventLock.current = event.client_event_id;
+        let replayed = false;
+        try {
+          replayed = await punchClockGuarded(event.work_mode || "Office", event.note || "", event.status, true, event.uid);
+        } finally {
+          if (attendanceAuthReplayEventLock.current === event.client_event_id) attendanceAuthReplayEventLock.current = null;
+        }
+        if (!replayed) {
+          if (claimedReplayLock) { try { localStorage.removeItem(replayLockKey); } catch { /* best effort */ } }
+          blocked = readBlocked();
+          if (blocked.length) setAttendanceAuthRecovery({ uid: actor.id, count: blocked.length, next: blocked[0], phase: "blocked", message: "Replay stopped safely. The remaining action is still held with its original event ID and time." });
+          else setAttendanceAuthRecovery(null);
+          return false;
+        }
+        blocked = readBlocked().filter(candidate => candidate.client_event_id !== event.client_event_id);
+        if (blocked.length) localStorage.setItem(blockedKey, JSON.stringify(blocked));
+        else localStorage.removeItem(blockedKey);
+        if (claimedReplayLock) { try { localStorage.removeItem(replayLockKey); } catch { /* best effort */ } }
+      }
+      setAttendanceAuthRecovery(null);
+      notify("Held attendance replay completed once, in original order. No new event IDs or times were created.");
+      return true;
+    } finally {
+      attendanceAuthRecoveryLock.current = false;
+    }
+    } finally {
+      attendanceAuthRecoveryLock.current = false;
+    }
+  }, [notify, punchClockGuarded]);
+  useEffect(() => {
+    replayBlockedAttendanceRef.current = replayBlockedAttendance;
+  }, [replayBlockedAttendance]);
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id || !attendanceAuthBindingEnabled()) return;
+    /* Do not make the automatic verifier depend on the large punch callback's
+       identity. Storage refreshes can recreate that callback; re-running this
+       effect would create parallel Auth checks and duplicate replay attempts.
+       The ref keeps the latest implementation without widening the trigger. */
+    void replayBlockedAttendanceRef.current();
+  }, [hydrated, sessionUser?.id]);
   // Embedded summaries and exports use the same net-hour calculation as the
   // native clock. The old packed timesheets independently counted gross time.
   useEffect(() => {
@@ -7326,13 +7549,27 @@ export default function Home() {
     if (!hydrated || !sessionUser?.id) return;
     const retryPending = () => {
       if (!navigator.onLine || punchLock.current) return;
+      try {
+        const activeAccount = localStorage.getItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY);
+        if (activeAccount && activeAccount !== sessionUser.id) return;
+      } catch { /* continue with the in-tab identity guard when storage is unavailable */ }
       const registry = parseStore(`larsaAttendanceManagedPendingV1:${sessionUser.id}`);
       for (const uid of [sessionUser.id, ...(Array.isArray(registry) ? registry : [])]) {
         const queued = parseStore(attendancePunchQueueKey(uid));
         if (!Array.isArray(queued) || !queued.length) continue;
         const latest = queued[queued.length - 1] as AttendancePunchInput;
         if (latest?.uid !== uid || !["In", "Out", "Break Start", "Break End"].includes(latest.status)) continue;
-        if (uid !== sessionUser.id && latest.actor_id !== sessionUser.id) continue;
+        /* Every queued action carries its actor. Do not infer ownership from
+           the target uid alone: after a same-browser account switch, a stale
+           tab or a managed-target registry must never drain another actor's
+           private queue. */
+        if (latest.actor_id !== sessionUser.id) continue;
+        /* Auth-blocked actions are intentionally held for the visible,
+           ordered recovery path. The queue is populated as a hand-off just
+           before replay; the generic outage retry loop must not race that
+           hand-off and submit the same event a second time. */
+        const blocked = parseStore(attendanceAuthBlockedKey(uid));
+        if (Array.isArray(blocked) && blocked.some((event) => event?.client_event_id === latest.client_event_id)) continue;
         void punchClockGuarded(latest.work_mode || "Office", latest.note || "", latest.status, true, uid);
         break;
       }
@@ -10365,6 +10602,44 @@ export default function Home() {
       </main>
 
       <input ref={uploadRef} className="hidden-input" type="file" accept=".json,application/json" onChange={restoreBackup} />
+      {attendanceAuthRecovery && (
+        <aside className="attendance-auth-recovery" role="alert" aria-live="assertive" style={{ position: "fixed", zIndex: 90, right: 18, bottom: 18, width: "min(440px, calc(100vw - 36px))", padding: 18, border: "2px solid #d97706", borderRadius: 16, background: "var(--panel, #fff)", boxShadow: "0 18px 48px rgba(15,23,42,.22)" }}>
+          <div className="modal-head">
+            <div><span className="eyebrow">{attendanceAuthRecovery.phase === "review" ? "Attendance review" : "Attendance recovery"}</span><h2>Action held — no punch was created</h2></div>
+            <span aria-label={`${attendanceAuthRecovery.count} held attendance action${attendanceAuthRecovery.count === 1 ? "" : "s"}`}>
+              {attendanceAuthRecovery.count} held
+            </span>
+          </div>
+          <p>{attendanceAuthRecovery.message}</p>
+          {attendanceAuthRecovery.phase === "review" ? (
+            <ol>
+              <li>Keep this page open; the original event remains first in the review handoff.</li>
+              <li>Open Time &amp; Attendance and submit an approved correction for the recorded event.</li>
+              <li>Do not press Clock In or Clock Out again; the original event ID and timestamp remain attached to the review.</li>
+            </ol>
+          ) : (
+            <ol>
+              <li>Keep this page open; the oldest action remains first in the ordered hold.</li>
+              <li>Sign in with the approved, non-anonymous employee Auth account.</li>
+              <li>Retry the hold once. The original event ID and timestamp are replayed exactly once.</li>
+            </ol>
+          )}
+          {attendanceAuthRecovery.next && (
+            <small>Next: {attendanceAuthRecovery.next.status} at {new Date(attendanceAuthRecovery.next.occurred_at).toLocaleString()} · event {attendanceAuthRecovery.next.client_event_id}</small>
+          )}
+          <button type="button" className="primary" disabled={attendanceAuthRecovery.phase === "checking" || attendanceAuthRecovery.phase === "replaying"} onClick={() => {
+            if (attendanceAuthRecovery.phase === "review") {
+              const clockItem = ITEMS.find((item) => item.id === "staff-clock");
+              if (clockItem) choose(clockItem, "time");
+              setAttendanceAuthRecovery(null);
+            } else {
+              void replayBlockedAttendance(true);
+            }
+          }}>
+            {attendanceAuthRecovery.phase === "replaying" ? "Replaying held action…" : attendanceAuthRecovery.phase === "checking" ? "Verifying Auth…" : attendanceAuthRecovery.phase === "review" ? "Open attendance correction" : "Retry held action"}
+          </button>
+        </aside>
+      )}
       {message && <div className="toast">{message}</div>}
       {installHelp && (
         <div className="modal-layer" onMouseDown={() => setInstallHelp(false)}>

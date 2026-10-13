@@ -3,7 +3,7 @@
 **Owner:** CTO / Engineering Director
 **Requested by:** CEO / Chief of Staff (`/root`)
 **Baseline:** `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
-**Candidate state:** local commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb` on `release/attendance-compat-default-off`; not pushed. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
+**Candidate state:** clean local HEAD `8a0ee8ddb174656ae1669a235a28d4e3846d9e71` on `release/attendance-compat-default-off`; its application changes are in parent commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`, and the documentation-only follow-up is not pushed. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
 
 ## Decision
 
@@ -41,7 +41,7 @@ New local engineering and decision artifacts:
 - `docs/attendance-ceo-signoff-1fdfaeb.md`
 - `docs/attendance-identity-binding-red-test-report.md`
 - `docs/attendance-auth-binding-rollout-rollback.md`
-- `docs/attendance-production-proof-2026-10-12.jpg`
+- `docs/attendance-production-proof-2026-10-12.jpg` — restricted/private production evidence; excluded from public and preview artifacts unless privacy-approved and redacted.
 - `docs/attendance-release-candidate-report.md`
 
 No migration file is modified or added by this candidate. The SQL file above is a read-only expected-red contract and must not be run against production.
@@ -50,6 +50,7 @@ No migration file is modified or added by this candidate. The SQL file above is 
 
 - `node --test tests/*.test.mjs`: **595 passed, 0 failed**.
 - `node --test tests/red/attendance-identity-binding.red.test.mjs`: **11 passed, 0 failed**.
+- Combined local behavioral verification: **606 passed, 0 failed** (595 standard tests + 11 red behavioral contracts). The red SQL contract remains review-only and was not executed.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
 - `git diff --check`: clean after the documentation-only whitespace cleanup; Git may still print Windows LF/CRLF normalization notices, which are not content warnings.
 - `node --check` for the new runtime and red tests: passed.
@@ -62,19 +63,28 @@ The local checks cover both modes of the attendance Auth-binding flag: default-O
 
 The sole external dependency is Vercel preview authorization. The authenticated connector can see the `larsa-eningeering` project (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team `team_lg17gfhawQFaFbcXXzRUBvIH`, but it currently lacks the effective permission to create and list/inspect deployments. The API returned HTTP 403 for both `POST /v13/deployments` and deployment listing. No preview URL exists. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate.
 
-After that permission is granted, run this checklist from a clean checkout of commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`:
+After that permission is granted, run this checklist from a clean checkout of release tip `8a0ee8ddb174656ae1669a235a28d4e3846d9e71`:
 
 ```powershell
 $team = "team_lg17gfhawQFaFbcXXzRUBvIH"
 $project = "larsa-eningeering"
+$commit = "8a0ee8ddb174656ae1669a235a28d4e3846d9e71"
 git status --short
-git show --no-patch 1d24435ba8e569fbe313dc5b34323e4fea9d8ebb
+git show --no-patch $commit
 vercel --scope $team link --project $project --yes
 vercel --scope $team env ls preview
-vercel --scope $team deploy . --target preview --yes
+$stage = Join-Path $env:TEMP "larsa-preview-8a0ee8d"
+New-Item -ItemType Directory -Force $stage | Out-Null
+$archive = Join-Path $env:TEMP "larsa-preview-8a0ee8d.tar"
+git archive --format=tar --output=$archive $commit
+tar -xf $archive -C $stage
+$proof = Join-Path $stage "docs/attendance-production-proof-2026-10-12.jpg"
+if (Test-Path -LiteralPath $proof) { Remove-Item -LiteralPath $proof -Force }
+if (Test-Path -LiteralPath $proof) { throw "Restricted production proof was not excluded" }
+vercel --scope $team deploy $stage --target preview --yes
 ```
 
-The preview environment must leave `NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING` unset or explicitly false; never enable it for this compatibility release. Do not print unrelated environment values. Record the returned preview hostname and verify it with the synthetic browser smoke:
+The preview environment must leave `NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING` unset or explicitly false; never enable it for this compatibility release. Do not print unrelated environment values. The staging step above intentionally excludes the restricted screenshot; no public or preview artifact may contain it without documented privacy approval and redaction. Record the returned preview hostname and verify it with the synthetic browser smoke:
 
 ```powershell
 $env:SMOKE_URL = "https://<preview-host>/"
@@ -101,7 +111,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 ## Evidence that production was not touched
 
-- The release branch is clean at commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`; the original commit remains unchanged and has not been pushed.
+- The release branch is clean at commit `8a0ee8ddb174656ae1669a235a28d4e3846d9e71`; parent application commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb` remains unchanged and neither commit has been pushed.
 - `git diff --name-only` contains no `supabase/migrations/`, `.env*`, deployment, CI, or platform configuration path.
 - The candidate tests use local source inspection, VM-transpiled modules, synthetic `example.test` identities, and reserved UUIDs. They make no Supabase or production network calls.
 - The build ran locally and produced no tracked source changes.
@@ -113,7 +123,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 1. Preserve this working tree as a review snapshot or dedicated release branch; do not use `git reset --hard` against the shared workspace.
 2. If review rejects the candidate, revert only the listed application/test/documentation patch through an approved patch or restore the pre-candidate snapshot. Leave unrelated user work untouched.
-3. Re-run the full 595-test suite and type/build checks after any rollback or selective revert.
+3. Re-run the full 606-test local behavioral verification (595 standard + 11 red behavioral; SQL contract separately) and type/build checks after any rollback or selective revert.
 
 ### If a later production rollout is authorized
 

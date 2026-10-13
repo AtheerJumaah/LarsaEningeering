@@ -19,7 +19,7 @@ export type AttendancePunchInput = {
 
 export type AttendancePunchResult = {
   outcome: "recorded" | "already" | "needs_review" | "forbidden" | "configuration_error" | "unavailable";
-  reason?: "anonymous_session" | "missing_session" | "auth_unavailable" | "identity_required";
+  reason?: "anonymous_session" | "missing_session" | "auth_unavailable" | "identity_required" | "server_authorization";
   status?: AttendancePunchInput["status"] | null;
   at?: string | null;
   eventId?: string | null;
@@ -27,6 +27,7 @@ export type AttendancePunchResult = {
   note?: string | null;
   clockedBy?: string | null;
 };
+export type AttendancePunchOptions = { isCurrent?: () => boolean };
 
 /* Compatibility switch for the identity-binding cutover. It is intentionally
    build-time configuration, not localStorage or a URL parameter: a device
@@ -42,7 +43,7 @@ export function attendanceAuthBindingEnabled(): boolean {
 
 /* The server owns the state transition. A timeout is reported as uncertain,
    never as success; a caller can safely retry with the same event id. */
-export async function recordAttendancePunch(input: AttendancePunchInput): Promise<AttendancePunchResult> {
+export async function recordAttendancePunch(input: AttendancePunchInput, options: AttendancePunchOptions = {}): Promise<AttendancePunchResult> {
   if (!supabaseConfigured()) return { outcome: "unavailable" };
   const client = getSupabaseClient();
   if (!client) return { outcome: "unavailable" };
@@ -84,6 +85,9 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
       }
       // A timed-out auth lookup must not start a late, abandoned RPC.
       if (controller.signal.aborted) return { outcome: "unavailable" as const };
+      // A stale tab/account switch must not let a late Auth response start a
+      // write under the previous employee's intent.
+      if (options.isCurrent && !options.isCurrent()) return { outcome: "unavailable" as const };
       let deviceId: string | null = null;
       try {
         deviceId = localStorage.getItem("larsaAttendanceDeviceV1") || globalThis.crypto.randomUUID();
@@ -105,9 +109,18 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         p_device_info: { id: deviceId, userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null },
       }).abortSignal(controller.signal);
       if (response.error) {
-        const code = String(response.error.code || "");
+        const code = String(response.error.code || "").toUpperCase();
+        const errorMeta = response.error as typeof response.error & { status?: unknown; statusCode?: unknown; httpStatus?: unknown };
+        const httpStatus = Number(errorMeta.status || errorMeta.statusCode || errorMeta.httpStatus || 0);
         if (code === "PGRST202" || code === "42883") return { outcome: "configuration_error" as const };
         if (code === "22023") return { outcome: "needs_review" as const };
+        /* Auth/RLS denials are terminal for this event. Retrying a denied
+           operation forever only hides an authorization defect and can turn
+           a queue into an unbounded review blind spot. Keep the original
+           event available to the caller for explicit recovery/review. */
+        if ([401, 403].includes(httpStatus) || code === "42501" || code === "PGRST301" || code === "PGRST116" || code === "UNAUTHORIZED" || code === "FORBIDDEN") {
+          return { outcome: "forbidden" as const, reason: "server_authorization" as const };
+        }
         return { outcome: "unavailable" as const };
       }
       const row = Array.isArray(response.data) ? response.data[0] : response.data;
