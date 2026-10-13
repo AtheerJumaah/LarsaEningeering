@@ -65,7 +65,6 @@ test('ledger flush uses the explicit RPC boundary and drains recorded events', a
   assert.equal(calls[0].payload.p_uid, 'fixture-staff-self-001');
   assert.equal(JSON.parse(r.data.get('larsaLedgerQueueV1')).length, 0);
 });
-
 test('RPC unavailability leaves the event pending for a later retry', async () => {
   let calls = 0;
   const client = {
@@ -77,7 +76,6 @@ test('RPC unavailability leaves the event pending for a later retry', async () =
   assert.equal(calls, 1);
   assert.deepEqual(JSON.parse(r.data.get('larsaLedgerQueueV1')), queued);
 });
-
 test('a partial flush consumes only confirmed events and preserves later pending events', async () => {
   const calls = [];
   const client = {
@@ -94,4 +92,4 @@ test('a partial flush consumes only confirmed events and preserves later pending
   assert.deepEqual(calls, ['fixture-event-already-001', 'fixture-event-pending-002']);
   assert.deepEqual(JSON.parse(r.data.get('larsaLedgerQueueV1')).map(row => row.client_event_id), ['fixture-event-pending-002']);
 });
-
+// End ledger writer runtime tests.

@@ -1,8 +1,8 @@
 # CEO Sign-off — Larsa Attendance Identity Objective
 
-**Review scope:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)  
-**Production evidence reference:** deployment `dpl_ETL1ZN8HDMnhiG1Zwih1XMEMUDG7` (reported READY for SHA `1fdfaeb`)  
-**Decision:** **Conditional sign-off for behavioral operation only; identity-binding cutover is not approved.**  
+**Review scope:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
+**Production evidence reference:** deployment `dpl_ETL1ZN8HDMnhiG1Zwih1XMEMUDG7` (reported READY for SHA `1fdfaeb`)
+**Decision:** **Conditional sign-off for behavioral operation only; identity-binding cutover is not approved.**
 **Review mode:** read-only. No production rows, permissions, policies, sign-in flows, or deployments changed.
 
 ## Verified

@@ -1,7 +1,7 @@
 # Identity-binding red test report
 
-**Scope:** local synthetic fixtures and failing contract plans only.  
-**Baseline:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad`.  
+**Scope:** local synthetic fixtures and failing contract plans only.
+**Baseline:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad`.
 **Production state:** unchanged; no Auth, mapping, permission, migration, or attendance data operation was performed.
 
 ## Artifacts

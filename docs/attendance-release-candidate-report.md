@@ -3,7 +3,7 @@
 **Owner:** CTO / Engineering Director
 **Requested by:** CEO / Chief of Staff (`/root`)
 **Baseline:** `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
-**Candidate state:** local uncommitted working tree on `main`; no commit, deployment, migration execution, production grant change, Auth enrollment, or production data change.
+**Candidate state:** local commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb` on `release/attendance-compat-default-off`; not pushed. No deployment, migration execution, production grant change, Auth enrollment, or production data change.
 
 ## Decision
 
@@ -51,12 +51,37 @@ No migration file is modified or added by this candidate. The SQL file above is 
 - `node --test tests/*.test.mjs`: **595 passed, 0 failed**.
 - `node --test tests/red/attendance-identity-binding.red.test.mjs`: **11 passed, 0 failed**.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
-- `git diff --check`: passed; only line-ending normalization warnings were reported for existing edited text files.
+- `git diff --check`: clean after the documentation-only whitespace cleanup; Git may still print Windows LF/CRLF normalization notices, which are not content warnings.
 - `node --check` for the new runtime and red tests: passed.
 - `node_modules/.bin/next.CMD build`: completed successfully; static routes `/` and `/_not-found` generated.
 - Local browser/API smoke (`tests/attendance-browser.smoke.mjs`) against `http://127.0.0.1:5199/` with Playwright-intercepted synthetic `fixture.supabase.co` Auth/RPC endpoints: **9 scenarios passed, 0 failed**.
 
 The local checks cover both modes of the attendance Auth-binding flag: default-OFF anonymous compatibility and explicit-ON non-anonymous fail-closed behavior. They also cover Auth-derived account audit actor, account/RPC queue retry retention, attendance RPC boundary use, sign-out Auth cleanup, and synthetic mapped/unmapped/anonymous/disabled/scope cases.
+
+## Preview authorization gate and command checklist
+
+The sole external dependency is Vercel preview authorization. The authenticated connector can see the `larsa-eningeering` project (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team `team_lg17gfhawQFaFbcXXzRUBvIH`, but it currently lacks the effective permission to create and list/inspect deployments. The API returned HTTP 403 for both `POST /v13/deployments` and deployment listing. No preview URL exists. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate.
+
+After that permission is granted, run this checklist from a clean checkout of commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`:
+
+```powershell
+$team = "team_lg17gfhawQFaFbcXXzRUBvIH"
+$project = "larsa-eningeering"
+git status --short
+git show --no-patch 1d24435ba8e569fbe313dc5b34323e4fea9d8ebb
+vercel --scope $team link --project $project --yes
+vercel --scope $team env ls preview
+vercel --scope $team deploy . --target preview --yes
+```
+
+The preview environment must leave `NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING` unset or explicitly false; never enable it for this compatibility release. Do not print unrelated environment values. Record the returned preview hostname and verify it with the synthetic browser smoke:
+
+```powershell
+$env:SMOKE_URL = "https://<preview-host>/"
+node tests/attendance-browser.smoke.mjs
+```
+
+If the preview artifact must be backed out before production approval, redeploy the last approved commit to a new preview target with `--target preview`; do not delete rows or change grants. A production rollback command such as `vercel --scope $team rollback <known-good-production-deployment-url>` is a separate, explicitly authorized production gate and must not be run as part of this release block.
 
 ## Browser/API smoke details
 
@@ -76,7 +101,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 ## Evidence that production was not touched
 
-- `git status` shows only the manifest above; no commit was created.
+- The release branch is clean at commit `1d24435ba8e569fbe313dc5b34323e4fea9d8ebb`; the original commit remains unchanged and has not been pushed.
 - `git diff --name-only` contains no `supabase/migrations/`, `.env*`, deployment, CI, or platform configuration path.
 - The candidate tests use local source inspection, VM-transpiled modules, synthetic `example.test` identities, and reserved UUIDs. They make no Supabase or production network calls.
 - The build ran locally and produced no tracked source changes.

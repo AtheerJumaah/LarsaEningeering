@@ -17,7 +17,6 @@ begin
     raise exception '[RED GATE B-DB-001] public.staff_auth_identity is missing';
   end if;
 end $$;
-
 do $$
 declare
   rel record;
@@ -31,7 +30,6 @@ begin
     raise exception '[RED GATE B-DB-002] mapping table must enable RLS';
   end if;
 end $$;
-
 do $$
 begin
   if not exists (
@@ -78,4 +76,4 @@ begin
     raise exception '[RED GATE E-DB-001] direct attendance INSERT grant still exists';
   end if;
 end $$;
-
+-- End expected-red SQL contract.

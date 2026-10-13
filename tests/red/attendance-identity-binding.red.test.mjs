@@ -59,4 +59,3 @@ for (const fixture of identityBindingCases) {
     if (fixture.expected.outcome === 'forbidden') assert.match(fixture.expected.reason, /^[a-z_]+$/);
   });
 }
-

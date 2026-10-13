@@ -1,9 +1,9 @@
 # Larsa Engineering Organization and Standard Operating Procedure
 
-**Owner:** CTO / Engineering Director  
-**Accountable executive:** CEO / Chief of Staff (`/root`)  
-**Board oversight:** Atheer Jumaah, Board Director  
-**Status:** Operating baseline; applies to development, QA, security, releases, and incidents.  
+**Owner:** CTO / Engineering Director
+**Accountable executive:** CEO / Chief of Staff (`/root`)
+**Board oversight:** Atheer Jumaah, Board Director
+**Status:** Operating baseline; applies to development, QA, security, releases, and incidents.
 **Scope:** Larsa Accounting / Engineering Control application, including the Next/Vinext app, Supabase database/RLS/RPCs, attendance and timesheet workflows, payroll/accounting surfaces, and deployment configuration.
 
 ## 1. Engineering organization
@@ -143,4 +143,3 @@ Retain PR reviews, design notes, migration and privilege diffs, test output, rel
 3. Add a production-safe attendance parity/duplicate-event dashboard and alert thresholds for latency, pool exhaustion, 5xx/504s, queue depth, and status divergence.
 4. Maintain a single ownership map for each route, RPC, migration, and critical calculator, including backup reviewer and incident contact.
 5. Close the remaining device/sleep/mobile and live manager-correction evidence gaps, with synthetic or designated diagnostic accounts only.
-

@@ -1,8 +1,8 @@
 # Larsa attendance identity binding — Gate A decision package
 
-**To:** Atheer Jumaah, Board Director  
-**From:** CTO / Engineering Director  
-**Date:** 2026-10-13  
+**To:** Atheer Jumaah, Board Director
+**From:** CTO / Engineering Director
+**Date:** 2026-10-13
 **Decision requested:** whether the evidence and controls are sufficient to begin Gate B shadow enrollment.
 
 ## Executive decision

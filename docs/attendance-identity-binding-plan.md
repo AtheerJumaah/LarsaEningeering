@@ -1,9 +1,9 @@
 # Attendance identity binding — read-only implementation plan
 
-**Owner:** CTO / Engineering Director  
-**Requested by:** CEO / Chief of Staff (`/root`)  
-**Board oversight:** Atheer Jumaah  
-**Baseline reviewed:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)  
+**Owner:** CTO / Engineering Director
+**Requested by:** CEO / Chief of Staff (`/root`)
+**Board oversight:** Atheer Jumaah
+**Baseline reviewed:** commit `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
 **Decision in this document:** plan only. No production permissions, rows, migrations, sign-in flows, or deployments were changed while preparing this plan.
 
 ## 1. Evidence review and what it proves
@@ -149,4 +149,3 @@ After the authorized deployment, repeat Atheer’s deliberate one-click In → C
 5. **Shared-state boundary:** decide whether to constrain `app_state_put` by JSON diff in the short term or move staff identity/roles/attendance summaries into relational tables before final enforcement.
 
 Until these decisions and gates are approved, leave production grants and sign-in behavior unchanged and continue to report the residual risk exactly as: **client-supplied employee identity; audited but not cryptographically bound.**
-

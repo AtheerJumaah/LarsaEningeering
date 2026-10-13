@@ -173,11 +173,10 @@ export const identityBindingCases = Object.freeze([
     expected: { outcome: 'forbidden', reason: 'target_out_of_scope' },
   }),
 ]);
-
 export const enrollmentCases = Object.freeze([
   Object.freeze({ id: 'ENROLL-SELF-001', staff: syntheticStaff.self, auth: syntheticAuth.self, expected: 'eligible' }),
   Object.freeze({ id: 'ENROLL-DISABLED-001', staff: syntheticStaff.disabled, auth: syntheticAuth.unmapped, expected: 'excluded_offboarded' }),
   Object.freeze({ id: 'ENROLL-BLANK-001', staff: syntheticStaff.blankEmail, auth: syntheticAuth.unmapped, expected: 'blocked_blank_email' }),
   Object.freeze({ id: 'ENROLL-COLLISION-001', staff: syntheticStaff.self, auth: syntheticAuth.collision, expected: 'blocked_auth_collision' }),
 ]);
-
+// End synthetic attendance identity fixtures.
