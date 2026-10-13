@@ -18714,7 +18714,7 @@ function QuickClock({
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
   const clockedIn = (pendingPunch?.status || latestPunch?.status) === "In";
   const actionMode = pendingPunch?.work_mode || latestPunch?.type || mode;
-  const reviewActions = user ? parseStore(`larsaAttendancePunchReviewV1:${user.id}`) : [];
+  const reviewActions = user ? readAttendanceReview(user.id) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
@@ -18768,7 +18768,20 @@ function QuickClock({
 
       <section className="clock-face">
         {pending.length > 0 && <p role="status">Pending synchronization: {pending.length} action{pending.length === 1 ? "" : "s"}. Your original punch times are saved on this device, but not yet confirmed by the server. Reconnect; no extra click is needed.</p>}
-        {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
+        {reviewActions.length > 0 && (
+          <div role="alert" className="attendance-review-notice">
+            <p>{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>
+            <ul>
+              {reviewActions.slice(0, 5).map((event) => (
+                <li key={event.client_event_id} data-testid="attendance-review-event">
+                  {event.status} · {event.occurred_at} · event {event.client_event_id}
+                </li>
+              ))}
+            </ul>
+            {reviewActions.length > 5 && <small>{reviewActions.length - 5} more held action{reviewActions.length - 5 === 1 ? "" : "s"} remain in the review handoff.</small>}
+            <button type="button" className="btn small" onClick={() => setShowCorrection(true)}>Open correction</button>
+          </div>
+        )}
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
           <small>{open ? "Time on shift" : "Current time"}</small>
