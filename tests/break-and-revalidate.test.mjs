@@ -72,7 +72,8 @@ test("the engine re-reads before it decides a break, and hands it over", () => {
 });
 
 test("a tab left open revalidates on a timer, not only on an edge", () => {
-  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate"\);\s*\n\s*\}, 15_000\);/);
+  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate"\);\s*\n\s*\}, 3_000\);/);
+  assert.match(sync, /three-second cadence keeps cross-device clock\s+status bounded/);
   assert.match(sync, /clearInterval\(revalidateTimer\);/);
   // The existing edges stay — the timer is an addition, not a replacement.
   assert.match(sync, /document\.addEventListener\("visibilitychange", onVisible\);/);

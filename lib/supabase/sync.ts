@@ -546,9 +546,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      timer as well — cheap, because the stamp probe above finds nothing to
      fetch when nothing changed. Hidden tabs skip it: they refresh on the
      visibilitychange that brings them back. */
+  /* Realtime remains the primary path. This visible-tab stamp probe is the
+     safety net for phones/browsers whose websocket is delayed or unavailable.
+     It only selects store_key + updated_at (never the ~840 KB staff blob when
+     nothing changed), so a three-second cadence keeps cross-device clock
+     status bounded without turning every tick into a full data download. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate");
-  }, 15_000);
+  }, 3_000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
