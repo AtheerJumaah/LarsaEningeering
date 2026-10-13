@@ -68,7 +68,7 @@ The local checks cover both modes of the attendance Auth-binding flag: default-O
 
 ## Preview authorization gate and command checklist
 
-The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`). The pushed branch `release/attendance-compat-default-off` is verified locally at commit `566ae71`. The current Preview is deployment-protected, so authenticated application-level testing still requires an authorized Vercel session; do not broaden production permissions to satisfy this gate.
+The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`). The pushed branch `release/attendance-compat-default-off` is verified locally at commit `566ae71` and has a newer READY Preview deployment for `fcc0917`: `dpl_14rAjEz6na1T5M9fNZQHELBQzxnh`, alias `larsa-eningeering-e4dnj676m-atheer-k-jumaah.vercel.app`. The Preview is deployment-protected, so authenticated application-level testing still requires an authorized Vercel session; do not broaden production permissions to satisfy this gate.
 
 ### Preview-only prerequisites
 
