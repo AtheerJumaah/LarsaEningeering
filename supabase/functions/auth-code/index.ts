@@ -146,12 +146,18 @@ Deno.serve(async (req: Request) => {
 
     const code = genCode();
     const expires_at = new Date(Date.now() + EXPIRY_MS).toISOString();
-    const { error: insertError } = await db.from("auth_codes").insert({ email, purpose, code, expires_at });
+    const codeId = crypto.randomUUID();
+    const { error: insertError } = await db.from("auth_codes").insert({ id: codeId, email, purpose, code, expires_at });
     if (insertError) return json({ ok: false, error: "Could not create a code. Try again." });
 
     try {
       await sendCodeEmail(email, purpose, code, typeof payload.name === "string" ? payload.name : undefined);
     } catch {
+      // Do not leave an unusable code behind when the mail provider rejects
+      // the request. Otherwise the next click can hit the resend cooldown
+      // while the only live code is sitting in a mailbox that never received
+      // it.
+      await db.from("auth_codes").delete().eq("id", codeId);
       return json({ ok: false, error: "Could not send the email. Check the address and try again." });
     }
     return json({ ok: true });
