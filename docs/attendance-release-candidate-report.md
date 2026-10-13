@@ -3,7 +3,7 @@
 **Owner:** CTO / Engineering Director
 **Requested by:** CEO / Chief of Staff (`/root`)
 **Baseline:** `1fdfaebc6ce30270c799bf49b3112dcfafd937ad` (`Guard intent-free attendance punches`)
-**Candidate state:** clean pushed HEAD `b6a7f28` on `release/attendance-compat-default-off`; the application hardening is included through the parent commits, including the cross-tab retry guard. Staging schema documentation is included, while no production grant change, Auth enrollment, or production data change was made.
+**Candidate state:** clean pushed HEAD `566ae71` on `release/attendance-compat-default-off`; the application hardening is included through the parent commits, including the cross-tab retry guard and persisted review evidence. A synthetic staging-only identity contract is installed and verified; no production grant change, Auth enrollment, or production data change was made.
 
 ## Decision
 
@@ -45,12 +45,16 @@ New local engineering and decision artifacts:
 - `docs/staging-migration-allowlist.md`
 - `docs/attendance-production-proof-2026-10-12.jpg` — restricted/private production evidence; excluded from public and preview artifacts unless privacy-approved and redacted.
 - `docs/attendance-release-candidate-report.md`
+- `docs/staging-attendance-contract-run.md`
+- `supabase/staging/attendance_identity_contract.sql` (staging-only; outside production migrations)
+- `supabase/staging/attendance_identity_contract_rollback.sql` (staging-only)
+- `tests/staging-attendance-identity-contract.test.mjs`
 
-No migration file is modified or added by this candidate. The SQL file above is a read-only expected-red contract and must not be run against production.
+The staging SQL above is intentionally outside `supabase/migrations`; it was applied only to the isolated staging project and must not be run against production.
 
 ## Verification record
 
-- `node --test tests/*.test.mjs`: **603 passed, 0 failed**.
+- `node --test tests/*.test.mjs`: **609 passed, 0 failed**.
 - `node --test tests/attendance-queue-runtime.test.mjs tests/red/attendance-identity-binding.red.test.mjs`: **25 passed, 0 failed** (14 strict recovery/runtime cases plus 11 identity red contracts).
 - `node --test tests/red/attendance-strict-browser.red.mjs`: **8 passed, 0 failed** against a local synthetic Vite preview.
 - Strict local browser verification: **8 passed, 0 failed** against a local Vite preview with synthetic Supabase routes and strict Auth-binding enabled. The red SQL contracts remain review-only and were not executed.
@@ -64,7 +68,7 @@ The local checks cover both modes of the attendance Auth-binding flag: default-O
 
 ## Preview authorization gate and command checklist
 
-The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`). The pushed branch `release/attendance-compat-default-off` is verified at commit `b6a7f28`. The current Preview is deployment-protected, so authenticated application-level testing still requires an authorized Vercel session; do not broaden production permissions to satisfy this gate.
+The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`). The pushed branch `release/attendance-compat-default-off` is verified locally at commit `566ae71`. The current Preview is deployment-protected, so authenticated application-level testing still requires an authorized Vercel session; do not broaden production permissions to satisfy this gate.
 
 ### Preview-only prerequisites
 
@@ -83,15 +87,15 @@ After permission and staging values are configured, run this checklist from a cl
 $team = "team_lg17gfhawQFaFbcXXzRUBvIH"
 $project = "larsa-eningeering"
 $branch = "release/attendance-compat-default-off"
-$commit = "b6a7f28"
+$commit = "566ae71"
 git status --short
 git show --no-patch $commit
 git ls-remote --heads origin $branch
 vercel --scope $team link --project $project --yes
 vercel --scope $team env ls preview
-$stage = Join-Path $env:TEMP "larsa-preview-b6a7f28"
+$stage = Join-Path $env:TEMP "larsa-preview-566ae71"
 New-Item -ItemType Directory -Force $stage | Out-Null
-$archive = Join-Path $env:TEMP "larsa-preview-b6a7f28.tar"
+$archive = Join-Path $env:TEMP "larsa-preview-566ae71.tar"
 git archive --format=tar --output=$archive $commit
 tar -xf $archive -C $stage
 $proofs = Get-ChildItem -LiteralPath (Join-Path $stage "docs") -File -ErrorAction SilentlyContinue |
@@ -132,7 +136,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 ## Evidence that production was not touched
 
-- The release branch is clean and pushed at commit `b6a7f28`; application hardening includes strict recovery persistence and the final cross-tab retry guard.
+- The release branch is clean and pushed at commit `566ae71`; application hardening includes strict recovery persistence, the final cross-tab retry guard, and persisted review evidence. The synthetic identity contract is isolated outside production migrations.
 - `git diff --name-only` contains no `supabase/migrations/`, `.env*`, deployment, CI, or platform configuration path.
 - The candidate tests use local source inspection, VM-transpiled modules, synthetic `example.test` identities, and reserved UUIDs. They make no Supabase or production network calls.
 - The build ran locally and produced no tracked source changes.
