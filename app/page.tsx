@@ -4654,7 +4654,7 @@ export default function Home() {
               `);
             }
           } catch { /* engine still booting; it reads the fresh store on its own first render */ }
-        }, 350);
+        }, 100);
       },
       onStatusChange: (status) => {
         /* Once the shared blob has been pulled, restore anything the durable
