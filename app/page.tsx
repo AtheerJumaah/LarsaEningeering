@@ -18759,17 +18759,12 @@ function QuickClock({
     const today = dateInputValue(new Date());
     return mine.filter((session) => {
       const date = session.date;
-      if (period === "week") return isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel();
       if (period === "month") return date.slice(0, 7) === today.slice(0, 7);
       return withinDates(date, from, to);
     });
   })();
   const selectedSummary = summarizeClockHours(selectedPeriodSessions);
-  const selectedPeriodLabel = period === "week"
-    ? "This week"
-    : period === "month"
-      ? "This month"
-      : "Selected period";
+  const selectedPeriodLabel = period === "month" ? "This month" : "Custom range";
 
   return (
     <div className="native-scroll clock-scroll">
@@ -19125,12 +19120,15 @@ function QuickClock({
       </section>
 
       <section className="hours-breakdown">
-        <div className="section-head">
-          <div><span className="eyebrow">My hours</span><h3>Office, online, and site</h3></div>
-          <div className="period-picker">
-            {([["week", "This week"], ["month", "This month"], ["custom", "Custom"]] as [string, string][]).map(([value, label]) => (
+        <div className="section-head hours-summary-head">
+          <div><span className="eyebrow">My hours</span><h3>Hours by work mode</h3><p>Net worked time, compared across today, this week, and your selected period.</p></div>
+          <div className="period-control">
+            <span>Selected period</span>
+            <div className="period-picker" role="group" aria-label="Selected period">
+            {([["month", "This month"], ["custom", "Custom range"]] as [string, string][]).map(([value, label]) => (
               <button type="button" key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{label}</button>
             ))}
+            </div>
           </div>
         </div>
         {period === "custom" && (
@@ -19140,9 +19138,14 @@ function QuickClock({
           </div>
         )}
         <div className="hours-summary-wrap">
-          <table className="hours-summary-table">
+          <table className="hours-summary-table" aria-label="Worked hours by work mode">
             <thead>
-              <tr><th scope="col">Work mode</th><th scope="col">Today</th><th scope="col">This week</th><th scope="col">{selectedPeriodLabel}</th></tr>
+              <tr>
+                <th scope="col"><span>Work mode</span><small>Net time</small></th>
+                <th scope="col"><span>Today</span><small>Current day</small></th>
+                <th scope="col"><span>This week</span><small>Monday–Sunday</small></th>
+                <th scope="col"><span>Period</span><small>{selectedPeriodLabel}</small></th>
+              </tr>
             </thead>
             <tbody>
               {(["online", "office", "site"] as const).map((tone) => (
