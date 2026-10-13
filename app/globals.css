@@ -2164,6 +2164,20 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .hours-mode b { font-size: 20px; font-weight: 900; color: #17181b; font-variant-numeric: tabular-nums; }
 .unified-app.dark .hours-mode b { color: #f4f5f7; }
 .hours-mode em { font-style: normal; font-size: 11px; font-weight: 700; color: #6b7280; }
+.hours-summary-wrap { max-width: 100%; overflow-x: auto; border: 1px solid #e6e8ec; border-radius: 18px; background: #fff; }
+.unified-app.dark .hours-summary-wrap { border-color: #272b33; background: #16181d; }
+.hours-summary-table { width: 100%; min-width: 620px; border-collapse: collapse; table-layout: fixed; }
+.hours-summary-table th, .hours-summary-table td { padding: 14px 16px; border-bottom: 1px solid #eceef2; text-align: right; font-variant-numeric: tabular-nums; }
+.hours-summary-table thead th { color: #7a8190; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.hours-summary-table thead th:first-child, .hours-summary-table tbody th { text-align: left; }
+.hours-summary-table tbody th { color: #17181b; font-size: 13px; font-weight: 850; }
+.hours-summary-table tbody td { color: #17181b; font-size: 15px; font-weight: 850; }
+.hours-summary-table tbody tr:last-child th, .hours-summary-table tbody tr:last-child td { border-bottom: 0; }
+.hours-summary-table .mode-chip { display: inline-flex; }
+.hours-summary-total th, .hours-summary-total td { background: #f6f7f9; font-weight: 950; }
+.unified-app.dark .hours-summary-table th, .unified-app.dark .hours-summary-table td { border-bottom-color: #272b33; }
+.unified-app.dark .hours-summary-table tbody th, .unified-app.dark .hours-summary-table tbody td { color: #f4f5f7; }
+.unified-app.dark .hours-summary-total th, .unified-app.dark .hours-summary-total td { background: #21252d; }
 .clock-portals .portal-amber .module-orb { background: #fde5cd; color: #8a5300; }
 .clock-portals { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 1180px) { .clock-portals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -2851,7 +2865,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
    three gaps overflows it, which orphaned the last card. Two columns give a
    symmetric 2x2 instead, at every width. */
 .clock-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (min-width: 900px) { .clock-totals { width: min(100%, 620px); grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .clock-totals { width: min(100%, 460px); grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .clock-break-note { margin: 10px 0 0; width: min(100%, 460px); font-size: 12px; font-weight: 700; color: #7a8190; text-align: center; }
 .dark .clock-break-note { color: #8a919d; }
 
