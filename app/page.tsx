@@ -18363,6 +18363,7 @@ function QuickClock({
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
+  const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
   /* Once a shift is open, the selected mode is no longer a device-local
      preference. It is part of the authoritative punch that all devices must
      display. Keep the local selection for the next Clock In only, but make the
@@ -18411,12 +18412,16 @@ function QuickClock({
         <div>
           <span className="eyebrow">{greeting()}</span>
           <h2>{user?.name?.split(/\s+/)[0] || "Welcome"}</h2>
-          <p>{open
+          <p>{pendingStatus
+            ? `Clock ${pendingStatus === "In" ? "in" : "out"} pending synchronization`
+            : open
             ? `Clocked in since ${new Date(open.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${open.mode}`
             : "You are not clocked in. Choose where you are working, then tap the button."}</p>
         </div>
-        <span className={open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
-          <Radio size={16} /> {open ? `On the clock · ${open.mode}` : "Off the clock"}
+        <span className={pendingStatus ? "access-pill" : open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
+          <Radio size={16} /> {pendingStatus
+            ? `Pending · Clock ${pendingStatus === "In" ? "in" : "out"}`
+            : open ? `On the clock · ${open.mode}` : "Off the clock"}
         </span>
       </section>
 
@@ -18425,8 +18430,8 @@ function QuickClock({
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
-          <small>{open ? "Time on shift" : "Current time"}</small>
-          <b>{open ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</b>
+          <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
+          <b>{open && !pendingStatus ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</b>
           <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }) : ""}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
@@ -18453,7 +18458,7 @@ function QuickClock({
         <button
           type="button"
           className={`clock-punch ${clockedIn ? "out" : `in tone-${modeTone(mode)}`}`}
-          disabled={punching}
+          disabled={punching || Boolean(pendingStatus)}
           onClick={async () => {
             if (punching) return;
             setPunching(true);

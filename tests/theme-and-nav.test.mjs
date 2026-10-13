@@ -86,7 +86,7 @@ test("clocking yourself in and out is available immediately and deduplicated by 
   assert.match(page, /const punchClock = useCallback/);
   assert.match(page, /const punchBreak = useCallback/);
   const button = page.slice(page.indexOf('className={`clock-punch'), page.indexOf('</button>', page.indexOf('className={`clock-punch')));
-  assert.match(button, /disabled=\{punching\}/);
+  assert.match(button, /disabled=\{punching \|\| Boolean\(pendingStatus\)\}/);
   assert.doesNotMatch(button, /clockReady/);
   assert.match(page, /await recordAttendancePunch\(event\)/);
 });
