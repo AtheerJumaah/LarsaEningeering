@@ -48,50 +48,68 @@ No migration file is modified or added by this candidate. The SQL file above is 
 
 ## Verification record
 
-- `node --test tests/*.test.mjs`: **595 passed, 0 failed**.
-- `node --test tests/red/attendance-identity-binding.red.test.mjs`: **11 passed, 0 failed**.
-- Combined local behavioral verification: **606 passed, 0 failed** (595 standard tests + 11 red behavioral contracts). The red SQL contract remains review-only and was not executed.
+- `node --test tests/*.test.mjs`: **602 passed, 0 failed**.
+- `node --test tests/red/attendance-strict-browser.red.mjs`: **8 passed, 0 failed** against a local synthetic Vite preview.
+- Combined local behavioral verification: **610 passed, 0 failed** (602 standard tests + 8 red browser contracts). The red SQL contracts remain review-only and were not executed.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
 - `git diff --check`: clean after the documentation-only whitespace cleanup; Git may still print Windows LF/CRLF normalization notices, which are not content warnings.
 - `node --check` for the new runtime and red tests: passed.
-- `node_modules/.bin/next.CMD build`: completed successfully; static routes `/` and `/_not-found` generated.
-- Local browser/API smoke (`tests/attendance-browser.smoke.mjs`) against `http://127.0.0.1:5199/` with Playwright-intercepted synthetic `fixture.supabase.co` Auth/RPC endpoints: **9 scenarios passed, 0 failed**.
+- `node_modules/.bin/tsc.CMD --noEmit`: passed with no diagnostics. The repository's `npm`/bash build wrapper was unavailable in this Windows shell; no deployment build was claimed here.
+- Local strict browser/API smoke (`tests/red/attendance-strict-browser.red.mjs`) against `http://127.0.0.1:5201/` with Playwright-intercepted synthetic `fixture.supabase.co` Auth/RPC endpoints: **8 scenarios passed, 0 failed**.
 
 The local checks cover both modes of the attendance Auth-binding flag: default-OFF anonymous compatibility and explicit-ON non-anonymous fail-closed behavior. They also cover Auth-derived account audit actor, account/RPC queue retry retention, attendance RPC boundary use, sign-out Auth cleanup, and synthetic mapped/unmapped/anonymous/disabled/scope cases.
 
 ## Preview authorization gate and command checklist
 
-The sole external dependency is Vercel preview authorization. The authenticated connector can see the `larsa-eningeering` project (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team `team_lg17gfhawQFaFbcXXzRUBvIH`, but it currently lacks the effective permission to create and list/inspect deployments. The API returned HTTP 403 for both `POST /v13/deployments` and deployment listing. No preview URL exists. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate.
+The sole external dependency is Vercel preview authorization. The target is project `larsa-eningeering` (`prj_bKC7SSpWkrYs9LuZIii8X2aFcWqk`) in team scope `team_lg17gfhawQFaFbcXXzRUBvIH`. The pushed branch `release/attendance-compat-default-off` is verified at commit `704ef3fce3369872d6586e7fe217adb6ac12ac8c`. A Vercel account/connector with project-scoped preview deployment create plus deployment list/inspect permission is required; do not broaden production permissions to satisfy this gate. There is no local `.vercel/project.json` and the `vercel` CLI was not available in this shell, so no deployment or environment inspection was attempted.
 
-After that permission is granted, run this checklist from a clean checkout of release tip `8a0ee8ddb174656ae1669a235a28d4e3846d9e71`:
+### Preview-only prerequisites
+
+Claude must configure these values in the Vercel **Preview** environment only, using an isolated synthetic Supabase project:
+
+- `NEXT_PUBLIC_SUPABASE_URL`: staging project URL; never `larsa-control`.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`: staging project's public anon key; never a production key.
+- `NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING`: unset or `false` for this default-OFF compatibility candidate. Do not set `true`, `1`, `on`, or `enabled`.
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`: optional, only if synthetic push testing is required; never use a production VAPID key.
+
+Do not configure `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, production Supabase service-role keys, or other secrets in Vercel for this preview. The Vercel build must use `npm run build:vercel` with `LARSA_TARGET` unset. Confirm the Preview environment variable names/targets without printing values.
+
+After permission and staging values are configured, run this checklist from a clean checkout of the pushed branch:
 
 ```powershell
 $team = "team_lg17gfhawQFaFbcXXzRUBvIH"
 $project = "larsa-eningeering"
-$commit = "8a0ee8ddb174656ae1669a235a28d4e3846d9e71"
+$branch = "release/attendance-compat-default-off"
+$commit = "704ef3fce3369872d6586e7fe217adb6ac12ac8c"
 git status --short
 git show --no-patch $commit
+git ls-remote --heads origin $branch
 vercel --scope $team link --project $project --yes
 vercel --scope $team env ls preview
-$stage = Join-Path $env:TEMP "larsa-preview-8a0ee8d"
+$stage = Join-Path $env:TEMP "larsa-preview-704ef3f"
 New-Item -ItemType Directory -Force $stage | Out-Null
-$archive = Join-Path $env:TEMP "larsa-preview-8a0ee8d.tar"
+$archive = Join-Path $env:TEMP "larsa-preview-704ef3f.tar"
 git archive --format=tar --output=$archive $commit
 tar -xf $archive -C $stage
-$proof = Join-Path $stage "docs/attendance-production-proof-2026-10-12.jpg"
-if (Test-Path -LiteralPath $proof) { Remove-Item -LiteralPath $proof -Force }
-if (Test-Path -LiteralPath $proof) { throw "Restricted production proof was not excluded" }
+$proofs = Get-ChildItem -LiteralPath (Join-Path $stage "docs") -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -match "(?i)(production-proof|screenshot)" }
+$proofs | Remove-Item -Force
+$remainingProofs = Get-ChildItem -LiteralPath $stage -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -match "(?i)(production-proof|screenshot)" }
+if ($remainingProofs) { throw "Restricted proof/screenshot remains in preview artifact" }
 vercel --scope $team deploy $stage --target preview --yes
 ```
 
-The preview environment must leave `NEXT_PUBLIC_LARSA_ATTENDANCE_AUTH_BINDING` unset or explicitly false; never enable it for this compatibility release. Do not print unrelated environment values. The staging step above intentionally excludes the restricted screenshot; no public or preview artifact may contain it without documented privacy approval and redaction. Record the returned preview hostname and verify it with the synthetic browser smoke:
+Do not print unrelated environment values. The staging step intentionally excludes the restricted production-proof screenshot; no public or preview artifact may contain it without documented privacy approval and redaction. Record the returned preview hostname and verify it with the synthetic browser smoke:
 
 ```powershell
-$env:SMOKE_URL = "https://<preview-host>/"
-node tests/attendance-browser.smoke.mjs
+$env:STRICT_SMOKE_URL = "https://<preview-host>/"
+node --test tests/red/attendance-strict-browser.red.mjs
 ```
 
-If the preview artifact must be backed out before production approval, redeploy the last approved commit to a new preview target with `--target preview`; do not delete rows or change grants. A production rollback command such as `vercel --scope $team rollback <known-good-production-deployment-url>` is a separate, explicitly authorized production gate and must not be run as part of this release block.
+### Preview rollback / stop conditions
+
+If preview verification fails, do not promote or attach the preview to `larsaeng.app`. Preserve the failed URL and logs, then redeploy the last approved compatibility commit to a new Preview deployment using the same screenshot exclusion and staging-only environment checks. Do not delete rows, run migrations, change grants, or roll back Supabase state. A production rollback command such as `vercel --scope $team rollback <known-good-production-deployment-url>` is a separate, explicitly authorized production gate and must not be run as part of this block.
 
 ## Browser/API smoke details
 
