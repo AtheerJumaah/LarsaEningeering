@@ -18707,7 +18707,8 @@ function QuickClock({
   /* Only the "Recent" window is capped; a chosen period shows everything. */
   const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
   const [now, setNow] = useState<Date | null>(null);
-  const [period, setPeriod] = useState("week");
+  // Keep the third summary column distinct from the always-visible weekly column.
+  const [period, setPeriod] = useState("month");
   const monthStart = new Date(); monthStart.setDate(1);
   const [from, setFrom] = useState(dateInputValue(monthStart));
   const [to, setTo] = useState(dateInputValue(new Date()));
