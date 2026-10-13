@@ -53,7 +53,7 @@ test("a trim lands on the selected session's own records, is audited, and is pus
   const body = page.slice(page.indexOf("const trimSession = useCallback"), page.indexOf("Removes a session outright"));
   // In-place correction of THIS session's clock-out — same id, stamped.
   assert.match(body, /outLog\.time = nextOutIso;/);
-  assert.match(body, /const stamp = `Adjusted by \$\{actor\.name\} on \$\{new Date\(\)\.toLocaleDateString\(\)\}`;/);
+  assert.match(body, /const stamp = `Adjusted by \$\{actor\.name\} on \$\{new Date\(\)\.toLocaleDateString\(undefined, \{ timeZone: ATTENDANCE_TIME_ZONE \}\)\}`;/);
   // Closing an open session appends a collision-proof punch and lowers the
   // in-log's active flag — the punches themselves are never rewritten.
   assert.match(body, /id: `l\$\{uid\}\$\{Date\.now\(\)\}\$\{Math\.random\(\)\}`, uid, type: inLog\.type \|\| "Office", status: "Out",/);

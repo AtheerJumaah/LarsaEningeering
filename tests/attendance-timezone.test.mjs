@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   ATTENDANCE_TIME_ZONE,
   attendanceDateKey,
+  attendanceDateTimeInput,
   attendanceMonthKey,
+  attendanceWallDateTimeUtc,
+  attendanceWallTimeUtc,
   attendanceWeekKey,
   splitAttendanceInterval,
   validAttendanceTimeZone,
@@ -39,4 +43,24 @@ test("DST changes do not create a false extra calendar segment", () => {
 test("an invalid configured zone falls back safely to the proposed canonical zone", () => {
   assert.equal(validAttendanceTimeZone("Not/AZone"), false);
   assert.equal(attendanceDateKey("2026-07-01T04:30:00.000Z", "Not/AZone"), "2026-06-30");
+});
+
+test("correction wall times become UTC instants using Central standard and daylight offsets", () => {
+  assert.equal(attendanceWallTimeUtc("2026-01-15", "09:00"), "2026-01-15T15:00:00.000Z");
+  assert.equal(attendanceWallTimeUtc("2026-07-01", "09:00"), "2026-07-01T14:00:00.000Z");
+  assert.equal(attendanceWallTimeUtc("2026-07-01", "09:00", "Asia/Baghdad"), "2026-07-01T06:00:00.000Z");
+});
+
+test("datetime-local attendance controls round-trip in the canonical zone", () => {
+  const instant = "2026-07-01T14:00:00.000Z";
+  assert.equal(attendanceDateTimeInput(instant), "2026-07-01T09:00");
+  assert.equal(attendanceWallDateTimeUtc(attendanceDateTimeInput(instant)), instant);
+});
+
+test("native correction and attendance status display stay on the canonical policy", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /attendanceWallTimeUtc\(draft\.date, draft\.from, ATTENDANCE_TIME_ZONE\)/);
+  assert.match(page, /timeZone: ATTENDANCE_TIME_ZONE/);
+  assert.match(page, /function attendanceTime\(instant: string \| Date\)/);
+  assert.match(page, /attendanceTime\(openClock\.clockIn\)/);
 });

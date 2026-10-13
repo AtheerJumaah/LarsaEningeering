@@ -51,7 +51,7 @@ test("clock fixes stamp both punches, refuse impossible times, and append missin
   // punches themselves are stamped with — a device set minutes wrong must
   // neither refuse a valid fix nor accept a future one.
   assert.match(page, /notify\("Clock-out has to be after clock-in\."\); return false; \}\s*\n\s*if \(outAt !== null && outAt > serverNowMs\(\)\)/);
-  assert.match(page, /const stamp = `Fixed by \$\{actor\.name\} on \$\{new Date\(\)\.toLocaleDateString\(\)\}`;/);
+  assert.match(page, /const stamp = `Fixed by \$\{actor\.name\} on \$\{new Date\(\)\.toLocaleDateString\(undefined, \{ timeZone: ATTENDANCE_TIME_ZONE \}\)\}`;/);
   assert.match(page, /const stamp = `Manual entry by \$\{actor\.name\}`;/);
   // Added pairs use position-suffixed ids so both logs never collide.
   assert.match(page, /id: `l\$\{Date\.now\(\)\}\$\{position\}`, uid, type: mode \|\| "Office", status,/);

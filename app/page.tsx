@@ -9,7 +9,7 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
-import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
+import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
@@ -2362,6 +2362,21 @@ type HomeSummary = {
   roleCards: RoleCard[];
 };
 
+function attendanceTime(instant: string | Date) {
+  const date = instant instanceof Date ? instant : new Date(instant);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: ATTENDANCE_TIME_ZONE });
+}
+
+function attendanceDateTime(instant: string | Date) {
+  const date = instant instanceof Date ? instant : new Date(instant);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { timeZone: ATTENDANCE_TIME_ZONE });
+}
+
+function attendanceDateLabel(dateKey: string) {
+  const date = new Date(`${dateKey}T12:00:00Z`);
+  return Number.isNaN(date.getTime()) ? dateKey : date.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: ATTENDANCE_TIME_ZONE });
+}
+
 function shiftLabel(entries: { start?: string; end?: string; name?: string }[]) {
   return entries
     .map((entry) => `${entry.start || "--"}–${entry.end || "--"}`)
@@ -2407,7 +2422,7 @@ function buildHomeSummary(
       id: "shift-open",
       group: "Today",
       title: "Clocked in",
-      detail: `${openClock.mode} · started ${new Date(openClock.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      detail: `${openClock.mode} · started ${attendanceTime(openClock.clockIn)}`,
       meta: `${formatHours(openClock.hours)} so far`,
       tone: "done",
       itemId: "quick-clock",
@@ -7245,7 +7260,7 @@ export default function Home() {
       return false;
     }
     if (lastOutcome === "already") {
-      const since = lastAt ? ` since ${new Date(lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+      const since = lastAt ? ` since ${attendanceTime(lastAt)}` : "";
       if (localRefreshFailed) notify(`Your status is ${lastStatus === "In" ? "clocked in" : "clocked out"}${since} on the server, but this device could not refresh. Reload the page.`);
       else if (!quiet) notify(lastStatus === "In" ? `Already clocked in${since}. Your status has been refreshed.` : lastStatus === "Out" ? `Already clocked out${since}. Your status has been refreshed.` : lastStatus === "Break Start" ? "Already on a break. Your status has been refreshed." : "Break already ended. Your status has been refreshed.");
       return false;
@@ -7460,7 +7475,7 @@ export default function Home() {
     const { inLog, outLog } = plan.session;
     const previousOut = outLog?.time || null;
     const nextOutIso = new Date(newClockOut).toISOString();
-    const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString()}`;
+    const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString(undefined, { timeZone: ATTENDANCE_TIME_ZONE })}`;
     if (outLog) {
       /* This session's own clock-out, corrected in place: same record id,
          earlier time, the adjustment stamped beside any note it carried.
@@ -7729,8 +7744,8 @@ export default function Home() {
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const inAt = new Date(newIn).getTime();
-    const outAt = newOut ? new Date(newOut).getTime() : null;
+    const inAt = Date.parse(attendanceWallDateTimeUtc(newIn, ATTENDANCE_TIME_ZONE));
+    const outAt = newOut ? Date.parse(attendanceWallDateTimeUtc(newOut, ATTENDANCE_TIME_ZONE)) : null;
     if (!Number.isFinite(inAt)) { notify("Enter a valid clock-in time."); return false; }
     if (inAt > serverNowMs()) { notify("Clock-in cannot be in the future."); return false; }
     if (outAt !== null && (!Number.isFinite(outAt) || outAt <= inAt)) { notify("Clock-out has to be after clock-in."); return false; }
@@ -7755,7 +7770,7 @@ export default function Home() {
       return false;
     }
     const previous = { clockIn: inLog.time || clockIn, clockOut: outLog?.time || null };
-    const stamp = `Fixed by ${actor.name} on ${new Date().toLocaleDateString()}`;
+    const stamp = `Fixed by ${actor.name} on ${new Date().toLocaleDateString(undefined, { timeZone: ATTENDANCE_TIME_ZONE })}`;
     inLog.time = new Date(inAt).toISOString();
     inLog.lastSeen = inLog.time;
     inLog.note = inLog.note ? `${inLog.note} · ${stamp}` : stamp;
@@ -8172,9 +8187,9 @@ export default function Home() {
     if (!store) { notify("Requests are still loading. Please try again."); return false; }
     if (!draft.date || !draft.from || !draft.to) { notify("Enter the date and both times."); return false; }
     if (draft.to === draft.from) { notify("Start and end times must differ. An earlier end time means the following day."); return false; }
-    const correctionStart = new Date(`${draft.date}T${draft.from}:00`);
-    const correctionEnd = new Date(`${draft.date}T${draft.to}:00`);
-    if (draft.to < draft.from) correctionEnd.setDate(correctionEnd.getDate() + 1);
+    const correctionStart = new Date(attendanceWallTimeUtc(draft.date, draft.from, ATTENDANCE_TIME_ZONE));
+    const endDate = draft.to < draft.from ? attendanceDateOffset(draft.date, 1) : draft.date;
+    const correctionEnd = new Date(attendanceWallTimeUtc(endDate, draft.to, ATTENDANCE_TIME_ZONE));
     if (!Number.isFinite(correctionStart.getTime()) || !Number.isFinite(correctionEnd.getTime()) || correctionEnd.getTime() > serverNowMs()) {
       notify("Correction times must be valid and in the past."); return false;
     }
@@ -8194,7 +8209,7 @@ export default function Home() {
       type: draft.kind,
       fromAt: correctionStart.toISOString(),
       toAt: correctionEnd.toISOString(),
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timeZone: ATTENDANCE_TIME_ZONE,
       uid: actor.id,
       requestType: draft.mode,
       date: draft.date,
@@ -15669,7 +15684,7 @@ function AccessCenter({
                           <tr key={`s-${session.clockIn}`}>
                             <td>{session.date}</td>
                             <td><b>Session</b><small>{session.mode}</small></td>
-                            <td>{new Date(session.clockIn).toLocaleTimeString()} → {session.open ? "open" : new Date(session.clockOut).toLocaleTimeString()}</td>
+                            <td>{attendanceTime(session.clockIn)} → {session.open ? "open" : attendanceTime(session.clockOut)}</td>
                             <td>{formatHours(session.hours)}</td>
                           </tr>
                         ))}
@@ -16728,12 +16743,10 @@ function CorrectionsCentre({
 
   const [tab, setTab] = useState<"requests" | "points" | "time">("requests");
 
-  /* datetime-local remains a device-local editing control: the stored instant
-     is never rewritten by calendar/reporting timezone policy. */
+  /* datetime-local is a wall-clock control for the canonical attendance zone;
+     its value is converted back to a UTC instant by the correction handler. */
   const toLocalInput = (iso: string) => {
-    const when = new Date(iso);
-    const pad = (value: number) => String(value).padStart(2, "0");
-    return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+    return attendanceDateTimeInput(iso, ATTENDANCE_TIME_ZONE);
   };
 
   /* -------- Requests -------- */
@@ -16998,7 +17011,7 @@ function CorrectionsCentre({
             </div>
             <div className="data-table-wrap">
               <table className="data-table"><thead><tr>
-                <th>Employee</th><th>Date</th><th>Mode</th><th>Clock in → out (your local time)</th><th>Hours</th><th>Fix</th>
+                <th>Employee</th><th>Date</th><th>Mode</th><th>Clock in → out</th><th>Hours</th><th>Fix</th>
               </tr></thead><tbody>
                 {timeRows.map((session) => {
                   const key = `${session.uid}|${session.clockIn}`;
@@ -17009,7 +17022,7 @@ function CorrectionsCentre({
                       <td>{session.date}</td>
                       <td>{session.mode}</td>
                       <td>
-                        {new Date(session.clockIn).toLocaleString()} → {session.open ? "still clocked in" : new Date(session.clockOut).toLocaleString()}
+                        {attendanceDateTime(session.clockIn)} → {session.open ? "still clocked in" : attendanceDateTime(session.clockOut)}
                         {editing && (
                           <div className="settings-fields" style={{ marginTop: 8 }}>
                             <label>Clock in<input type="datetime-local" value={sessionDraft.in} max={toLocalInput(new Date().toISOString())} onChange={(event) => setSessionDraft({ ...sessionDraft, in: event.target.value })} /></label>
@@ -17760,7 +17773,7 @@ function WeekSchedule({
   });
   const [editingCode, setEditingCode] = useState("");
   const roster = users.filter((user) => user.enabled !== false);
-  const today = WEEKDAY_NAMES[new Date().getDay()];
+  const today = WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
   const teams = [...new Set(roster.map((user) => user.department || "Unassigned"))].sort();
 
   const entriesFor = (userId: string, day: string) =>
@@ -18224,11 +18237,10 @@ function QuickClock({
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
-  /* datetime-local reads local wall time with no zone, so the stored ISO stamp
-     has to be shifted by the offset or the field shows the wrong hour. */
+  /* datetime-local is a canonical attendance wall-clock value; convert its
+     displayed UTC instant using the same policy as correction requests. */
   const toLocalInput = (iso: string) => {
-    const at = new Date(iso);
-    return new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    return attendanceDateTimeInput(iso, ATTENDANCE_TIME_ZONE);
   };
 
   // Break state is read from the same log stream, so it survives a reload and
@@ -18428,7 +18440,7 @@ function QuickClock({
           <p>{pendingStatus
             ? `Clock ${pendingStatus === "In" ? "in" : "out"} pending synchronization`
             : open
-            ? `Clocked in since ${new Date(open.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${open.mode}`
+            ? `Clocked in since ${attendanceTime(open.clockIn)} · ${open.mode}`
             : "You are not clocked in. Choose where you are working, then tap the button."}</p>
         </div>
         <span className={pendingStatus ? "access-pill" : open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
@@ -18444,8 +18456,8 @@ function QuickClock({
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
           <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
-          <b>{open && !pendingStatus ? timer : now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</b>
-          <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }) : ""}</em>
+          <b>{open && !pendingStatus ? timer : now ? attendanceTime(now) : "--:--"}</b>
+          <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE }) : ""}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
           {WORK_MODES.map((item) => (
@@ -18503,7 +18515,7 @@ function QuickClock({
         <section className="break-banner on">
           <span>
             <Coffee size={16} /> On break since{" "}
-            {new Date(onBreak.time || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {attendanceTime(onBreak.time || "")}
             {onBreak.note ? ` · ${onBreak.note}` : ""}
           </span>
           <button type="button"
@@ -18600,8 +18612,8 @@ function QuickClock({
             {(trimFrom || trimTo) && trimRows.length > 0 && (
               <p className="trim-range-note">
                 {trimRows.length} session{trimRows.length === 1 ? "" : "s"}
-                {trimFrom ? ` from ${new Date(`${trimFrom}T12:00:00`).toLocaleDateString()}` : ""}
-                {trimTo ? ` to ${new Date(`${trimTo}T12:00:00`).toLocaleDateString()}` : ""}
+                {trimFrom ? ` from ${attendanceDateLabel(trimFrom)}` : ""}
+                {trimTo ? ` to ${attendanceDateLabel(trimTo)}` : ""}
                 {" · "}{formatHours(trimRows.reduce((sum, row) => sum + row.hours, 0))} worked — all shown, pick any to trim.
               </p>
             )}
@@ -18619,7 +18631,7 @@ function QuickClock({
               return days.map((day) => (
                 <div className="trim-day" key={day.date}>
                   <div className="trim-day-head">
-                    <b>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</b>
+                    <b>{attendanceDateLabel(day.date)}</b>
                     <small>
                       {day.rows.length} session{day.rows.length === 1 ? "" : "s"} · {formatHours(day.rows.reduce((sum, row) => sum + row.hours, 0))} worked
                     </small>
@@ -18635,13 +18647,13 @@ function QuickClock({
                         already named by the picker, so rows stay clean. */}
                     {trimUser === "__team__" && <b>{session.employee}</b>}
                     <small>
-                      {new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {attendanceTime(session.clockIn)}
                       {" – "}
                       {liveOpen
                         ? "clocked in — active session"
                         : session.open || session.stale || session.unclosed
                           ? "no clock-out"
-                          : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          : attendanceTime(session.clockOut)}
                       {session.spanDays > 1 ? ` (${session.spanDays} days)` : ""}
                       {" · "}{session.stale || session.unclosed
                         ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
@@ -18657,7 +18669,8 @@ function QuickClock({
                     <div className="session-edit">
                       <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
                       <button type="button" className="primary" onClick={() => {
-                        if (trimSession(session.uid, session.clockIn, new Date(trimValue).toISOString())) setTrimming(null);
+                        const corrected = attendanceWallDateTimeUtc(trimValue, ATTENDANCE_TIME_ZONE);
+                        if (corrected && trimSession(session.uid, session.clockIn, corrected)) setTrimming(null);
                       }}>Save</button>
                       <button type="button" onClick={() => setTrimming(null)}>Cancel</button>
                       {(session.open || session.stale || session.unclosed) && (
@@ -18688,7 +18701,7 @@ function QuickClock({
                           the one-way trim alone. */}
                       {mayAdjustHours && (
                         <button type="button" className="danger" onClick={async () => {
-                          if (await dialog.confirm(`Remove ${session.employee}'s session starting ${new Date(session.clockIn).toLocaleString()}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                          if (await dialog.confirm(`Remove ${session.employee}'s session starting ${attendanceDateTime(session.clockIn)}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
                         }}>Reset</button>
                       )}
                     </div>
@@ -18742,7 +18755,7 @@ function QuickClock({
               )}
               <label>{correction.kind === "Missed Break" ? "Break started" : "From"}<input type="time" value={correction.from} onChange={(event) => setCorrection((c) => ({ ...c, from: event.target.value }))} /></label>
               <label>{correction.kind === "Missed Break" ? "Break ended" : "To"}<input type="time" value={correction.to} onChange={(event) => setCorrection((c) => ({ ...c, to: event.target.value }))} /></label>
-              <small>Times use this device’s timezone. An earlier end time means the following day; the exact instants are saved for your approver.</small>
+              <small>Times use the attendance calendar. An earlier end time means the following day; the exact instants are saved for your approver.</small>
               <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="Explain briefly — your approver sees exactly this." /></label>
             </div>
             <div className="correction-actions">
@@ -18840,7 +18853,7 @@ function QuickClock({
         </div>
         <div className="week-strip">
           {week.map((day) => {
-            const isToday = day.day === WEEKDAY_NAMES[new Date().getDay()];
+            const isToday = day.day === WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
             return (
               <div className={isToday ? "week-day today" : "week-day"} key={day.day}>
                 <small>{day.day.slice(0, 3)}</small>
@@ -18910,8 +18923,8 @@ function QuickClock({
                 <tr key={`${session.clockIn}-${index}`}>
                   <td>{session.date}</td>
                   <td><span className={`mode-chip tone-${modeTone(session.mode)}`}>{session.mode}</span></td>
-                  <td>{new Date(session.clockIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
-                  <td>{session.open ? "Open now" : new Date(session.clockOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                  <td>{attendanceTime(session.clockIn)}</td>
+                  <td>{session.open ? "Open now" : attendanceTime(session.clockOut)}</td>
                   <td>{session.stale || session.unclosed ? "Needs correction · not counted" : session.long ? "Needs review · not counted" : session.open ? `${formatHours(session.hours)} so far` : formatHours(session.hours)}</td>
                 </tr>
               ))}
