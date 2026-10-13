@@ -1364,6 +1364,36 @@ function attendancePunchQueueKey(uid: string) {
 function attendanceAuthBlockedKey(uid: string) {
   return `larsaAttendanceAuthBlockedV1:${uid}`;
 }
+function attendanceReviewKey(uid: string) {
+  return `larsaAttendancePunchReviewV1:${uid}`;
+}
+type AttendanceReviewItem = AttendancePunchInput & {
+  needs_review?: boolean;
+  review_reason?: string;
+};
+function readAttendanceReview(uid: string): AttendanceReviewItem[] {
+  const value = parseStore(attendanceReviewKey(uid));
+  return Array.isArray(value)
+    ? value.filter((event): event is AttendanceReviewItem => Boolean(
+      event
+      && typeof event.client_event_id === "string"
+      && typeof event.occurred_at === "string"
+      && event.uid === uid
+      && ["In", "Out", "Break Start", "Break End"].includes(event.status),
+    ))
+    : [];
+}
+function attendanceReviewRecovery(uid: string) {
+  const items = readAttendanceReview(uid);
+  if (!items.length) return null;
+  return {
+    uid,
+    count: items.length,
+    next: items[0],
+    phase: "review" as const,
+    message: "A delayed attendance action is still awaiting an approved correction. Its original event ID and timestamp are preserved; it will not retry automatically.",
+  };
+}
 const ATTENDANCE_ACTIVE_ACCOUNT_KEY = "larsaAttendanceActiveAccountV1";
 function saveDownload(name: string, body: string, type = "application/json") {
   const link = document.createElement("a");
@@ -7213,10 +7243,9 @@ export default function Home() {
       }
       if (result.outcome === "needs_review") {
         reviewCount++;
-        const reviewKey = `larsaAttendancePunchReviewV1:${user.id}`;
+        const reviewKey = attendanceReviewKey(user.id);
         try {
-          const review = parseStore(reviewKey);
-          const items = Array.isArray(review) ? review : [];
+          const items = readAttendanceReview(user.id);
           if (!items.some(item => item.client_event_id === event.client_event_id)) items.push({ ...event, needs_review: true, review_reason: "Original punch time conflicts with the server sequence or is outside the automatic retry window." });
           localStorage.setItem(reviewKey, JSON.stringify(items));
           setAttendanceAuthRecovery({
@@ -7243,11 +7272,11 @@ export default function Home() {
            area instead: they are terminal until an operator resolves the
            mapping/policy defect and must never retry forever. */
         const authRecovery = result.reason === "missing_session" || result.reason === "anonymous_session";
-        const holdingKey = authRecovery ? attendanceAuthBlockedKey(actor.id) : `larsaAttendancePunchReviewV1:${user.id}`;
+        const holdingKey = authRecovery ? attendanceAuthBlockedKey(actor.id) : attendanceReviewKey(user.id);
         try {
           const deniedKey = `larsaAttendancePunchDeniedV1:${actor.id}`;
           const legacyDenied = parseStore(deniedKey);
-          const held = parseStore(holdingKey);
+          const held = authRecovery ? parseStore(holdingKey) : readAttendanceReview(user.id);
           const items = [...(authRecovery && Array.isArray(legacyDenied) ? legacyDenied : []), ...(Array.isArray(held) ? held : [])]
             .filter((item, index, all) => item && typeof item.client_event_id === "string" && all.findIndex(candidate => candidate?.client_event_id === item.client_event_id) === index);
           if (!items.some(item => item.client_event_id === event.client_event_id)) {
@@ -7501,6 +7530,19 @@ export default function Home() {
   useEffect(() => {
     replayBlockedAttendanceRef.current = replayBlockedAttendance;
   }, [replayBlockedAttendance]);
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id) return;
+    /* Review handoffs are deliberately retained until an approved correction
+       resolves them. Rehydrate the visible Review action after a reload or
+       app-entry so an expired/out-of-order punch cannot be stranded as a
+       localStorage-only record. Account-scoped keys keep another employee's
+       event private during a same-browser account switch. */
+    const recovered = attendanceReviewRecovery(sessionUser.id);
+    setAttendanceAuthRecovery((current) => {
+      if (current && current.uid === sessionUser.id && current.phase !== "review") return current;
+      return recovered;
+    });
+  }, [hydrated, sessionUser?.id]);
   useEffect(() => {
     if (!hydrated || !sessionUser?.id || !attendanceAuthBindingEnabled()) return;
     /* Do not make the automatic verifier depend on the large punch callback's
@@ -10625,7 +10667,7 @@ export default function Home() {
             </ol>
           )}
           {attendanceAuthRecovery.next && (
-            <small>Next: {attendanceAuthRecovery.next.status} at {new Date(attendanceAuthRecovery.next.occurred_at).toLocaleString()} · event {attendanceAuthRecovery.next.client_event_id}</small>
+            <small data-testid="attendance-recovery-event">Next: {attendanceAuthRecovery.next.status} at {attendanceAuthRecovery.next.occurred_at} ({new Date(attendanceAuthRecovery.next.occurred_at).toLocaleString()}) · event {attendanceAuthRecovery.next.client_event_id}</small>
           )}
           <button type="button" className="primary" disabled={attendanceAuthRecovery.phase === "checking" || attendanceAuthRecovery.phase === "replaying"} onClick={() => {
             if (attendanceAuthRecovery.phase === "review") {

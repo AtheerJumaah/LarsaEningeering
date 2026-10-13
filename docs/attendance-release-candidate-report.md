@@ -50,10 +50,10 @@ No migration file is modified or added by this candidate. The SQL file above is 
 
 ## Verification record
 
-- `node --test tests/*.test.mjs`: **602 passed, 0 failed**.
-- `node --test tests/attendance-queue-runtime.test.mjs tests/red/attendance-identity-binding.red.test.mjs`: **24 passed, 0 failed** (13 strict recovery/runtime cases plus 11 identity red contracts).
+- `node --test tests/*.test.mjs`: **603 passed, 0 failed**.
+- `node --test tests/attendance-queue-runtime.test.mjs tests/red/attendance-identity-binding.red.test.mjs`: **25 passed, 0 failed** (14 strict recovery/runtime cases plus 11 identity red contracts).
 - `node --test tests/red/attendance-strict-browser.red.mjs`: **8 passed, 0 failed** against a local synthetic Vite preview.
-- Combined local behavioral verification: **610 passed, 0 failed** (602 standard tests + 8 red browser contracts). The red SQL contracts remain review-only and were not executed.
+- Combined local behavioral verification: **611 passed, 0 failed** (603 standard tests + 8 red browser contracts). The red SQL contracts remain review-only and were not executed.
 - `tsc --noEmit --pretty false`: passed with no diagnostics.
 - `git diff --check`: clean after the documentation-only whitespace cleanup; Git may still print Windows LF/CRLF normalization notices, which are not content warnings.
 - `node --check` for the new runtime and red tests: passed.
@@ -144,7 +144,7 @@ Two initial observations were test-harness conditions, not product regressions: 
 
 1. Preserve this working tree as a review snapshot or dedicated release branch; do not use `git reset --hard` against the shared workspace.
 2. If review rejects the candidate, revert only the listed application/test/documentation patch through an approved patch or restore the pre-candidate snapshot. Leave unrelated user work untouched.
-3. Re-run the 602-test standard suite, the 11 red identity contracts, and the 8 strict browser recovery scenarios separately (SQL contract separately), plus type/build checks after any rollback or selective revert.
+3. Re-run the 603-test standard suite, the 11 red identity contracts, and the 8 strict browser recovery scenarios separately (SQL contract separately), plus type/build checks after any rollback or selective revert.
 
 ### If a later production rollout is authorized
 

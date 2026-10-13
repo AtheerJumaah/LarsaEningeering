@@ -7,8 +7,12 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
   const page=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
   const source=ts.createSourceFile('page.tsx',page,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const declarations=new Map();
-  function visit(node){if(ts.isVariableDeclaration(node)&&['punchClock','punchClockGuarded'].includes(node.name.getText(source)))declarations.set(node.name.getText(source),node.getText(source));ts.forEachChild(node,visit);}
-  visit(source);assert.equal(declarations.size,2);
+  function visit(node){
+    if(ts.isVariableDeclaration(node)&&['punchClock','punchClockGuarded'].includes(node.name.getText(source)))declarations.set(node.name.getText(source),node.getText(source));
+    if(ts.isFunctionDeclaration(node)&&['attendanceReviewKey','readAttendanceReview'].includes(node.name?.getText(source)))declarations.set(node.name.getText(source),node.getText(source));
+    ts.forEachChild(node,visit);
+  }
+  visit(source);assert.equal(declarations.size,4);
   const user={id:'e',name:'Employee',enabled:true};
   const data=new Map([['larsaStaffV8',JSON.stringify({users:[user],logs:[]})]]);
   const events=[];const confirmCalls=[];const recovery=[];let release;
@@ -24,7 +28,7 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
       return review&&events.length===1?{outcome:'needs_review'}:{outcome:'recorded',status:event.status,at:event.occurred_at,eventId:event.client_event_id};
     },
   });
-  vm.runInContext(ts.transpileModule(`const ${declarations.get('punchClock')};const ${declarations.get('punchClockGuarded')};this.guard=punchClockGuarded;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  vm.runInContext(ts.transpileModule(`${declarations.get('attendanceReviewKey')};${declarations.get('readAttendanceReview')};const ${declarations.get('punchClock')};const ${declarations.get('punchClockGuarded')};this.guard=punchClockGuarded;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   return {context,data,events,confirmCalls,recovery,release:()=>release()};
 }
 const settle=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
@@ -178,4 +182,31 @@ test('switching accounts stops the old employee queue without discarding its ori
   w.context.sessionUserRef.current={id:'e',name:'Employee'};
   await w.context.guard('Office','ignored', 'Out',true);
   assert.equal(w.events.length,2);assert.equal(w.events[1].client_event_id,original.client_event_id);
+});
+
+test('a persisted review handoff is reconstructible after reload with exact event evidence',()=>{
+  const page=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
+  const source=ts.createSourceFile('page.tsx',page,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const declarations=new Map();
+  function visit(node){
+    if(ts.isFunctionDeclaration(node)&&['attendanceReviewKey','readAttendanceReview','attendanceReviewRecovery'].includes(node.name?.getText(source))) declarations.set(node.name.getText(source),node.getText(source));
+    ts.forEachChild(node,visit);
+  }
+  visit(source);
+  assert.equal(declarations.size,3,'review recovery helpers must exist for reload recovery');
+  const held={client_event_id:'review-reload-1',occurred_at:'2026-10-13T09:12:34.567Z',uid:'e',status:'In',needs_review:true,review_reason:'expired_needs_correction'};
+  const data=new Map([['larsaAttendancePunchReviewV1:e',JSON.stringify([held])]]);
+  const context=vm.createContext({parseStore:key=>JSON.parse(data.get(key)||'null')});
+  const code=ts.transpileModule(`${declarations.get('attendanceReviewKey')};${declarations.get('readAttendanceReview')};${declarations.get('attendanceReviewRecovery')};this.key=attendanceReviewKey;this.read=readAttendanceReview;this.recover=attendanceReviewRecovery;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  vm.runInContext(code,context);
+  assert.equal(context.key('e'),'larsaAttendancePunchReviewV1:e');
+  const items=context.read('e');
+  assert.equal(items.length,1);
+  const recovered=context.recover('e');
+  assert.equal(recovered.phase,'review');
+  assert.equal(recovered.next.client_event_id,held.client_event_id);
+  assert.equal(recovered.next.occurred_at,held.occurred_at);
+  assert.match(recovered.message,/original event ID and timestamp/i);
+  assert.match(page,/attendanceReviewRecovery\(sessionUser\.id\)/,'app entry must restore the visible review handoff');
+  assert.match(page,/data-testid="attendance-recovery-event"/,'review UI must expose the exact event evidence');
 });
