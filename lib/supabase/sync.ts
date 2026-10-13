@@ -483,8 +483,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      only for the keys that actually moved. In the common case — nothing
      changed — a refresh now costs one tiny query, which is what makes it
      affordable to run on a timer as well as on focus. */
-  async function refreshFromServer(reason: string) {
+  async function refreshFromServer(reason: string, requestedKeys: readonly SyncedKey[] = SYNCED_KEYS) {
     if (refreshing || cancelled) return;
+    const keys = requestedKeys.filter((key): key is SyncedKey =>
+      (SYNCED_KEYS as readonly string[]).includes(key),
+    );
+    if (!keys.length) return;
     refreshing = true;
     try {
       if (!bootstrapped) { await bootstrap(); return; }
@@ -492,7 +496,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       const { data: stamps, error: stampError } = await supabase
         .from("app_state")
         .select("store_key, updated_at")
-        .in("store_key", SYNCED_KEYS as readonly string[]);
+        .in("store_key", keys as readonly string[]);
       if (stampError || !Array.isArray(stamps)) throw stampError || new Error("Invalid sync response");
       const stale = stamps
         .map((row) => ({
@@ -500,12 +504,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           stamp: row.updated_at ? String(row.updated_at) : null,
         }))
         .filter(({ key, stamp }) =>
-          (SYNCED_KEYS as readonly string[]).includes(key)
+          keys.includes(key)
           /* No stamp means we cannot prove it is current, so fetch it. */
           && (!stamp || lastSeenAt.get(key) !== stamp));
       if (!stale.length) {
         options.onStatusChange?.("synced");
-        SYNCED_KEYS.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
+        keys.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
         console.log(`[larsa-sync] refresh: already current (${reason})`);
         return;
       }
@@ -517,7 +521,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       if (cancelled) return;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
-        if (!(SYNCED_KEYS as readonly string[]).includes(key)) return;
+        if (!keys.includes(key)) return;
         const stamp = row.updated_at ? String(row.updated_at) : null;
         if (stamp && lastSeenAt.get(key) === stamp) return; // already current
         applyRemote(key, row.data ?? {}, stamp);
@@ -546,14 +550,18 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      timer as well — cheap, because the stamp probe above finds nothing to
      fetch when nothing changed. Hidden tabs skip it: they refresh on the
      visibilitychange that brings them back. */
-  /* Realtime remains the primary path. This visible-tab stamp probe is the
+  /* Realtime remains the primary path. These visible-tab stamp probes are the
      safety net for phones/browsers whose websocket is delayed or unavailable.
-     It only selects store_key + updated_at (never the ~840 KB staff blob when
-     nothing changed), so a three-second cadence keeps cross-device clock
-     status bounded without turning every tick into a full data download. */
+     The general probe only selects store_key + updated_at (never the ~840 KB
+     staff blob when nothing changed), while the attendance-only probe runs
+     every second so a cross-device clock status normally converges in about a
+     second without polling every shared store at that rate. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate");
   }, 3_000);
+  const attendanceRevalidateTimer = setInterval(() => {
+    if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
+  }, 1_000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
@@ -588,6 +596,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     pushTimers.forEach((timer) => clearTimeout(timer));
     clearInterval(clockTimer);
     clearInterval(revalidateTimer);
+    clearInterval(attendanceRevalidateTimer);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
     window.removeEventListener("focus", onVisible);

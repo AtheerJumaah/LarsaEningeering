@@ -66,7 +66,7 @@ test("punches persist immediately — no debounce between the press and the back
 
 test("the app revalidates authoritative state on focus, reconnect, and realtime resubscribe", async () => {
   const sync = await read("lib/supabase/sync.ts");
-  assert.match(sync, /async function refreshFromServer\(reason: string\)/);
+  assert.match(sync, /async function refreshFromServer\(reason: string(?:, requestedKeys: readonly SyncedKey\[\] = SYNCED_KEYS)?\)/);
   assert.match(sync, /document\.addEventListener\("visibilitychange", onVisible\);/);
   assert.match(sync, /window\.addEventListener\("online", onOnline\);/);
   assert.match(sync, /if \(status === "SUBSCRIBED" && hadChannelDrop\) \{/);
