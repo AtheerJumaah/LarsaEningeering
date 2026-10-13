@@ -60,8 +60,8 @@ test("a punch a manager deleted can never answer for the person again", () => {
 
 test("both callers actually hand the removed list over", () => {
   assert.match(punch, /removed_ids: initialStore\?\.removedLogIds \|\| \[\],/);
-  assert.match(breakBody, /const confirmed = await confirmClockState\(user\.id, store\.removedLogIds \|\| \[\]\);/);
-  // The RPC excludes tombstoned ledger rows while determining current state.
+  assert.match(breakBody, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
+  // Breaks use the same RPC and therefore the same tombstone list as clocks.
   assert.match(punch, /removed_ids: initialStore\?\.removedLogIds \|\| \[\],/);
 });
 
@@ -83,16 +83,12 @@ test("clock actions have no refusal or press-again gate", () => {
 });
 
 test("breaks keep their separate pending direction guard", () => {
-  assert.match(page, /const breakRefusals = useRef<Record<string, number>>\(\{\}\);/);
-  assert.match(breakBody, /const breakKey = `\$\{user\.id\}:\$\{intent \|\| ""\}`;/);
-  assert.match(breakBody, /const breakInsisting = Boolean\(intent\) && serverNowMs\(\) - \(breakRefusals\.current\[breakKey\] \|\| 0\) < 120_000;/);
+  assert.match(breakBody, /if \(!intent\) \{ notify\("Select Start Break or End Break explicitly\."\); return false; \}/);
+  assert.match(breakBody, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
 });
 
 test("breaks get the same guarantee", () => {
-  assert.match(breakBody, /const breakKey = `\$\{user\.id\}:\$\{intent \|\| ""\}`;/);
-  assert.match(breakBody, /const breakInsisting = Boolean\(intent\) && serverNowMs\(\) - \(breakRefusals\.current\[breakKey\] \|\| 0\) < 120_000;/);
-  assert.match(breakBody, /if \(intent && intent !== offering && !breakInsisting\) \{/);
-  // "Clock in first" is a refusal too, so it must also be escapable.
-  assert.match(breakBody, /const onShift = !breakInsisting && confirmed\.reached/);
-  assert.match(breakBody, /breakRefusals\.current\[breakKey\] = serverNowMs\(\);/);
+  assert.match(breakBody, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
+  assert.match(page, /const punchBreakGuarded = useCallback/);
+  assert.match(page, /if \(punchLock\.current\) return punchBreak\(note, intent, true\);/);
 });

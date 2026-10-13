@@ -72,7 +72,7 @@ test("clock punches and breaks stamp with the server-corrected clock, not the de
   const punchClock = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchBreak = useCallback"));
   const punchBreak = page.slice(page.indexOf("const punchBreak = useCallback"), page.indexOf("const trimSession = useCallback"));
   assert.match(punchClock, /occurred_at: serverNowIso\(\)/);
-  assert.match(punchBreak, /const now = serverNowIso\(\);/);
+  assert.match(punchBreak, /return punchClock\("Break", note, intent, false, undefined, queueOnly\);/);
   // The UI timestamp is only a proposed ordering value. Postgres serializes
   // and corrects it against the current ledger timestamp.
   assert.match(punchClock, /await recordAttendancePunch\(event\)/);
@@ -90,16 +90,11 @@ test("punch log ids carry uid + entropy so same-millisecond punches on two devic
 
 test("the Timeclock engine stamps punches with the shared server-clock offset", async () => {
   const engine = await read("public/engines/timeclock.html");
-  const corrected = "new Date(Date.now()+(parseInt(localStorage.getItem('larsaClockOffsetMsV1'),10)||0)).toISOString()";
-  const punchSite = "state.logs.push({id:'l'+currentUser.id+Date.now()+Math.random(),uid:currentUser.id,type,status,time:" + corrected;
-  /* `offering` is the break direction the button displayed, re-checked against
-     a fresh read when the note modal closes — it replaced an `active?…:…`
-     captured before the modal opened, which could write the opposite of what
-     was asked for if anything moved while the person typed. What this test
-     pins is unchanged: the corrected clock and the entropy id. */
-  const breakSite = "state.logs.push({id:'l'+currentUser.id+Date.now()+Math.random(),uid:currentUser.id,type:'Break',status:offering,time:" + corrected;
-  assert.ok(engine.includes(punchSite), "engine self-punch must use the corrected clock and entropy id");
-  assert.ok(engine.includes(breakSite), "engine break punch must use the corrected clock and entropy id");
+  /* Embedded panels delegate both clock and break writes to the parent app.
+     The parent stamps the event with serverNowIso and the RPC supplies the
+     idempotency key, so the iframe must not fabricate a second local writer. */
+  assert.match(engine, /parent\.\__larsaPunch\(type, intent, pending, typeof currentUser !== 'undefined' && currentUser \? currentUser\.id : undefined\)/);
+  assert.match(engine, /p\.__larsaBreak\(offering,note\|\|'',currentUser\.id\);return;/);
 });
 
 test("the Timeclock Live page no longer fabricates presence or rewrites the shared store on a timer", async () => {

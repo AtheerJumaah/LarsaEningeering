@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /* The durability rules added by the August repair (lib/supabase/merge.ts).
  *
@@ -31,10 +32,10 @@ const source = readFileSync(new URL("../lib/supabase/merge.ts", import.meta.url)
 const dir = mkdtempSync(join(tmpdir(), "larsa-durability-"));
 const tsPath = join(dir, "merge.ts");
 writeFileSync(tsPath, source);
-execFileSync("npx", ["tsc", tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
-  cwd: new URL("..", import.meta.url).pathname,
+execFileSync(process.execPath, [fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url)), tsPath, "--module", "es2022", "--target", "es2022", "--strict", "--skipLibCheck"], {
+  cwd: fileURLToPath(new URL("..", import.meta.url)),
 });
-const { mergeStoreText, protectOutgoing, unionIds } = await import(join(dir, "merge.js"));
+const { mergeStoreText, protectOutgoing, unionIds } = await import(pathToFileURL(join(dir, "merge.js")).href);
 
 const doc = (users, logs, extra = {}) => ({ users, logs, ...extra });
 const text = (value) => JSON.stringify(value);

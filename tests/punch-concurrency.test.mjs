@@ -38,13 +38,13 @@ const engine = JSON.parse(tpl);
 test("only one punch at a time may be inside the read-modify-write", () => {
   assert.match(page, /const punchLock = useRef\(false\);/);
   // The lock wraps BOTH writers, and both share it.
-  assert.match(page, /const punchClockGuarded = useCallback\(async \(mode: string, note = "", intent\?: "In" \| "Out", quiet = false\) => \{\s*\n\s*if \(punchLock\.current\)/);
+  assert.match(page, /const punchClockGuarded = useCallback\(async \(mode: string, note = "", intent\?: AttendancePunchInput\["status"\], quiet = false, targetUid\?: string\) => \{\s*\n\s*if \(punchLock\.current\)/);
   assert.match(page, /const punchBreakGuarded = useCallback\(async \(note = "", intent\?: "Break Start" \| "Break End"\) => \{\s*\n\s*if \(punchLock\.current\)/);
   // Released on every path, including the ones that throw.
   const releases = page.match(/finally \{ punchLock\.current = false; \}/g) || [];
   assert.equal(releases.length, 2, "both wrappers must release the lock in a finally");
   // The writers keep their names; the lock is a separate, guarded entry point.
-  assert.match(page, /return await punchClock\(mode, note, intent, quiet\);/);
+  assert.match(page, /return await punchClock\(mode, note, intent, quiet, targetUid\);/);
   assert.match(page, /return await punchBreak\(note, intent\);/);
 });
 
@@ -56,29 +56,27 @@ test("every caller goes through the lock, none straight to the writer", () => {
   assert.match(page, /void punchBreakGuarded\(note \|\| "", intent\);/);
   assert.match(page, /punch=\{punchClockGuarded\}/);
   assert.match(page, /punchBreak=\{punchBreakGuarded\}/);
-  const rawCalls = (page.match(/(?<!await )(?<!const )punchClock\(/g) || [])
-    .concat(page.match(/(?<!await )(?<!const )punchBreak\(/g) || []);
-  assert.equal(rawCalls.length, 0, "nothing may call the unlocked writers directly");
+  assert.doesNotMatch(page, /void punchClock\(/, "nothing may call the unlocked clock writer directly");
+  assert.doesNotMatch(page, /void punchBreak\(/, "nothing may call the unlocked break writer directly");
+  assert.match(page, /if \(await punchBreakGuarded\(note, "Break End"\)\)/);
+  assert.match(page, /if \(await punchBreakGuarded\(note, "Break Start"\)\)/);
 });
 
 test("a punch is refused if the panel is showing a different person", () => {
   // The panel signs the hand-off with the user IT believes is clocking.
-  assert.match(engine, /try\{hand\(type,status,pending,currentUser\.id\);return\}/);
-  assert.match(engine, /try\{hand\(offering, note\|\|'', currentUser\.id\);return\}/);
+  assert.match(raw, /parent\.__larsaPunch\(type, intent, pending, typeof currentUser !== 'undefined' && currentUser \? currentUser\.id : undefined\)/);
+  assert.match(engine, /p\.__larsaBreak\(offering,note\|\|'',currentUser\.id\);return;/);
   // And the app checks that signature against its own session.
   assert.match(page, /__larsaPunch\?: \(mode: string, intent: "In" \| "Out", note\?: string, uid\?: string\) => void;/);
   assert.match(page, /__larsaBreak\?: \(intent: "Break Start" \| "Break End", note\?: string, uid\?: string\) => void;/);
-  const checks = page.match(/if \(uid && me && String\(uid\) !== String\(me\.id\)\) \{/g) || [];
+  const checks = page.match(/if \(!uid \|\| !me \|\| String\(uid\) !== String\(me\.id\)/g) || [];
   assert.equal(checks.length, 2, "both hand-offs must verify the signature");
   assert.match(page, /This Timeclock panel is showing a different person\./);
 });
 
-test("an engine still on an older build can still clock", () => {
-  /* The check is `uid && …`: a panel that sends no uid is accepted. Refusing
-     it would stop everyone on a cached engine from clocking at all — a worse
-     outcome than the risk being closed. */
-  assert.match(page, /if \(uid && me &&/);
-  assert.doesNotMatch(page, /if \(!uid\) return;/);
+test("an engine without an identity signature cannot clock", () => {
+  /* Cached panels must reconnect rather than create an unattributed punch. */
+  assert.match(page, /if \(!uid \|\| !me \|\| String\(uid\) !== String\(me\.id\)/);
 });
 
 test("the week rebuild reads the document after the question, not before", () => {
@@ -96,14 +94,16 @@ test("an uncertain save stays queued and the same id is retried", () => {
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
   assert.match(writer, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
   assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
-  assert.ok(writer.indexOf("if (result.outcome === \"unavailable\"") < writer.indexOf("pending.shift()"),
+  const unavailableAt = writer.indexOf("if (result.outcome === \"unavailable\"");
+  const confirmedConsumeAt = writer.indexOf("pending.splice", writer.indexOf("lastOutcome = result.outcome;"));
+  assert.ok(unavailableAt >= 0 && confirmedConsumeAt > unavailableAt,
     "a timeout must leave the unresolved event in the queue");
 });
 
 test("a confirmed server punch cannot be turned into a repeat press by a cache write failure", () => {
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
   const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;");
-  const consumeQueue = writer.indexOf("pending.shift();", serverConfirmed);
+  const consumeQueue = writer.indexOf("pending.splice", serverConfirmed);
   const saveQueue = writer.indexOf('localStorage.setItem(queueKey, JSON.stringify(pending))', consumeQueue);
   const refreshCache = writer.indexOf('localStorage.setItem("larsaStaffV8", JSON.stringify(store))', saveQueue);
   assert.ok(serverConfirmed >= 0 && consumeQueue > serverConfirmed && saveQueue > consumeQueue,
@@ -120,6 +120,6 @@ test("pending punches resume automatically and reuse their queued event id", () 
   assert.match(page, /window\.setInterval\(retryPending, 15_000\)/);
   assert.match(page, /window\.addEventListener\("online", retryPending\)/);
   assert.match(page, /window\.addEventListener\("focus", retryPending\)/);
-  assert.match(page, /punchClockGuarded\(latest\.work_mode \|\| "Office", latest\.note \|\| "", latest\.status, true\)/);
+  assert.match(page, /punchClockGuarded\(latest\.work_mode \|\| "Office", latest\.note \|\| "", latest\.status, true, uid\)/);
   assert.match(page, /Don't tap again\./);
 });

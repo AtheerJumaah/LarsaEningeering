@@ -18154,7 +18154,7 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak, submitCorrection, users, trimSession, resetSession, clockReady,
+  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady,
 }: {
   clockReady: boolean;
   user: StaffUser | null;
@@ -18466,7 +18466,7 @@ function QuickClock({
             onClick={async () => {
               if (breaking) return;
               setBreaking(true);
-              try { if (await punchBreak(note, "Break End")) setNote(""); }
+              try { if (await punchBreakGuarded(note, "Break End")) setNote(""); }
               finally { setBreaking(false); }
             }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "End Break"}</button>
         </section>
@@ -18478,7 +18478,7 @@ function QuickClock({
             onClick={async () => {
               if (breaking) return;
               setBreaking(true);
-              try { if (await punchBreak(note, "Break Start")) setNote(""); }
+              try { if (await punchBreakGuarded(note, "Break Start")) setNote(""); }
               finally { setBreaking(false); }
             }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "Start Break"}</button>
         </section>
