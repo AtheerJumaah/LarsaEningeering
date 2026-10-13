@@ -7231,7 +7231,20 @@ export default function Home() {
       }
       let result: Awaited<ReturnType<typeof recordAttendancePunch>>;
       try {
-        result = await recordAttendancePunch(event, { isCurrent: () => sessionUserRef.current?.id === actor.id });
+        result = await recordAttendancePunch(event, {
+          isCurrent: () => {
+            if (sessionUserRef.current?.id !== actor.id) return false;
+            /* A different tab can take ownership of the shared browser while
+               this tab is waiting on Auth/network. Re-check the account at
+               the final hand-off so an old tab cannot finish a retry for the
+               previous employee after an account switch. */
+            try {
+              const active = localStorage.getItem(ATTENDANCE_ACTIVE_ACCOUNT_KEY);
+              if (active && active !== actor.id) return false;
+            } catch { /* the in-tab identity guard remains the fallback */ }
+            return true;
+          },
+        });
       } catch {
         releaseSubmissionLock();
         return false;
