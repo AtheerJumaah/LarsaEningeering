@@ -2148,17 +2148,21 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 
 /* hours breakdown */
 .hours-breakdown { display: grid; gap: 12px; }
+.hours-summary-panel { position: relative; gap: 18px; padding: 22px; overflow: hidden; border: 1px solid #dce2eb; border-radius: 24px; background: linear-gradient(145deg, #ffffff 0%, #f7f9fc 100%); box-shadow: 0 12px 28px rgba(24, 38, 58, .07); }
+.hours-summary-panel::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, #275fe7 0%, #19a36f 52%, #343941 100%); }
+.unified-app.dark .hours-summary-panel { border-color: #303744; background: linear-gradient(145deg, #171b22 0%, #12151a 100%); box-shadow: 0 14px 30px rgba(0, 0, 0, .18); }
 .hours-summary-head { align-items: end; }
 .hours-summary-head h3 { margin-bottom: 4px; }
 .hours-summary-head p { margin: 0; max-width: 600px; color: #6b7280; font-size: 12px; font-weight: 650; line-height: 1.45; }
 .unified-app.dark .hours-summary-head p { color: #9ea3ad; }
 .period-control { display: grid; justify-items: end; gap: 5px; }
 .period-control > span { color: #7a8190; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-.period-picker { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; background: #f1f3f7; }
-.unified-app.dark .period-picker { background: #21252d; }
-.period-picker button { min-height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; font-size: 12px; font-weight: 850; color: #5b616e; cursor: pointer; }
-.period-picker button.active { background: #17181b; color: #fff; }
-.unified-app.dark .period-picker button.active { background: #f4f5f7; color: #17181b; }
+.period-picker { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid #dbe2ee; border-radius: 13px; background: #edf2fa; }
+.unified-app.dark .period-picker { border-color: #343c4b; background: #202632; }
+.period-picker button { min-height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; font-size: 12px; font-weight: 850; color: #53627a; cursor: pointer; }
+.period-picker button.active { background: #203a69; color: #fff; box-shadow: 0 3px 8px rgba(32, 58, 105, .22); }
+.unified-app.dark .period-picker button { color: #adb7c8; }
+.unified-app.dark .period-picker button.active { background: #e9effb; color: #192235; }
 .hours-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .hours-total, .hours-mode { display: grid; gap: 6px; padding: 15px 16px; border: 1px solid #e6e8ec; border-radius: 18px; background: #fff; }
 .unified-app.dark .hours-total, .unified-app.dark .hours-mode { background: #16181d; border-color: #272b33; }
@@ -2170,11 +2174,11 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .hours-mode b { font-size: 20px; font-weight: 900; color: #17181b; font-variant-numeric: tabular-nums; }
 .unified-app.dark .hours-mode b { color: #f4f5f7; }
 .hours-mode em { font-style: normal; font-size: 11px; font-weight: 700; color: #6b7280; }
-.hours-summary-wrap { max-width: 100%; overflow-x: auto; border: 1px solid #e6e8ec; border-radius: 18px; background: #fff; }
-.unified-app.dark .hours-summary-wrap { border-color: #272b33; background: #16181d; }
+.hours-summary-wrap { max-width: 100%; overflow-x: auto; border: 1px solid #d7deea; border-radius: 17px; background: #fff; }
+.unified-app.dark .hours-summary-wrap { border-color: #303744; background: #15191f; }
 .hours-summary-table { width: 100%; min-width: 620px; border-collapse: collapse; table-layout: fixed; }
-.hours-summary-table th, .hours-summary-table td { padding: 15px 18px; border-bottom: 1px solid #eceef2; text-align: right; font-variant-numeric: tabular-nums; }
-.hours-summary-table thead th { color: #4b5563; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.hours-summary-table th, .hours-summary-table td { padding: 15px 18px; border-bottom: 1px solid #e5e9f0; text-align: center; font-variant-numeric: tabular-nums; }
+.hours-summary-table thead th { color: #243755; background: #e8eef8; font-size: 11px; font-weight: 900; white-space: nowrap; }
 .hours-summary-table thead th span, .hours-summary-table thead th small { display: block; }
 .hours-summary-table thead th span { letter-spacing: .04em; text-transform: uppercase; }
 .hours-summary-table thead th small { margin-top: 3px; color: #9aa1ad; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; }
@@ -2182,15 +2186,19 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .hours-summary-table tbody th { color: #17181b; font-size: 13px; font-weight: 850; }
 .hours-summary-table tbody td { color: #17181b; font-size: 16px; font-weight: 900; }
 .hours-summary-table tbody tr:last-child th, .hours-summary-table tbody tr:last-child td { border-bottom: 0; }
-.hours-summary-table tbody tr:not(.hours-summary-total):nth-child(even) th, .hours-summary-table tbody tr:not(.hours-summary-total):nth-child(even) td { background: #fafbfc; }
+.hours-summary-table tbody tr.tone-online th, .hours-summary-table tbody tr.tone-online td { background: #f5f8ff; }
+.hours-summary-table tbody tr.tone-office th, .hours-summary-table tbody tr.tone-office td { background: #f2fbf7; }
+.hours-summary-table tbody tr.tone-site th, .hours-summary-table tbody tr.tone-site td { background: #f7f8fa; }
 .hours-summary-table .mode-chip { display: inline-flex; }
-.hours-summary-total th, .hours-summary-total td { border-top: 2px solid #dfe3e9; background: #f6f7f9; font-weight: 950; }
+.hours-summary-total th, .hours-summary-total td { border-top: 2px solid #b8c4d6; background: #203047; color: #fff !important; font-weight: 950; }
 .unified-app.dark .hours-summary-table th, .unified-app.dark .hours-summary-table td { border-bottom-color: #272b33; }
-.unified-app.dark .hours-summary-table thead th { color: #d7dbe2; }
+.unified-app.dark .hours-summary-table thead th { color: #e4ebf8; background: #263550; }
 .unified-app.dark .hours-summary-table thead th small { color: #8f97a4; }
 .unified-app.dark .hours-summary-table tbody th, .unified-app.dark .hours-summary-table tbody td { color: #f4f5f7; }
-.unified-app.dark .hours-summary-table tbody tr:not(.hours-summary-total):nth-child(even) th, .unified-app.dark .hours-summary-table tbody tr:not(.hours-summary-total):nth-child(even) td { background: #1c2027; }
-.unified-app.dark .hours-summary-total th, .unified-app.dark .hours-summary-total td { background: #21252d; }
+.unified-app.dark .hours-summary-table tbody tr.tone-online th, .unified-app.dark .hours-summary-table tbody tr.tone-online td { background: #1b2940; }
+.unified-app.dark .hours-summary-table tbody tr.tone-office th, .unified-app.dark .hours-summary-table tbody tr.tone-office td { background: #1b3029; }
+.unified-app.dark .hours-summary-table tbody tr.tone-site th, .unified-app.dark .hours-summary-table tbody tr.tone-site td { background: #20242b; }
+.unified-app.dark .hours-summary-total th, .unified-app.dark .hours-summary-total td { background: #dce7f8; color: #152236 !important; }
 .clock-portals .portal-amber .module-orb { background: #fde5cd; color: #8a5300; }
 .clock-portals { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 1180px) { .clock-portals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -2401,6 +2409,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .hero-actions button { flex: 1 1 auto; justify-content: center; }
   .hours-summary-head { align-items: start; }
   .hours-summary-head p { font-size: 11px; }
+  .hours-summary-panel { padding: 17px 12px; border-radius: 20px; }
   .period-control { justify-items: start; width: 100%; }
   .period-picker button { padding: 0 11px; }
   .role-grid, .schedule-summary, .home-board-grid, .hours-grid,

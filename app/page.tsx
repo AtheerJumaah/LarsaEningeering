@@ -19119,7 +19119,7 @@ function QuickClock({
         )}
       </section>
 
-      <section className="hours-breakdown">
+      <section className="hours-breakdown hours-summary-panel">
         <div className="section-head hours-summary-head">
           <div><span className="eyebrow">My hours</span><h3>Hours by work mode</h3><p>Net worked time, compared across today, this week, and your selected period.</p></div>
           <div className="period-control">
@@ -19149,7 +19149,7 @@ function QuickClock({
             </thead>
             <tbody>
               {(["online", "office", "site"] as const).map((tone) => (
-                <tr key={tone}>
+                <tr className={`hours-summary-row tone-${tone}`} key={tone}>
                   <th scope="row"><span className={`mode-chip tone-${tone}`}>{tone === "online" ? "Online" : tone === "office" ? "Office" : "Site"}</span></th>
                   <td>{formatHours(todaySummary[tone])}</td>
                   <td>{formatHours(weekSummary[tone])}</td>
