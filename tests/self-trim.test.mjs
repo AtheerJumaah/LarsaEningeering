@@ -136,8 +136,8 @@ test("any period's sessions can be laid out in full — a month, all history, or
   const page = await read("app/page.tsx");
   // The period presets, plus free From/To days.
   assert.match(page, /\[\["recent", "Recent"\], \["this-month", "This month"\], \["last-month", "Last month"\], \["all", "All history"\]\]/);
-  assert.match(page, /setTrimFrom\(`\$\{currentMonthKey\(\)\}-01`\);/);
-  assert.match(page, /setTrimTo\(monthEnd\(currentMonthKey\(previous\)\)\);/);
+  assert.match(page, /setTrimFrom\(`\$\{attendanceDateKey\(new Date\(\)\)\.slice\(0, 7\)\}-01`\);/);
+  assert.match(page, /setTrimTo\(monthEnd\(previousMonth\)\);/);
   // A session belongs to the day it started, and the filter says exactly that.
   assert.match(page, /\.filter\(\(session\) => \(!trimFrom \|\| session\.date >= trimFrom\) && \(!trimTo \|\| session\.date <= trimTo\)\)/);
   // Only the Recent window is capped; a chosen period shows EVERY session in

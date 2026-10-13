@@ -9,6 +9,7 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
+import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
@@ -2382,8 +2383,8 @@ function buildHomeSummary(
     roleTitle: "", roleBlurb: "", roleCards: [],
   };
   if (!viewer) return empty;
-  const today = dateInputValue(new Date());
-  const todayName = WEEKDAY_NAMES[new Date().getDay()];
+  const today = attendanceDateKey(new Date());
+  const todayName = WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
   const reminders: HomeReminder[] = [];
 
   // --- attendance -------------------------------------------------------
@@ -2424,11 +2425,11 @@ function buildHomeSummary(
   }
 
   // --- weekly points ----------------------------------------------------
-  const week = isoWeekLabel();
+  const week = attendanceWeekKey(new Date());
   const mine = rows.filter((row) => {
     if (rowUserId(row, users) !== viewer.id) return false;
     const date = rowDate(row);
-    const rowWeek = String(row.Week || (date ? isoWeekLabel(new Date(`${date}T12:00:00`)) : ""));
+    const rowWeek = String(row.Week || (date ? attendanceWeekKey(`${date}T12:00:00Z`) : ""));
     return rowWeek === week;
   });
   const weekSubmitted = mine.reduce((sum, row) => sum + finiteNumber(row["Submitted Points"]), 0);
@@ -2521,7 +2522,7 @@ function buildHomeSummary(
   const activeStaff = users.filter((user) => user.enabled !== false);
   const weekRows = rows.filter((row) => {
     const date = rowDate(row);
-    const rowWeek = String(row.Week || (date ? isoWeekLabel(new Date(`${date}T12:00:00`)) : ""));
+    const rowWeek = String(row.Week || (date ? attendanceWeekKey(`${date}T12:00:00Z`) : ""));
     return rowWeek === week;
   });
   const teamRows = weekRows.filter((row) => teamIds.has(rowUserId(row, users)));
@@ -2536,7 +2537,7 @@ function buildHomeSummary(
   const devOpen = growth.development.filter((record) => teamIds.has(record.employeeId) && record.status !== "Approved").length;
   const devMine = growth.development.filter((record) => record.employeeId === viewer.id && record.status !== "Approved").length;
   const myHoursWeek = sessions
-    .filter((session) => session.uid === viewer.id && isoWeekLabel(new Date(`${session.date}T12:00:00`)) === week)
+    .filter((session) => session.uid === viewer.id && attendanceWeekKey(`${session.date}T12:00:00Z`) === week)
     .reduce((sum, session) => sum + session.hours, 0);
 
   const access = viewer.access || "Engineer";
@@ -3106,18 +3107,19 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     const adjustedMark = (...notes: (string | undefined)[]) => notes.some((note) =>
       Boolean(note && (note.includes("Adjusted by") || note.includes("Fixed by") || note.includes("Manual entry by"))));
 
-    /* One ClockSession per LOCAL calendar day. clockIn/clockOut always carry
-       the original punches (they are the session's identity for trim and
-       reset); the segment's own hours carry only what fell on `date`. */
+    /* One ClockSession per canonical company calendar day. clockIn/clockOut
+       always carry the original punches (they are the session's identity for
+       trim and reset); the segment's own hours carry only what fell on `date`.
+       Punch instants stay UTC and duration arithmetic stays millisecond-based;
+       only the calendar boundary uses the attendance policy zone. */
     const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed" | "long", adjusted?: boolean) => {
       const from = new Date(start).getTime();
       const to = Math.max(new Date(end).getTime(), from);
       const flagged = Boolean(flag);
-      let cursor = from;
-      while (cursor < to || cursor === from) {
-        const day = new Date(cursor);
-        const nextMidnight = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1, 0, 0, 0, 0).getTime();
-        const segEnd = Math.min(to, nextMidnight);
+      const segments = splitAttendanceInterval(start, end, ATTENDANCE_TIME_ZONE);
+      segments.forEach((segment) => {
+        const cursor = Date.parse(segment.from);
+        const segEnd = Math.min(to, Date.parse(segment.to));
         const grossMs = Math.max(0, segEnd - cursor);
         const breakMs = Math.min(grossMs, breakMsWithin(cursor, segEnd));
         sessions.push({
@@ -3126,19 +3128,17 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           mode,
           clockIn: start,
           clockOut: end,
-          date: dateInputValue(day),
+          date: segment.date,
           /* A flagged session is listed but contributes nothing until it is
              corrected — never silently into totals, exports, or payroll. */
           hours: flagged ? 0 : Math.max(0, (grossMs - breakMs) / 3600000),
           presenceHours: flagged ? 0 : grossMs / 3600000,
           breakHours: flagged ? 0 : breakMs / 3600000,
-          open: isOpen && segEnd === to,
+          open: isOpen && segEnd >= to,
           ...(flag ? { [flag]: true, openHours: (to - from) / 3600000 } : {}),
           ...(adjusted ? { adjusted: true } : {}),
         });
-        if (segEnd >= to) break;
-        cursor = segEnd;
-      }
+      });
     };
 
     rows.forEach((row) => {
@@ -10552,27 +10552,37 @@ function EngineeringManagementPortal({
   const [picked, setPicked] = useState<{ from: EngineeringTab | undefined; tab: EngineeringTab } | null>(null);
   const tab = picked && picked.from === openTab ? picked.tab : requestedTab;
   const setTab = (next: EngineeringTab) => setPicked({ from: openTab, tab: next });
-  const today = dateInputValue(new Date());
-  const start = new Date();
-  start.setDate(start.getDate() - 6);
-  const [from, setFrom] = useState(dateInputValue(start));
+  const today = attendanceDateKey(new Date());
+  const [from, setFrom] = useState(attendanceDateOffset(today, -6));
   const [to, setTo] = useState(today);
   const visibleIds = manages ? staffIdsVisibleTo(org, viewer, users) : new Set(viewer ? [viewer.id] : []);
   const visibleUsers = users.filter((user) => user.enabled !== false && visibleIds.has(user.id));
   const filteredSessions = sessions.filter((session) => visibleIds.has(session.uid) && withinDates(session.date, from, to));
   const filteredRows = rows.filter((row) => visibleIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
   const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
-    const end = new Date();
-    const begin = new Date(end);
-    if (period === "week") begin.setDate(begin.getDate() - 6);
-    if (period === "month") begin.setDate(begin.getDate() - 29);
-    if (period === "sixMonths") begin.setMonth(begin.getMonth() - 6);
-    if (period === "year") begin.setFullYear(begin.getFullYear() - 1);
-    setFrom(dateInputValue(begin));
-    setTo(dateInputValue(end));
+    const end = attendanceDateKey(new Date());
+    let days = 0;
+    if (period === "week") days = 6;
+    if (period === "month") days = 29;
+    if (period === "sixMonths") {
+      const begin = new Date(`${end}T12:00:00Z`);
+      begin.setUTCMonth(begin.getUTCMonth() - 6);
+      setFrom(begin.toISOString().slice(0, 10));
+      setTo(end);
+      return;
+    }
+    if (period === "year") {
+      const begin = new Date(`${end}T12:00:00Z`);
+      begin.setUTCFullYear(begin.getUTCFullYear() - 1);
+      setFrom(begin.toISOString().slice(0, 10));
+      setTo(end);
+      return;
+    }
+    setFrom(attendanceDateOffset(end, -days));
+    setTo(end);
   };
-  const startMs = new Date(`${from}T00:00:00`).getTime();
-  const endMs = new Date(`${to}T23:59:59`).getTime();
+  const startMs = new Date(`${from}T00:00:00Z`).getTime();
+  const endMs = new Date(`${to}T23:59:59Z`).getTime();
   const weeks = Math.max(1, (endMs - startMs + 1) / (7 * 86400000));
   const summaries = visibleUsers.map((user) => {
     const mineSessions = filteredSessions.filter((session) => session.uid === user.id);
@@ -16126,7 +16136,7 @@ function LivePresence({
 
   const roster = users.filter((user) => user.enabled !== false);
   const logs = Array.isArray(store?.logs) ? (store.logs as ClockLog[]) : [];
-  const todayName = WEEKDAY_NAMES[new Date().getDay()];
+  const todayName = WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
   const schedule = (store?.schedule || {}) as Record<string, Record<string, { code?: string }[]>>;
 
   const state = roster.map((user) => {
@@ -16718,9 +16728,8 @@ function CorrectionsCentre({
 
   const [tab, setTab] = useState<"requests" | "points" | "time">("requests");
 
-  /* datetime-local reads local wall time with no zone, so the stored ISO stamp
-     is converted to the device's own clock for editing — the same convention
-     the QuickClock trim panel uses. */
+  /* datetime-local remains a device-local editing control: the stored instant
+     is never rewritten by calendar/reporting timezone policy. */
   const toLocalInput = (iso: string) => {
     const when = new Date(iso);
     const pad = (value: number) => String(value).padStart(2, "0");
@@ -16789,10 +16798,10 @@ function CorrectionsCentre({
   };
 
   /* -------- Timesheets -------- */
-  const twoWeeksAgo = new Date(); twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+  const attendanceToday = attendanceDateKey(new Date());
   const [timeUser, setTimeUser] = useState("");
-  const [timeFrom, setTimeFrom] = useState(dateInputValue(twoWeeksAgo));
-  const [timeTo, setTimeTo] = useState(dateInputValue(new Date()));
+  const [timeFrom, setTimeFrom] = useState(attendanceDateOffset(attendanceToday, -14));
+  const [timeTo, setTimeTo] = useState(attendanceToday);
   const timeRows = sessions
     .filter((session) => scopeIds.has(session.uid))
     .filter((session) => !timeUser || session.uid === timeUser)
@@ -16802,7 +16811,7 @@ function CorrectionsCentre({
     .slice(0, 60);
   const [sessionEditKey, setSessionEditKey] = useState<string | null>(null);
   const [sessionDraft, setSessionDraft] = useState({ in: "", out: "" });
-  const [addDraft, setAddDraft] = useState({ date: dateInputValue(new Date()), from: "09:00", to: "17:00", mode: "Office" });
+  const [addDraft, setAddDraft] = useState({ date: attendanceToday, from: "09:00", to: "17:00", mode: "Office" });
 
   return (
     <div className="native-scroll requests-scroll">
@@ -17051,7 +17060,7 @@ function CorrectionsCentre({
                     {scope.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
                   </select>
                 </label>
-                <label>Date<input type="date" value={addDraft.date} max={dateInputValue(new Date())} onChange={(event) => setAddDraft({ ...addDraft, date: event.target.value })} /></label>
+                <label>Date<input type="date" value={addDraft.date} max={attendanceDateKey(new Date())} onChange={(event) => setAddDraft({ ...addDraft, date: event.target.value })} /></label>
                 <label>From<input type="time" value={addDraft.from} onChange={(event) => setAddDraft({ ...addDraft, from: event.target.value })} /></label>
                 <label>To<input type="time" value={addDraft.to} onChange={(event) => setAddDraft({ ...addDraft, to: event.target.value })} /></label>
                 <label>Mode
@@ -18210,7 +18219,7 @@ function QuickClock({
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({
     kind: "Missed Clock" as "Missed Clock" | "Missed Break" | "Extra Hours",
-    date: dateInputValue(new Date()), from: "09:00", to: "17:00", reason: "", mode: "Office",
+    date: attendanceDateKey(new Date()), from: "09:00", to: "17:00", reason: "", mode: "Office",
   });
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
@@ -18283,13 +18292,15 @@ function QuickClock({
     setTrimming(null);
     setTrimShown(12);
     if (preset === "this-month") {
-      setTrimFrom(`${currentMonthKey()}-01`);
-      setTrimTo(dateInputValue(new Date()));
+      setTrimFrom(`${attendanceDateKey(new Date()).slice(0, 7)}-01`);
+      setTrimTo(attendanceDateKey(new Date()));
     } else if (preset === "last-month") {
-      const now = new Date();
-      const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      setTrimFrom(dateInputValue(previous));
-      setTrimTo(monthEnd(currentMonthKey(previous)));
+      const currentMonth = attendanceDateKey(new Date()).slice(0, 7);
+      const previous = new Date(`${currentMonth}-15T12:00:00Z`);
+      previous.setUTCMonth(previous.getUTCMonth() - 1);
+      const previousMonth = previous.toISOString().slice(0, 7);
+      setTrimFrom(`${previousMonth}-01`);
+      setTrimTo(monthEnd(previousMonth));
     } else {
       // "recent" and "all" carry no date bounds; they differ only in the cap.
       setTrimFrom("");
@@ -18346,9 +18357,10 @@ function QuickClock({
   const [now, setNow] = useState<Date | null>(null);
   // Keep the third summary column distinct from the always-visible weekly column.
   const [period, setPeriod] = useState("month");
-  const monthStart = new Date(); monthStart.setDate(1);
-  const [from, setFrom] = useState(dateInputValue(monthStart));
-  const [to, setTo] = useState(dateInputValue(new Date()));
+  const todayKeyForSummary = attendanceDateKey(new Date());
+  const monthStart = `${todayKeyForSummary.slice(0, 7)}-01`;
+  const [from, setFrom] = useState(monthStart);
+  const [to, setTo] = useState(todayKeyForSummary);
   useEffect(() => {
     setNow(new Date(serverNowMs()));
     const timer = setInterval(() => setNow(new Date(serverNowMs())), 1000);
@@ -18378,9 +18390,10 @@ function QuickClock({
   const displayMode = clockedIn ? actionMode : mode;
   const reviewActions = user ? parseStore(`larsaAttendancePunchReviewV1:${user.id}`) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
-  const todayKey = dateInputValue(new Date());
+  const todayKey = attendanceDateKey(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
-  const weekSessions = mine.filter((session) => isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel());
+  const weekKey = attendanceWeekKey(new Date());
+  const weekSessions = mine.filter((session) => attendanceWeekKey(`${session.date}T12:00:00Z`) === weekKey);
   const todaySummary = summarizeClockHours(todaySessions);
   const weekSummary = summarizeClockHours(weekSessions);
   const todayHours = todaySummary.total;
@@ -18395,7 +18408,7 @@ function QuickClock({
 
   // Hours split by where the work happened, over the chosen period.
   const selectedPeriodSessions = (() => {
-    const today = dateInputValue(new Date());
+    const today = attendanceDateKey(new Date());
     return mine.filter((session) => {
       const date = session.date;
       if (period === "month") return date.slice(0, 7) === today.slice(0, 7);
@@ -18576,8 +18589,8 @@ function QuickClock({
               {([["recent", "Recent"], ["this-month", "This month"], ["last-month", "Last month"], ["all", "All history"]] as const).map(([id, label]) => (
                 <button key={id} type="button" className={trimPreset === id ? "on" : ""} onClick={() => pickTrimPreset(id)}>{label}</button>
               ))}
-              <label>From<input type="date" value={trimFrom} max={dateInputValue(new Date())} onChange={(event) => { setTrimFrom(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions from" /></label>
-              <label>To<input type="date" value={trimTo} max={dateInputValue(new Date())} onChange={(event) => { setTrimTo(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions up to" /></label>
+              <label>From<input type="date" value={trimFrom} max={attendanceDateKey(new Date())} onChange={(event) => { setTrimFrom(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions from" /></label>
+              <label>To<input type="date" value={trimTo} max={attendanceDateKey(new Date())} onChange={(event) => { setTrimTo(event.target.value); setTrimPreset("custom"); setTrimming(null); }} aria-label="Show sessions up to" /></label>
             </div>
             {!trimRows.length && (
               <div className="empty compact">
