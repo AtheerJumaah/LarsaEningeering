@@ -1,4 +1,9 @@
-# Attendance staging bootstrap — blocked pending a reviewed identity baseline
+# Attendance staging bootstrap — superseded for synthetic staging
+
+> The original “blocked” assessment below is historical. A bounded,
+> synthetic-only contract has now been applied to staging and verified in
+> [`docs/staging-attendance-contract-run.md`](staging-attendance-contract-run.md).
+> The production blocker remains in force.
 
 **Status:** design/review artifact only. No SQL was applied in this block. No production state was touched.  
 **Target reviewed:** `hevpiozjxzsftidwflki` (`Larsa Engineering Staging`).  
