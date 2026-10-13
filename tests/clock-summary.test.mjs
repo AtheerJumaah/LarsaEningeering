@@ -15,4 +15,5 @@ test("employee clock summary reports hours by mode for today, week, and selected
   assert.match(page, /\["online", "office", "site"\]/);
   assert.match(page, /className="hours-summary-total"/);
   assert.doesNotMatch(page, /<div><small>Sessions<\/small>/);
+  assert.doesNotMatch(page, /className="black-badge">\{recent\.length\}/);
 });
