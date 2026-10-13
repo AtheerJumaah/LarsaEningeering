@@ -2119,6 +2119,17 @@ function modeTone(value: unknown): "office" | "online" | "site" | "other" {
   if (/office|onsite|\u0645\u0643\u062a\u0628/.test(text)) return "office";
   return "other";
 }
+type ClockHoursSummary = { office: number; online: number; site: number; total: number };
+function summarizeClockHours(rows: ClockSession[]): ClockHoursSummary {
+  const summary: ClockHoursSummary = { office: 0, online: 0, site: 0, total: 0 };
+  rows.forEach((row) => {
+    const hours = Math.max(0, Number(row.hours) || 0);
+    const tone = modeTone(row.mode);
+    if (tone !== "other") summary[tone] += hours;
+    summary.total += hours;
+  });
+  return summary;
+}
 // Shift codes from the Larsa scheduling standard.
 const SHIFT_CODES: Record<string, { label: string; time: string; tone: "office" | "online" | "site" | "other" }> = {
   M: { label: "Morning", time: "09:00 – 15:00", tone: "office" },
@@ -18729,12 +18740,12 @@ function QuickClock({
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = dateInputValue(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
-  const todayHours = todaySessions.reduce((sum, session) => sum + session.hours, 0);
-  const todayPresence = todaySessions.reduce((sum, session) => sum + session.presenceHours, 0);
+  const weekSessions = mine.filter((session) => isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel());
+  const todaySummary = summarizeClockHours(todaySessions);
+  const weekSummary = summarizeClockHours(weekSessions);
+  const todayHours = todaySummary.total;
   const todayBreak = todaySessions.reduce((sum, session) => sum + session.breakHours, 0);
-  const weekHours = mine
-    .filter((session) => isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel())
-    .reduce((sum, session) => sum + session.hours, 0);
+  const weekHours = weekSummary.total;
   const elapsed = open && now
     ? Math.max(0, now.getTime() - new Date(open.clockIn).getTime())
     : 0;
@@ -18743,23 +18754,21 @@ function QuickClock({
   const recent = mine.slice(-6).reverse();
 
   // Hours split by where the work happened, over the chosen period.
-  const breakdown = (() => {
+  const selectedPeriodSessions = (() => {
     const today = dateInputValue(new Date());
-    const inPeriod = mine.filter((session) => {
+    return mine.filter((session) => {
       const date = session.date;
       if (period === "week") return isoWeekLabel(new Date(`${session.date}T12:00:00`)) === isoWeekLabel();
       if (period === "month") return date.slice(0, 7) === today.slice(0, 7);
       return withinDates(date, from, to);
     });
-    const bucket = { office: 0, online: 0, site: 0, other: 0 };
-    inPeriod.forEach((session) => { bucket[modeTone(session.mode)] += session.hours; });
-    return {
-      ...bucket,
-      total: inPeriod.reduce((sum, session) => sum + session.hours, 0),
-      count: inPeriod.length,
-      days: new Set(inPeriod.map((session) => session.date)).size,
-    };
   })();
+  const selectedSummary = summarizeClockHours(selectedPeriodSessions);
+  const selectedPeriodLabel = period === "week"
+    ? "This week"
+    : period === "month"
+      ? "This month"
+      : "Selected period";
 
   return (
     <div className="native-scroll clock-scroll">
@@ -18839,9 +18848,7 @@ function QuickClock({
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
-          <div><small>Today in office</small><b>{formatHours(todayPresence)}</b></div>
           <div><small>This week worked</small><b>{formatHours(weekHours)}</b></div>
-          <div><small>Sessions</small><b>{mine.length}</b></div>
         </div>
         {todayBreak > 0 && (
           <p className="clock-break-note">
@@ -19131,24 +19138,28 @@ function QuickClock({
             <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
           </div>
         )}
-        <div className="hours-grid">
-          <article className="hours-total">
-            <small>Total</small><b>{formatHours(breakdown.total)}</b>
-            <em>{breakdown.count} session{breakdown.count === 1 ? "" : "s"} · {breakdown.days} day{breakdown.days === 1 ? "" : "s"}</em>
-          </article>
-          {(["office", "online", "site", "other"] as const).map((tone) => {
-            const value = breakdown[tone];
-            if (!value && tone === "other") return null;
-            const share = breakdown.total ? Math.round((value / breakdown.total) * 100) : 0;
-            return (
-              <article className="hours-mode" key={tone}>
-                <span className={`mode-chip tone-${tone}`}>{tone === "office" ? "Office" : tone === "online" ? "Online / home" : tone === "site" ? "Site" : "Other"}</span>
-                <b>{formatHours(value)}</b>
-                <div className="mode-bar"><span style={{ width: `${share}%`, background: TONE_COLOURS[tone] }} /></div>
-                <em>{share}% of the period</em>
-              </article>
-            );
-          })}
+        <div className="hours-summary-wrap">
+          <table className="hours-summary-table">
+            <thead>
+              <tr><th scope="col">Work mode</th><th scope="col">Today</th><th scope="col">This week</th><th scope="col">{selectedPeriodLabel}</th></tr>
+            </thead>
+            <tbody>
+              {(["online", "office", "site"] as const).map((tone) => (
+                <tr key={tone}>
+                  <th scope="row"><span className={`mode-chip tone-${tone}`}>{tone === "online" ? "Online" : tone === "office" ? "Office" : "Site"}</span></th>
+                  <td>{formatHours(todaySummary[tone])}</td>
+                  <td>{formatHours(weekSummary[tone])}</td>
+                  <td>{formatHours(selectedSummary[tone])}</td>
+                </tr>
+              ))}
+              <tr className="hours-summary-total">
+                <th scope="row">Total</th>
+                <td>{formatHours(todaySummary.total)}</td>
+                <td>{formatHours(weekSummary.total)}</td>
+                <td>{formatHours(selectedSummary.total)}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
