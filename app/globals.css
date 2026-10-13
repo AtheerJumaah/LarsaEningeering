@@ -2195,9 +2195,9 @@ td:hover .shift-chip.custom button, .shift-chip.custom:hover button { opacity: 1
 .unified-app.dark .hours-summary-table thead th { color: #e4ebf8; background: #263550; }
 .unified-app.dark .hours-summary-table thead th small { color: #8f97a4; }
 .unified-app.dark .hours-summary-table tbody th, .unified-app.dark .hours-summary-table tbody td { color: #f4f5f7; }
-.unified-app.dark .hours-summary-table tbody tr.tone-online th, .unified-app.dark .hours-summary-table tbody tr.tone-online td { background: #1b2940; }
-.unified-app.dark .hours-summary-table tbody tr.tone-office th, .unified-app.dark .hours-summary-table tbody tr.tone-office td { background: #1b3029; }
-.unified-app.dark .hours-summary-table tbody tr.tone-site th, .unified-app.dark .hours-summary-table tbody tr.tone-site td { background: #20242b; }
+.unified-app.dark .hours-summary-table tbody tr.tone-online th, .unified-app.dark .hours-summary-table tbody tr.tone-online td { background: rgba(147, 197, 253, .12); }
+.unified-app.dark .hours-summary-table tbody tr.tone-office th, .unified-app.dark .hours-summary-table tbody tr.tone-office td { background: rgba(110, 231, 183, .12); }
+.unified-app.dark .hours-summary-table tbody tr.tone-site th, .unified-app.dark .hours-summary-table tbody tr.tone-site td { background: rgba(255, 255, 255, .06); }
 .unified-app.dark .hours-summary-total th, .unified-app.dark .hours-summary-total td { background: #dce7f8; color: #152236 !important; }
 .clock-portals .portal-amber .module-orb { background: #fde5cd; color: #8a5300; }
 .clock-portals { grid-template-columns: repeat(4, minmax(0, 1fr)); }
