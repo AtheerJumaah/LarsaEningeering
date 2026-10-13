@@ -8,6 +8,7 @@ test("employee clock summary reports hours by mode for today, week, and selected
   assert.match(page, /const todaySummary = summarizeClockHours\(todaySessions\)/);
   assert.match(page, /const weekSummary = summarizeClockHours\(weekSessions\)/);
   assert.match(page, /const selectedSummary = summarizeClockHours\(selectedPeriodSessions\)/);
+  assert.match(page, /const \[period, setPeriod\] = useState\("month"\)/);
   assert.match(page, /<th scope="col">Today<\/th>/);
   assert.match(page, /<th scope="col">This week<\/th>/);
   assert.match(page, /className="hours-summary-table"/);
