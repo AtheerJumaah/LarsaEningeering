@@ -18878,8 +18878,7 @@ function QuickClock({
       )}
 
       <section className="report-panel">
-        <div className="section-head"><div><span className="eyebrow">Attendance</span><h3>Your recent sessions</h3></div>
-          <span className="black-badge">{recent.length}</span></div>
+        <div className="section-head"><div><span className="eyebrow">Attendance</span><h3>Your recent sessions</h3></div></div>
         <div className="data-table-wrap">
           <table className="data-table compact-table">
             <thead><tr><th>Date</th><th>Mode</th><th>In</th><th>Out</th><th>Hours / status</th></tr></thead>
