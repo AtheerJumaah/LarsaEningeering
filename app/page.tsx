@@ -18718,7 +18718,12 @@ function QuickClock({
      display. Keep the local selection for the next Clock In only, but make the
      active mode highlight follow the confirmed/pending server event while the
      current shift is open. */
-  const actionMode = pendingPunch?.work_mode || open?.mode || latestPunch?.type || mode;
+  /* A stale queued event may survive on one device after another device has
+     already committed the shift. Once the authoritative open session exists,
+     it must win over that local queue so the mode highlight cannot disagree
+     with the server-backed banner. The pending event remains a fallback only
+     during the short hand-off before the open session is visible locally. */
+  const actionMode = open?.mode || latestPunch?.type || pendingPunch?.work_mode || mode;
   const displayMode = clockedIn ? actionMode : mode;
   const reviewActions = user ? readAttendanceReview(user.id) : [];
   const mine = sessions.filter((session) => session.uid === user?.id);
