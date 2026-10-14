@@ -51,6 +51,17 @@ export type SyncedKey = (typeof SYNCED_KEYS)[number];
 export const CLOCK_OFFSET_STORAGE_KEY = "larsaClockOffsetMsV1";
 let clockOffsetMs: number | null = null;
 
+/* The anonymous Supabase session is kept alive so the sign-in screen can
+ * refresh the shared staff roster, but a signed-out browser must not publish
+ * a late write from an embedded iframe or an old queued callback. The app
+ * toggles this around the employee session; reads and realtime catch-up still
+ * work while writes are paused. */
+let syncWritesPaused = false;
+
+export function setLarsaSyncWritesPaused(paused: boolean) {
+  syncWritesPaused = Boolean(paused);
+}
+
 function storedClockOffset(): number {
   try {
     const raw = window.localStorage.getItem(CLOCK_OFFSET_STORAGE_KEY);
@@ -165,7 +176,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      the row exists, so "I don't know what the server holds" can never
      again mean "so replace it". */
   async function pushKey(key: SyncedKey) {
-    if (cancelled) return;
+    if (cancelled || syncWritesPaused) return;
     if (pushingKeys.has(key)) { pushAgain.add(key); return; }
     pushingKeys.add(key);
     try {
@@ -198,6 +209,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       if (serverText) {
         try { parsed = protectOutgoing(parsed, JSON.parse(serverText)); } catch { /* raw copy stands */ }
       }
+      if (cancelled || syncWritesPaused) return;
       const { data, error } = await supabase.rpc("app_state_put", {
         p_store_key: key,
         p_data: parsed,
@@ -314,7 +326,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const previousMethod = methodOwner.setItem;
   const patchedSetItem = function(this: Storage, key: string, value: string) {
     previousMethod.call(this, key, value);
-    if (!cancelled && this === window.localStorage && (SYNCED_KEYS as readonly string[]).includes(key)) schedulePush(key as SyncedKey);
+    if (!cancelled && !syncWritesPaused && this === window.localStorage && (SYNCED_KEYS as readonly string[]).includes(key)) schedulePush(key as SyncedKey);
   };
   methodOwner.setItem = patchedSetItem;
 

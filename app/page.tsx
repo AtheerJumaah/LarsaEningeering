@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, SYNCED_KEYS } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
@@ -5870,6 +5870,7 @@ export default function Home() {
   }, [notify, refs]);
 
   const completeSignIn = useCallback((user: StaffUser, method: SignInMethod = "email") => {
+    setLarsaSyncWritesPaused(false);
     refreshSharedStateNow();
     const normalizedUser = user.permissionProfile
       ? { ...user, permissions: staffPermissionsForUser(user) }
@@ -6345,6 +6346,7 @@ export default function Home() {
   };
 
   const signOut = useCallback(() => {
+    setLarsaSyncWritesPaused(true);
     sessionStorage.removeItem("larsa-control-session");
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.

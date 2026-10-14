@@ -102,6 +102,15 @@ test("an already-current attendance tick does not trigger ledger reconciliation"
   assert.match(sync, /if \(appliedRows > 0\) options\.onStatusChange\?\.\("synced"\);/);
 });
 
+test("sign-out pauses shared-state writes without disabling refresh", () => {
+  assert.match(sync, /let syncWritesPaused = false;/);
+  assert.match(sync, /export function setLarsaSyncWritesPaused\(paused: boolean\)/);
+  assert.match(sync, /if \(cancelled \|\| syncWritesPaused\) return;/);
+  assert.match(sync, /!syncWritesPaused && this === window\.localStorage/);
+  assert.match(page, /setLarsaSyncWritesPaused\(false\);\s*\n\s*refreshSharedStateNow\(\);/);
+  assert.match(page, /const signOut = useCallback\(\(\) => \{\s*\n\s*setLarsaSyncWritesPaused\(true\);/);
+});
+
 test("clocking SOMEBODY ELSE is held to the same rule", () => {
   /* An admin clocking another person read a stale panel, captured the
      direction BEFORE the note modal, then wrote it however long the modal
