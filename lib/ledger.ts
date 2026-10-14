@@ -70,6 +70,18 @@ const LEDGER_STATUSES = new Set(["In", "Out", "Break Start", "Break End"]);
    stale-device window; the ledger itself keeps everything forever. */
 const RECONCILE_WINDOW_MS = 45 * 24 * 3600_000;
 
+/* The authoritative punch RPC has already accepted this event. Marking it
+ * seen before the local staff blob is written prevents the compatibility tap
+ * below from submitting the same event a second time. Offline events are not
+ * marked here; they remain eligible for the durable queue. */
+export function markAttendanceEventSent(clientEventId: string) {
+  if (!clientEventId) return;
+  const seen = new Set(readJson<string[]>(SEEN_KEY, []));
+  if (seen.has(clientEventId)) return;
+  seen.add(clientEventId);
+  writeJson(SEEN_KEY, Array.from(seen).slice(-10000));
+}
+
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);

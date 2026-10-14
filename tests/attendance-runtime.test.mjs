@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import {isSuspiciousClosedSession} from '../lib/attendance.mjs';
+import {isSuspiciousClosedSession, OPEN_SESSION_STALE_HOURS} from '../lib/attendance.mjs';
 import {planAttendanceCorrection} from '../lib/attendance-corrections.mjs';
 import {ATTENDANCE_TIME_ZONE, splitAttendanceInterval} from '../lib/attendance-timezone.mjs';
 
@@ -158,7 +158,7 @@ function calculate(logs, now='2026-10-12T18:00:00Z') {
   const source=ts.createSourceFile('page.tsx',read('app/page.tsx'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const fn=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='buildClockSessions');
   assert.ok(fn);
-  const context=vm.createContext({Date,Map,Set,Number,isSuspiciousClosedSession,ATTENDANCE_TIME_ZONE,splitAttendanceInterval,
+  const context=vm.createContext({Date,Map,Set,Number,isSuspiciousClosedSession,OPEN_SESSION_STALE_HOURS,ATTENDANCE_TIME_ZONE,splitAttendanceInterval,
     historyStartFor:()=>0,serverNowMs:()=>Date.parse(now),serverNowIso:()=>now,
     dateInputValue:d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`});
   vm.runInContext(ts.transpileModule(fn.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);

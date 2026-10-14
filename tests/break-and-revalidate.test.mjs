@@ -88,11 +88,18 @@ test("a refresh that finds nothing changed does not pull the 840 KB blob", () =>
   // Stamps first: a few dozen bytes, no `data` column.
   assert.match(sync, /\.select\("store_key, updated_at"\)/);
   assert.match(sync, /if \(!stale\.length\) \{/);
-  assert.match(sync, /console\.log\(`\[larsa-sync\] refresh: already current \(\$\{reason\}\)`\);/);
+  assert.doesNotMatch(sync, /console\.log\(`\[larsa-sync\] refresh: already current \(\$\{reason\}\)`\);/);
   // Then `data` for the changed keys only.
   assert.match(sync, /\.in\("store_key", stale\.map\(\(\{ key \}\) => key\)\)/);
   // A row with no stamp cannot be proven current, so it is still fetched.
   assert.match(sync, /&& \(!stamp \|\| lastSeenAt\.get\(key\) !== stamp\)\)/);
+});
+
+test("an already-current attendance tick does not trigger ledger reconciliation", () => {
+  const noChange = sync.slice(sync.indexOf("if (!stale.length) {"), sync.indexOf("const { data: rows", sync.indexOf("if (!stale.length) {")));
+  assert.doesNotMatch(noChange, /onStatusChange\?\.\("synced"\)/);
+  assert.match(sync, /let appliedRows = 0;/);
+  assert.match(sync, /if \(appliedRows > 0\) options\.onStatusChange\?\.\("synced"\);/);
 });
 
 test("clocking SOMEBODY ELSE is held to the same rule", () => {

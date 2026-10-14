@@ -115,6 +115,13 @@ test("a confirmed server punch cannot be turned into a repeat press by a cache w
     "tell the employee the server saved it if this browser cannot refresh");
 });
 
+test("an online authoritative punch is not submitted again by the compatibility ledger tap", async () => {
+  const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
+  assert.match(writer, /markAttendanceEventSent\(eventId\);/);
+  const ledger = await readFile(new URL("../lib/ledger.ts", import.meta.url), "utf8");
+  assert.match(ledger, /export function markAttendanceEventSent\(clientEventId: string\)/);
+});
+
 test("pending punches resume automatically and reuse their queued event id", () => {
   assert.match(page, /const retryPending = \(\) => \{/);
   assert.match(page, /window\.setInterval\(retryPending, 15_000\)/);

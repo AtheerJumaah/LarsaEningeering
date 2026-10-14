@@ -12,7 +12,7 @@
  * The numbers are the controlled examples from the QA specification:
  *   - 09:00–17:00 must read 8.00 h in every view
  *   - 22:00–02:00 crosses midnight and must land 2 h + 2 h
- *   - a 48 h open session is stale: flagged, never auto-closed,
+ *   - a 16 h open session is stale: flagged, never auto-closed,
  *     never silently included in totals
  *   - performance: draft 5 / submitted 10 / approved 15 / returned 8 /
  *     rejected 12 → official score 15, progress 15 of 50 = 30%
@@ -297,7 +297,7 @@ export function qaSeedEngine() {
  * same numbers the specification states. */
 export const QA_EXPECT = {
   fullDayHours: 8, midnightTotal: 4, midnightSplit: [2, 2], breakDayNet: 7, breakDayPresence: 8,
-  staleAfterHours: 48,
+  staleAfterHours: 16,
   officialPoints: 15, weekTarget: 50, progressPct: 30,
   budget: 120000000, funding: 100000000, fee: 8000000, netFunding: 92000000,
   materials: 20000000, labor: 10000000, pending: 5000000,

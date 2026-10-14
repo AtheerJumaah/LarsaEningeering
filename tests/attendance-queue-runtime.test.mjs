@@ -16,7 +16,7 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
     attendancePunchQueueKey:uid=>'queue:'+uid,parseStore:key=>JSON.parse(data.get(key)||'null'),
     localStorage:{setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
     confirmClockState:async(...args)=>{confirmCalls.push(args);return confirmation;},
-    notify(){},pushSyncedKeyNow(){},refreshStaffEngine(){},setStorageTick(){},
+    notify(){},pushSyncedKeyNow(){},refreshStaffEngine(){},setStorageTick(){},markAttendanceEventSent(){},
     recordAttendancePunch:async event=>{
       events.push(event);
       if(events.length===1)await new Promise(resolve=>{release=resolve;});

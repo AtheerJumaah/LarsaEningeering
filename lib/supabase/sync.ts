@@ -508,9 +508,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           /* No stamp means we cannot prove it is current, so fetch it. */
           && (!stamp || lastSeenAt.get(key) !== stamp));
       if (!stale.length) {
-        options.onStatusChange?.("synced");
         keys.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
-        console.log(`[larsa-sync] refresh: already current (${reason})`);
         return;
       }
       const { data: rows, error } = await supabase
@@ -519,15 +517,17 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         .in("store_key", stale.map(({ key }) => key));
       if (error || !Array.isArray(rows)) throw error || new Error("Invalid sync response");
       if (cancelled) return;
+      let appliedRows = 0;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
         if (!keys.includes(key)) return;
         const stamp = row.updated_at ? String(row.updated_at) : null;
         if (stamp && lastSeenAt.get(key) === stamp) return; // already current
         applyRemote(key, row.data ?? {}, stamp);
+        appliedRows += 1;
       });
       console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
-      options.onStatusChange?.("synced");
+      if (appliedRows > 0) options.onStatusChange?.("synced");
     } catch {
       options.onStatusChange?.("offline");
       /* Offline or mid-reconnect: the next trigger tries again. */

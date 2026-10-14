@@ -37,6 +37,7 @@ export function pairPunchSessions(logs: PunchLogLike[] | unknown, uid: string): 
 export function isSuspiciousClosedSession(start: string, end: string): boolean;
 export function isActiveClockSession(session: { open: boolean; stale?: boolean; unclosed?: boolean } | null | undefined): boolean;
 export const SUSPICIOUS_CLOSED_SESSION_HOURS: number;
+export const OPEN_SESSION_STALE_HOURS: number;
 export function findPunchSession(logs: PunchLogLike[] | unknown, uid: string, clockIn: string): PunchSession | null;
 export function planTrim(
   logs: PunchLogLike[] | unknown,

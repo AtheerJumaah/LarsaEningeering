@@ -4,10 +4,10 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
-import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection } from "../lib/ledger";
+import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
-import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession } from "../lib/attendance.mjs";
+import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
@@ -393,7 +393,7 @@ type ClockSession = {
      time lands on the day the person actually worked, not the UTC date. */
   date: string;
   /* Flagged sessions are shown but never counted: a clock-in left open past
-     48 hours (stale) or an open session abandoned before a later clock-in
+     16 hours (stale) or an open session abandoned before a later clock-in
      (unclosed). They need a correction, and pretending they are 72 hours of
      work in every total until then is how payroll goes wrong. openHours
      keeps the raw span visible so the flag can say how long it has been. */
@@ -2403,7 +2403,7 @@ function buildHomeSummary(
   const reminders: HomeReminder[] = [];
 
   // --- attendance -------------------------------------------------------
-  const openClock = sessions.find((session) => session.uid === viewer.id && session.open) || null;
+  const openClock = sessions.find((session) => session.uid === viewer.id && isActiveClockSession(session)) || null;
   const schedule = (store?.schedule as Record<string, Record<string, { start?: string; end?: string; name?: string }[]>> | undefined)?.[viewer.id];
   const todayEntries = Array.isArray(schedule?.[todayName]) ? schedule![todayName] : [];
   const shiftToday = shiftLabel(todayEntries);
@@ -2545,10 +2545,16 @@ function buildHomeSummary(
   const teamTarget = team.reduce((sum, user) => sum + (finiteNumber(growth.pointTargets[user.id]) || 50), 0);
   const awaitingReview = teamRows.filter((row) => !["Approved", "Returned"].includes(String(row.Status || ""))).length;
   const pendingAll = approvals.filter((request) => request.status === "Pending").length;
-  const inToday = activeStaff.filter((user) => {
-    const entries = (store?.schedule as Record<string, Record<string, unknown[]>> | undefined)?.[user.id]?.[todayName];
-    return Array.isArray(entries) && entries.length;
-  }).length;
+  /* "In the office today" is presence, not a planned shift count. A schedule
+     entry says somebody was expected; only an active Office session says they
+     are actually clocked in now. Keep stale and abandoned sessions out of the
+     card using the same predicate as Live Presence. */
+  const inToday = activeStaff.filter((user) => sessions.some((session) =>
+    session.uid === user.id
+    && session.date === today
+    && session.mode === "Office"
+    && isActiveClockSession(session),
+  )).length;
   const devOpen = growth.development.filter((record) => teamIds.has(record.employeeId) && record.status !== "Approved").length;
   const devMine = growth.development.filter((record) => record.employeeId === viewer.id && record.status !== "Approved").length;
   const myHoursWeek = sessions
@@ -3187,11 +3193,12 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
     const stillOpen = open as ClockLog | null;
     if (stillOpen?.time) {
       const openHours = (serverNowMs() - new Date(stillOpen.time).getTime()) / 3600000;
-      /* Open under 48 h: a live shift, counted normally. Past 48 h: stale.
+      /* Open under the stale threshold: a live shift, counted normally. Past
+         the threshold: stale.
          Still never auto-closed — the logs are untouched and the person or a
          manager closes or resets it — but flagged and excluded until then. */
       record(stillOpen.time, serverNowIso(), stillOpen.type || "Unspecified", true,
-        openHours >= 48 ? "stale" : undefined, adjustedMark(stillOpen.note));
+        openHours >= OPEN_SESSION_STALE_HOURS ? "stale" : undefined, adjustedMark(stillOpen.note));
     }
   });
   return sessions;
@@ -7224,6 +7231,7 @@ export default function Home() {
         } else {
           if (!Array.isArray(store.logs)) store.logs = [];
           const eventId = result.eventId || event.client_event_id;
+          markAttendanceEventSent(eventId);
           let log = store.logs.find((item) => String(item.id || "") === eventId);
           if (!log) {
             log = {
