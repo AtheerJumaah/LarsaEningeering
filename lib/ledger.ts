@@ -28,6 +28,7 @@
  * BACK — this app loses adjustments before it ever loses attendance. */
 
 import { getSupabaseClient, supabaseConfigured } from "./supabase/client";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type LedgerEvent = {
   client_event_id: string;
@@ -187,6 +188,47 @@ function eventFromLog(log: ClockLogLike, store: StaffStoreLike, source: string):
   };
 }
 
+/* Realtime carries only the newly appended ledger row, not the multi-megabyte
+   staff document. Apply that row to this browser immediately so a second
+   device can repaint its clock within the websocket round trip. The normal
+   app-state sync still follows and remains authoritative for roster edits. */
+function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
+  const id = String(row.client_event_id || "");
+  const uid = String(row.uid || "");
+  const status = String(row.status || "");
+  const time = String(row.occurred_at || "");
+  if (!id || !uid || !time || !LEDGER_STATUSES.has(status)) return;
+  const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+  if (!Array.isArray(store.logs)) store.logs = [];
+  const removed = new Set((store.removedLogIds || []).map(String));
+  if (removed.has(id) || store.logs.some((log) => String(log?.id || "") === id)) return;
+  store.logs.push({
+    id,
+    uid,
+    type: row.work_mode ? String(row.work_mode) : "Office",
+    status,
+    time,
+    active: false,
+    lastSeen: time,
+    ...(row.note ? { note: String(row.note) } : {}),
+    ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
+    recovery: "realtime-ledger",
+  });
+  /* Recompute only the denormalized active flags. The immutable event itself
+     is never changed, and a removed id can never become active again. */
+  store.logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+  const openByUid = new Map<string, ClockLogLike | null>();
+  store.logs.forEach((log) => {
+    if (removed.has(String(log.id || ""))) return;
+    if (log.status === "In") openByUid.set(String(log.uid || ""), log);
+    if (log.status === "Out") openByUid.set(String(log.uid || ""), null);
+  });
+  store.logs.forEach((log) => {
+    if (log.status === "In" || log.status === "Out") log.active = openByUid.get(String(log.uid || "")) === log;
+  });
+  try { localStorage.setItem("larsaStaffV8", JSON.stringify(store)); } catch { /* UI catches up on the next full sync */ }
+}
+
 /* Called on EVERY write of larsaStaffV8 (installed below): any log id we have
  * not seen before — whoever wrote it — is queued for the ledger. One tap
  * covers the quick-clock, admin clock-others, approved corrections, and the
@@ -265,12 +307,30 @@ export function initAttendanceLedger(): () => void {
   const timer = window.setInterval(() => { void flushLedgerQueue(); }, 60_000);
   const onOnline = () => { void flushLedgerQueue(); };
   window.addEventListener("online", onOnline);
+  const client = getSupabaseClient();
+  /* Older test doubles and a few cached Supabase clients do not expose
+     Realtime. Attendance remains fully functional through the RPC/REST
+     ledger path in that case; simply omit the low-latency notification. */
+  const channel = client && typeof (client as SupabaseClient & { channel?: unknown }).channel === "function"
+    ? client.channel("larsa-attendance-events")
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "attendance_events" },
+      (payload) => {
+        const row = payload.new as Partial<LedgerEvent> | null;
+        if (!row) return;
+        applyRealtimeAttendanceEvent(row);
+      },
+    )
+    : null;
+  channel?.subscribe();
   return () => {
     cancelled = true;
     tapInstalled = false;
     if (owner.setItem === patchedSetItem) owner.setItem = previousSetItem;
     window.clearInterval(timer);
     window.removeEventListener("online", onOnline);
+    if (channel) void client?.removeChannel(channel);
   };
 }
 
