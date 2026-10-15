@@ -325,9 +325,23 @@ export function initAttendanceLedger(): () => void {
   /* Older test doubles and a few cached Supabase clients do not expose
      Realtime. Attendance remains fully functional through the RPC/REST
      ledger path in that case; simply omit the low-latency notification. */
-  const channel = client && typeof (client as SupabaseClient & { channel?: unknown }).channel === "function"
-    ? client.channel("larsa-attendance-events")
-    .on(
+  /* The parent app starts sync and the ledger in the same effect. Previously
+     this channel was subscribed immediately, before sync's anonymous auth
+     bootstrap had necessarily completed. Supabase can then establish a
+     realtime socket without the authenticated JWT; the REST/RPC punch still
+     succeeds, but this low-latency attendance stream never receives the row.
+     The other device waits for its one-second fallback probe (or a large
+     app_state refresh), which is exactly the several-second lag employees
+     reported. Wait for a session, and explicitly rebuild the channel after a
+     transient timeout/error instead of relying on a silent socket recovery. */
+  type AttendanceChannel = ReturnType<SupabaseClient["channel"]>;
+  let channel: AttendanceChannel | null = null;
+  let retryTimer: number | null = null;
+  let authSubscription: { unsubscribe: () => void } | null = null;
+  const subscribe = () => {
+    if (cancelled || channel || !client || typeof (client as SupabaseClient & { channel?: unknown }).channel !== "function") return;
+    const next = client.channel("larsa-attendance-events");
+    next.on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "attendance_events" },
       (payload) => {
@@ -335,15 +349,54 @@ export function initAttendanceLedger(): () => void {
         if (!row) return;
         applyRealtimeAttendanceEvent(row);
       },
-    )
-    : null;
-  channel?.subscribe();
+    );
+    channel = next;
+    next.subscribe((status) => {
+      if (cancelled || (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED")) return;
+      /* Remove the dead channel before retrying. A failed channel must not
+         permanently block the guard above from creating its replacement. */
+      if (channel === next) channel = null;
+      if (retryTimer === null) {
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          void ensureRealtime();
+        }, 750);
+      }
+      void client.removeChannel(next);
+    });
+  };
+  const ensureRealtime = async () => {
+    if (cancelled || channel || !client) return;
+    try {
+      const { data } = await client.auth.getSession();
+      /* initLarsaSync owns anonymous-session creation. Calling
+         signInAnonymously here too races the sync bootstrap and can rotate the
+         browser's anonymous identity while a punch is in flight. The auth
+         state listener above will call subscribe as soon as that one shared
+         session is ready; a missing session here simply means "not ready yet". */
+      if (data.session && !cancelled) subscribe();
+    } catch {
+      /* The sync bootstrap and the online/focus retry remain the fallback;
+         this path is retried by the auth state callback or next init. */
+    }
+  };
+  if (client) {
+    try {
+      const auth = client.auth.onAuthStateChange((_event, session) => {
+        if (session) subscribe();
+      });
+      authSubscription = auth.data?.subscription ?? null;
+    } catch { /* older test doubles / clients without auth events */ }
+    void ensureRealtime();
+  }
   return () => {
     cancelled = true;
     tapInstalled = false;
     if (owner.setItem === patchedSetItem) owner.setItem = previousSetItem;
     window.clearInterval(timer);
     window.removeEventListener("online", onOnline);
+    if (retryTimer !== null) window.clearTimeout(retryTimer);
+    authSubscription?.unsubscribe();
     if (channel) void client?.removeChannel(channel);
   };
 }

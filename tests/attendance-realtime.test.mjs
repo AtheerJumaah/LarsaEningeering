@@ -13,6 +13,11 @@ test("attendance realtime applies only the small append-only ledger event", () =
   assert.match(ledger, /store\.logs\.some\(\(log\) => String\(log\?\.id \|\| ""\) === id\)/);
   assert.match(ledger, /larsa:attendance-realtime/);
   assert.match(ledger, /duplicate realtime delivery still needs to repair active flags/);
+  assert.match(ledger, /await client\.auth\.getSession\(\)/);
+  assert.match(ledger, /client\.auth\.onAuthStateChange/);
+  assert.match(ledger, /if \(data\.session && !cancelled\) subscribe\(\)/);
+  assert.match(ledger, /status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED"/);
+  assert.match(ledger, /larsa-attendance-events/);
 });
 
 test("the React shell repaints immediately when a realtime attendance event arrives", () => {
