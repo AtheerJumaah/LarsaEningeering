@@ -51,7 +51,7 @@ test("something that is not a picture is refused before any of that", () => {
 test("a person sets their own picture and nobody else's", () => {
   /* The same line the password draws. saveOwnProfile's allow-list is the
      enforcement — the form merely not offering the option would not be. */
-  assert.match(page, /\(\["email", "phone", "location", "photo", "password", "pin", "notifyPrefs"\] as const\)/);
+  assert.match(page, /\(\["email", "phone", "location", "photo", "password", "pin", "notifyPrefs", "theme"\] as const\)/);
   // Role, access and permissions stay off that list.
   assert.match(page, /\/\/ Role, access, scope, and permissions are never editable from here\./);
 });

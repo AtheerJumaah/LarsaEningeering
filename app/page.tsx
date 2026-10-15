@@ -12,7 +12,7 @@ import { resolveClockDisplay } from "../lib/attendance-display.mjs";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
-import { recordAttendancePunch, type AttendancePunchInput } from "../lib/attendance-punch";
+import { recordAttendancePunch, warmAttendanceAuth, type AttendancePunchInput } from "../lib/attendance-punch";
 import { subscribeToPush, unsubscribeFromPush, adoptPushSubscription, thisDeviceSubscribed, pushSupported, pushNeedsHomeScreen, setAppBadge, describeThisDevice, canDisplayNotifications } from "../lib/supabase/push";
 import {
   raiseNotifications, fetchFeed, fetchCounts, markNotifications, markAllRead,
@@ -283,6 +283,9 @@ type StaffUser = {
   projectAccessMode?: ProjectAccessMode;
   projectIds?: string[];
   notifyPrefs?: NotifyPrefs;
+  /** Shared shell theme. localStorage is only a first-paint fallback; the
+      account value keeps signed-in browsers on the same background. */
+  theme?: "light" | "dark";
   phoneAlt?: string;
   /* A square JPEG data URL, small enough to live on the record. Stored here
      rather than in a bucket because this deployment has no file storage at
@@ -4799,6 +4802,11 @@ export default function Home() {
         }
         if (status !== "synced") return;
         setAttendanceConnectionState("online");
+        /* The sync bootstrap has just established/reused the Supabase session.
+           Warm the punch module's auth cache before the employee presses
+           Clock In/Out, so the first deliberate action does not pay the
+           session-lock lookup on its critical path. */
+        void warmAttendanceAuth();
         markClockConfirmed();
         reconcileStoreFromLedger().then(({ restored, changed }) => {
           if (changed || restored > 0) {
@@ -4956,14 +4964,19 @@ export default function Home() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        const saved = localStorage.getItem("larsa-control-theme");
+        const accountTheme = sessionUser?.id
+          ? accessUsers.find((user) => user.id === sessionUser.id)?.theme || sessionUser.theme
+          : undefined;
+        const saved = accountTheme === "dark" || accountTheme === "light"
+          ? accountTheme
+          : localStorage.getItem("larsa-control-theme");
         if (saved === "dark" || saved === "light") setDark(saved === "dark");
         else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) setDark(true);
       } catch { /* private mode */ }
       setThemeRead(true);
     }, 0);
     return () => clearTimeout(timer);
-  }, []);
+  }, [accessUsers, sessionUser?.id, sessionUser?.theme]);
 
   useEffect(() => {
     applyThemeToFrames(dark);
@@ -7313,6 +7326,11 @@ export default function Home() {
       notify("This device could not save the pending clock action. Please check storage and try again.");
       return false;
     }
+    /* Repaint from the durable local queue immediately. The server remains the
+       authority, but employees should see their selected In/Out transition
+       without waiting for the RPC, realtime echo, or the large staff-store
+       sync. The same event id remains queued for an idempotent retry. */
+    setStorageTick(value => value + 1);
     if (user.id !== actor.id) {
       try {
         const registryKey = `larsaAttendanceManagedPendingV1:${actor.id}`;
@@ -9825,7 +9843,7 @@ export default function Home() {
     const safe: Partial<StaffUser> = {};
     /* "photo" belongs on this list and nowhere else: a person may set their own
        picture and no one else's. It is the same line the password draws. */
-    (["email", "phone", "location", "photo", "password", "pin", "notifyPrefs"] as const).forEach((key) => {
+    (["email", "phone", "location", "photo", "password", "pin", "notifyPrefs", "theme"] as const).forEach((key) => {
       if (patch[key] !== undefined) (safe as Record<string, unknown>)[key] = patch[key];
     });
     /* The change stamps travel WITH their secrets — and only with them. The
@@ -9847,6 +9865,9 @@ export default function Home() {
     const next = { ...store.users[index], ...safe, touchedAt: serverNowIso() };
     store.users[index] = next;
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    /* Profile preferences are shared account state. Do not leave a theme
+       change waiting behind the general sync debounce. */
+    pushSyncedKeyNow("larsaStaffV8");
     sessionUserRef.current = next;
     setSessionUser(next);
     persistSession(next, sessionMethodRef.current || "email", rememberRef.current);
@@ -9854,6 +9875,14 @@ export default function Home() {
     notify("Your settings were saved.");
     return true;
   }, [notify]);
+
+  const setThemePreference = useCallback((nextDark: boolean) => {
+    setDark(nextDark);
+    const nextTheme: StaffUser["theme"] = nextDark ? "dark" : "light";
+    /* An access preview borrows another identity for display. Never write the
+       owner's theme choice into the previewed employee's account. */
+    if (!previewOwner && sessionUserRef.current?.theme !== nextTheme) saveOwnProfile({ theme: nextTheme });
+  }, [previewOwner, saveOwnProfile]);
 
   /* Add a shift type, or correct an existing one. Editing a built-in writes an
      override rather than mutating the constant, so schedules already recorded
@@ -10287,7 +10316,7 @@ export default function Home() {
                 {installBusy ? "Opening installer…" : "Install App"}
               </button>
             )}
-            <button type="button" className="theme" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">
+            <button type="button" className="theme" onClick={() => setThemePreference(!dark)} aria-label="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             {sessionUser && !previewOwner && <button type="button" className="top-signout" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button>}
@@ -10405,7 +10434,7 @@ export default function Home() {
               user={sessionUser}
               unread={unreadCount}
               dark={dark}
-              setDark={setDark}
+              setDark={setThemePreference}
               saveProfile={saveOwnProfile}
               openBell={() => setBellOpen(true)}
               sendCode={sendVerificationCode}

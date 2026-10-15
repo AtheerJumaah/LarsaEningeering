@@ -12,7 +12,7 @@ const punch = page.slice(page.indexOf("const punchClock = useCallback"), page.in
 assert.ok(punch.length > 500, "punchClock could not be isolated");
 
 test("explicit presses preserve displayed intent while intent-free calls confirm server state", () => {
-  assert.match(page, /import \{ recordAttendancePunch, type AttendancePunchInput \} from "\.\.\/lib\/attendance-punch";/);
+  assert.match(page, /import \{ recordAttendancePunch, warmAttendanceAuth, type AttendancePunchInput \} from "\.\.\/lib\/attendance-punch";/);
   assert.match(punch, /let decided: AttendancePunchInput\["status"\];/);
   assert.match(punch, /if \(intent === undefined\) \{[\s\S]*await confirmClockState\(user\.id, initialStore\?\.removedLogIds \|\| \[\]\)/);
   assert.match(punch, /if \(!confirmed\.reached \|\| !confirmed\.status\) \{[\s\S]*return false;[\s\S]*decided = confirmed\.status === "In" \? "Out" : "In";/);
@@ -36,6 +36,14 @@ test("an ambiguous timeout keeps the same event queued for retry", () => {
   assert.match(punch, /if \(result\.outcome === "unavailable"/);
   assert.match(punch, /pending\.splice\(0, pending\.length, \.\.\.remaining\);/);
   assert.match(punchClient, /setTimeout\(\(\) => \{[\s\S]*controller\.abort\(\)[\s\S]*resolve\(\{ outcome: "unavailable" \}\)/);
+});
+
+test("the selected punch repaints immediately while the server save is pending", () => {
+  const queueWrite = punch.indexOf("if (!writeAttendanceQueue(queueKey, pending))");
+  const immediatePaint = punch.indexOf("setStorageTick(value => value + 1);", queueWrite);
+  const serverCall = punch.indexOf("const result = await recordAttendancePunch(event);");
+  assert.ok(queueWrite >= 0 && immediatePaint > queueWrite && immediatePaint < serverCall,
+    "the durable pending queue must repaint before the network RPC completes");
 });
 
 test("the server response repairs local active flags and persists the record", () => {
