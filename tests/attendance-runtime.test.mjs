@@ -112,6 +112,19 @@ test('confirmed punch client distinguishes a missing RPC from an offline connect
   assert.equal(result.outcome,'configuration_error');
 });
 
+test('consecutive punches reuse the confirmed auth session instead of adding a second lookup',async()=>{
+  let sessionLookups=0, rpcCalls=0;
+  const client={
+    auth:{getSession:async()=>{sessionLookups++;return {data:{session:{user:{id:'anonymous'}}}};}},
+    rpc:()=>{rpcCalls++;return {abortSignal:async()=>({data:{outcome:'recorded',current_status:'In',current_at:'2026-10-12T09:00:00Z'},error:null})};},
+  };
+  const r=runtime('lib/attendance-punch.ts',client);
+  await r.api.recordAttendancePunch({client_event_id:'first',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  await r.api.recordAttendancePunch({client_event_id:'second',uid:'employee',status:'Out',occurred_at:'2026-10-12T10:00:00Z'});
+  assert.equal(rpcCalls,2);
+  assert.equal(sessionLookups,1);
+});
+
 test('uncertain punch timeout aborts the request, preserving original intent and event id',async()=>{
   let signal, payload;
   const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:(_name,p)=>{

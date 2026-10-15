@@ -44,7 +44,7 @@ assert.ok(apply.length > 300, "applyRemote could not be isolated");
 
 test("a content-free realtime payload triggers a re-fetch, never an apply", () => {
   assert.match(handler, /if \(!hasContent\(row\.data\)\) \{/);
-  assert.match(handler, /refreshFromServer\("realtime payload had no data"\);/);
+  assert.match(handler, /refreshFromServer\("realtime payload had no data"(?:,\s*\[[^\]]+\])?\);/);
   // The guard sits before the apply, and the apply no longer defaults to {}.
   assert.ok(
     handler.indexOf("hasContent(row.data)") < handler.indexOf("applyRemote("),

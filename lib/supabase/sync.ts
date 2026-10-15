@@ -407,7 +407,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              "something changed, contents unknown": re-fetch the
              authoritative row instead of applying the nothing we were sent. */
           if (!hasContent(row.data)) {
-            refreshFromServer("realtime payload had no data");
+            refreshFromServer("realtime payload had no data", [row.store_key as SyncedKey]);
             return;
           }
           applyRemote(row.store_key as SyncedKey, row.data, row.updated_at ? String(row.updated_at) : null);
@@ -488,7 +488,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      newer than this device's copy. Runs when the app regains focus, when the
      network returns, and when the realtime channel re-subscribes after a
      drop — the moments a device is most likely to be silently stale. */
-  let refreshing = false;
+  /* A large accounting/HR row must never hold the attendance probe hostage.
+     Keep the guard per store so the one-second attendance path can continue
+     while an unrelated shared document is being fetched. */
+  const refreshingKeys = new Set<SyncedKey>();
   /* Two round trips on purpose. The staff document is ~840 KB, so pulling it
      to discover it has not changed is most of a second on a phone for nothing
      — and that pull is exactly the window in which the app shows a stale
@@ -497,12 +500,13 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      changed — a refresh now costs one tiny query, which is what makes it
      affordable to run on a timer as well as on focus. */
   async function refreshFromServer(reason: string, requestedKeys: readonly SyncedKey[] = SYNCED_KEYS) {
-    if (refreshing || cancelled) return;
+    if (cancelled) return;
     const keys = requestedKeys.filter((key): key is SyncedKey =>
       (SYNCED_KEYS as readonly string[]).includes(key),
     );
     if (!keys.length) return;
-    refreshing = true;
+    if (keys.some((key) => refreshingKeys.has(key))) return;
+    keys.forEach((key) => refreshingKeys.add(key));
     try {
       if (!bootstrapped) { await bootstrap(); return; }
       await ensureSession();
@@ -550,7 +554,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       if (keys.includes("larsaStaffV8")) options.onStatusChange?.("offline");
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
-      refreshing = false;
+      keys.forEach((key) => refreshingKeys.delete(key));
     }
   }
 

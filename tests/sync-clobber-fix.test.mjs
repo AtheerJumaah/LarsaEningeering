@@ -56,6 +56,23 @@ test("sync.ts records the server stamp carried by realtime arrivals", async () =
   assert.match(sync, /if \(remoteUpdatedAt\) lastSeenAt\.set\(key, remoteUpdatedAt\);/);
 });
 
+test("attendance stamp probes are not blocked by unrelated shared-store refreshes", async () => {
+  const sync = await read("lib/supabase/sync.ts");
+  assert.match(sync, /const refreshingKeys = new Set<SyncedKey>\(\)/);
+  assert.match(sync, /keys\.some\(\(key\) => refreshingKeys\.has\(key\)\)/);
+  assert.match(sync, /keys\.forEach\(\(key\) => refreshingKeys\.add\(key\)\)/);
+  assert.match(sync, /keys\.forEach\(\(key\) => refreshingKeys\.delete\(key\)\)/);
+});
+
+test("attendance fallback polls the compact ledger independently of the large staff blob", async () => {
+  const ledger = await read("lib/ledger.ts");
+  assert.match(ledger, /from\("attendance_events"\)/);
+  assert.match(ledger, /\.select\("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, inserted_at"\)/);
+  assert.match(ledger, /\.limit\(200\)/);
+  assert.match(ledger, /setInterval\(\(\) => \{ void pollRecentAttendance\(\); \}, 1_000\)/);
+  assert.match(ledger, /const attendancePollInFlight =|let attendancePollInFlight/);
+});
+
 test("sync.ts measures device clock skew against server_now() and shares it via localStorage", async () => {
   const sync = await read("lib/supabase/sync.ts");
   assert.match(sync, /CLOCK_OFFSET_STORAGE_KEY = "larsaClockOffsetMsV1"/);

@@ -1,4 +1,5 @@
 import { getSupabaseClient, supabaseConfigured } from "./supabase/client";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type AttendancePunchInput = {
   client_event_id: string;
@@ -27,6 +28,42 @@ export type AttendancePunchResult = {
   clockedBy?: string | null;
 };
 
+// The shared sync bootstrap normally confirms the anonymous Supabase session
+// before punch controls are enabled. Reusing that confirmation avoids a
+// session-lock lookup on every deliberate punch, while retaining a fallback
+// for direct callers and resetting safely if the server reports an error.
+let authReadyClient: SupabaseClient | null = null;
+let authReady = false;
+let authPromise: Promise<boolean> | null = null;
+
+async function ensureAttendanceAuth(client: SupabaseClient): Promise<boolean> {
+  if (authReady && authReadyClient === client) return true;
+  if (authPromise) return authPromise;
+
+  authPromise = (async () => {
+    const { data: auth } = await client.auth.getSession();
+    if (!auth.session) {
+      const { error: signInError } = await client.auth.signInAnonymously();
+      if (signInError) return false;
+    }
+    authReadyClient = client;
+    authReady = true;
+    return true;
+  })()
+    .catch(() => false)
+    .finally(() => {
+      authPromise = null;
+    });
+
+  return authPromise;
+}
+
+function resetAttendanceAuth(client: SupabaseClient) {
+  if (authReadyClient !== client) return;
+  authReadyClient = null;
+  authReady = false;
+}
+
 /* The server owns the state transition. A timeout is reported as uncertain,
    never as success; a caller can safely retry with the same event id. */
 export async function recordAttendancePunch(input: AttendancePunchInput): Promise<AttendancePunchResult> {
@@ -40,12 +77,9 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
     const request = (async () => {
       /* The app's shared sync bootstrap signs into Supabase anonymously. A
          first clock action can happen before that async bootstrap completes,
-         so establish the same session here before calling the invoker RPC. */
-      const { data: auth } = await client.auth.getSession();
-      if (!auth.session) {
-        const { error: signInError } = await client.auth.signInAnonymously();
-        if (signInError) return { outcome: "unavailable" as const };
-      }
+         so establish the same session here, but do not repeat the auth lookup
+         for every consecutive punch from the same client. */
+      if (!(await ensureAttendanceAuth(client))) return { outcome: "unavailable" as const };
       // A timed-out auth lookup must not start a late, abandoned RPC.
       if (controller.signal.aborted) return { outcome: "unavailable" as const };
       let deviceId: string | null = null;
@@ -72,6 +106,7 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         const code = String(response.error.code || "");
         if (code === "PGRST202" || code === "42883") return { outcome: "configuration_error" as const };
         if (code === "22023") return { outcome: "needs_review" as const };
+        resetAttendanceAuth(client);
         return { outcome: "unavailable" as const };
       }
       const row = Array.isArray(response.data) ? response.data[0] : response.data;

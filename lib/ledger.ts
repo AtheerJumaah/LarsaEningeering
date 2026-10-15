@@ -322,6 +322,7 @@ export function initAttendanceLedger(): () => void {
   const onOnline = () => { void flushLedgerQueue(); };
   window.addEventListener("online", onOnline);
   const client = getSupabaseClient();
+  const attendanceClient = client;
   /* Older test doubles and a few cached Supabase clients do not expose
      Realtime. Attendance remains fully functional through the RPC/REST
      ledger path in that case; simply omit the low-latency notification. */
@@ -338,6 +339,44 @@ export function initAttendanceLedger(): () => void {
   let channel: AttendanceChannel | null = null;
   let retryTimer: number | null = null;
   let authSubscription: { unsubscribe: () => void } | null = null;
+  let attendancePollTimer: number | null = null;
+  let attendancePollInFlight = false;
+  let lastAttendancePollStamp: string | null = null;
+
+  /* Realtime is the primary path, but a browser can have a websocket that
+     appears connected while silently missing an INSERT. Do not fall back to
+     the large larsaStaffV8 blob here: after a punch it can take several
+     seconds to upload. This watchdog asks only for recent ledger rows and
+     applies them through the same idempotent path as realtime, keeping
+     cross-device status convergence at the one-second cadence requested by
+     the clock UI. */
+  const pollRecentAttendance = async () => {
+    if (cancelled || attendancePollInFlight || (typeof document !== "undefined" && document.hidden)) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    if (!attendanceClient) return;
+    attendancePollInFlight = true;
+    try {
+      const since = lastAttendancePollStamp
+        ? new Date(Math.max(0, Date.parse(lastAttendancePollStamp) - 2_000)).toISOString()
+        : new Date(Date.now() - 120_000).toISOString();
+      const { data, error } = await attendanceClient
+        .from("attendance_events")
+        .select("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, inserted_at")
+        .gte("inserted_at", since)
+        .order("inserted_at", { ascending: true })
+        .limit(200);
+      if (error || !Array.isArray(data)) return;
+      data.forEach((row) => applyRealtimeAttendanceEvent(row as Partial<LedgerEvent>));
+      const stamps = data
+        .map((row) => String((row as { inserted_at?: string }).inserted_at || ""))
+        .filter((stamp) => Number.isFinite(Date.parse(stamp)));
+      if (stamps.length) lastAttendancePollStamp = stamps.at(-1) || lastAttendancePollStamp;
+    } catch {
+      /* Realtime and the normal sync/reconnect paths remain available. */
+    } finally {
+      attendancePollInFlight = false;
+    }
+  };
   const subscribe = () => {
     if (cancelled || channel || !client || typeof (client as SupabaseClient & { channel?: unknown }).channel !== "function") return;
     const next = client.channel("larsa-attendance-events");
@@ -388,13 +427,24 @@ export function initAttendanceLedger(): () => void {
       authSubscription = auth.data?.subscription ?? null;
     } catch { /* older test doubles / clients without auth events */ }
     void ensureRealtime();
+    void pollRecentAttendance();
+    attendancePollTimer = window.setInterval(() => { void pollRecentAttendance(); }, 1_000);
   }
+  const onAttendanceOnline = () => { void pollRecentAttendance(); };
+  const onAttendanceVisible = () => {
+    if (typeof document === "undefined" || !document.hidden) void pollRecentAttendance();
+  };
+  window.addEventListener("online", onAttendanceOnline);
+  document.addEventListener("visibilitychange", onAttendanceVisible);
   return () => {
     cancelled = true;
     tapInstalled = false;
     if (owner.setItem === patchedSetItem) owner.setItem = previousSetItem;
     window.clearInterval(timer);
+    if (attendancePollTimer !== null) window.clearInterval(attendancePollTimer);
     window.removeEventListener("online", onOnline);
+    window.removeEventListener("online", onAttendanceOnline);
+    document.removeEventListener("visibilitychange", onAttendanceVisible);
     if (retryTimer !== null) window.clearTimeout(retryTimer);
     authSubscription?.unsubscribe();
     if (channel) void client?.removeChannel(channel);
