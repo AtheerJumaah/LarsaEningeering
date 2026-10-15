@@ -64,6 +64,13 @@ function resetAttendanceAuth(client: SupabaseClient) {
   authReady = false;
 }
 
+function isAuthFailure(error: { code?: unknown; message?: unknown } | null | undefined) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "").toLowerCase();
+  return code === "401" || code === "42501" || code === "PGRST301"
+    || message.includes("jwt") || message.includes("permission") || message.includes("not authenticated");
+}
+
 /* The server owns the state transition. A timeout is reported as uncertain,
    never as success; a caller can safely retry with the same event id. */
 export async function recordAttendancePunch(input: AttendancePunchInput): Promise<AttendancePunchResult> {
@@ -75,11 +82,13 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
   const controller = new AbortController();
   try {
     const request = (async () => {
-      /* The app's shared sync bootstrap signs into Supabase anonymously. A
-         first clock action can happen before that async bootstrap completes,
-         so establish the same session here, but do not repeat the auth lookup
-         for every consecutive punch from the same client. */
-      if (!(await ensureAttendanceAuth(client))) return { outcome: "unavailable" as const };
+      /* Warm the session without putting it in front of the RPC. The function
+         is deliberately granted to the anon role, and the app sends the
+         employee/actor identity in the audited payload, so the normal punch
+         path should not wait on an auth lock or token refresh. If the server
+         actually rejects that request for auth, wait for the same promise and
+         retry once with the identical event id. */
+      const authWarmup = ensureAttendanceAuth(client);
       // A timed-out auth lookup must not start a late, abandoned RPC.
       if (controller.signal.aborted) return { outcome: "unavailable" as const };
       let deviceId: string | null = null;
@@ -87,7 +96,7 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         deviceId = localStorage.getItem("larsaAttendanceDeviceV1") || globalThis.crypto.randomUUID();
         localStorage.setItem("larsaAttendanceDeviceV1", deviceId);
       } catch { /* audit session ID is still captured by the server */ }
-      const response = await client.rpc("record_attendance_action", {
+      const requestPayload = {
         p_client_event_id: input.client_event_id,
         p_occurred_at: input.occurred_at,
         p_uid: input.uid,
@@ -101,7 +110,12 @@ export async function recordAttendancePunch(input: AttendancePunchInput): Promis
         p_removed_ids: input.removed_ids ?? [],
         p_actor_employee_id: input.actor_id || input.uid,
         p_device_info: { id: deviceId, userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null },
-      }).abortSignal(controller.signal);
+      };
+      let response = await client.rpc("record_attendance_action", requestPayload).abortSignal(controller.signal);
+      if (response.error && isAuthFailure(response.error)) {
+        if (!(await authWarmup) || controller.signal.aborted) return { outcome: "unavailable" as const };
+        response = await client.rpc("record_attendance_action", requestPayload).abortSignal(controller.signal);
+      }
       if (response.error) {
         const code = String(response.error.code || "");
         if (code === "PGRST202" || code === "42883") return { outcome: "configuration_error" as const };

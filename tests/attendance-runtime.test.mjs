@@ -125,6 +125,22 @@ test('consecutive punches reuse the confirmed auth session instead of adding a s
   assert.equal(sessionLookups,1);
 });
 
+test('an actual auth rejection waits for the warmup and retries the same event id once',async()=>{
+  let attempts=0, sessionLookups=0, payloads=[];
+  const client={
+    auth:{getSession:async()=>{sessionLookups++;return {data:{session:{user:{id:'anonymous'}}}};}},
+    rpc:(_name,p)=>{payloads.push(p);attempts++;return {abortSignal:async()=>attempts===1
+      ? {data:null,error:{code:'401',message:'JWT is missing'}}
+      : {data:{outcome:'recorded',current_status:'In',current_at:'2026-10-12T09:00:00Z'},error:null}};},
+  };
+  const r=runtime('lib/attendance-punch.ts',client);
+  const result=await r.api.recordAttendancePunch({client_event_id:'stable',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
+  assert.equal(result.outcome,'recorded');
+  assert.equal(attempts,2);
+  assert.equal(sessionLookups,1);
+  assert.equal(payloads[0].p_client_event_id,payloads[1].p_client_event_id);
+});
+
 test('uncertain punch timeout aborts the request, preserving original intent and event id',async()=>{
   let signal, payload;
   const client={auth:{getSession:async()=>({data:{session:{}}})},rpc:(_name,p)=>{
@@ -140,13 +156,13 @@ test('uncertain punch timeout aborts the request, preserving original intent and
   assert.equal(payload.p_status,'Out');assert.equal(payload.p_occurred_at,input.occurred_at);
 });
 
-test('auth lookup finishing after timeout cannot send an abandoned punch',async()=>{
+test('auth warmup finishing after timeout cannot send a second abandoned punch',async()=>{
   let release,calls=0;
   const client={auth:{getSession:()=>new Promise(resolve=>{release=resolve;})},rpc:()=>{calls++;}};
   const r=runtime('lib/attendance-punch.ts',client);
   const pending=r.api.recordAttendancePunch({client_event_id:'e',uid:'employee',status:'In',occurred_at:'2026-10-12T09:00:00Z'});
   r.timers.find(t=>t.ms===8000).fn();assert.equal((await pending).outcome,'unavailable');
-  release({data:{session:{}}});await settle();assert.equal(calls,0);
+  release({data:{session:{}}});await settle();assert.equal(calls,1);
 });
 
 test('native correction planner refuses overlap and legacy ambiguous timezone, preserving current shift',()=>{
