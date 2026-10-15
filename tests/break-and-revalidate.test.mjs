@@ -72,7 +72,7 @@ test("the engine re-reads before it decides a break, and hands it over", () => {
 });
 
 test("a tab left open revalidates on a timer, not only on an edge", () => {
-  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate"\);\s*\n\s*\}, 3_000\);/);
+  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate", NON_ATTENDANCE_KEYS\);\s*\n\s*\}, 3_000\);/);
   assert.match(sync, /const attendanceRevalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("attendance periodic revalidate", \["larsaStaffV8"\]\);\s*\n\s*\}, 1_000\);/);
   assert.match(sync, /attendance-only probe runs\s+every second/);
   assert.match(sync, /async function refreshFromServer\(reason: string, requestedKeys: readonly SyncedKey\[\] = SYNCED_KEYS\)/);
@@ -95,11 +95,13 @@ test("a refresh that finds nothing changed does not pull the 840 KB blob", () =>
   assert.match(sync, /&& \(!stamp \|\| lastSeenAt\.get\(key\) !== stamp\)\)/);
 });
 
-test("an already-current attendance tick does not trigger ledger reconciliation", () => {
+test("an already-current attendance tick confirms the server without fetching the blob", () => {
   const noChange = sync.slice(sync.indexOf("if (!stale.length) {"), sync.indexOf("const { data: rows", sync.indexOf("if (!stale.length) {")));
-  assert.doesNotMatch(noChange, /onStatusChange\?\.\("synced"\)/);
+  assert.match(noChange, /onStatusChange\?\.\("synced"\)/);
   assert.match(sync, /let appliedRows = 0;/);
-  assert.match(sync, /if \(appliedRows > 0\) options\.onStatusChange\?\.\("synced"\);/);
+  assert.match(sync, /options\.onStatusChange\?\.\("synced"\);/);
+  assert.match(sync, /const NON_ATTENDANCE_KEYS = SYNCED_KEYS\.filter/);
+  assert.match(sync, /refreshFromServer\("network back", \["larsaStaffV8"\]\)/);
 });
 
 test("sign-out pauses shared-state writes without disabling refresh", () => {

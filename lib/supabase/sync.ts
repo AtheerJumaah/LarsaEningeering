@@ -38,6 +38,7 @@ export const SYNCED_KEYS = [
   "larsa_hr_visual_counts_v5",
 ] as const;
 export type SyncedKey = (typeof SYNCED_KEYS)[number];
+const NON_ATTENDANCE_KEYS = SYNCED_KEYS.filter((key) => key !== "larsaStaffV8");
 
 /* ---- Server clock ------------------------------------------------------
    Attendance punches must not trust the device's clock: one phone set ten
@@ -521,6 +522,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           && (!stamp || lastSeenAt.get(key) !== stamp));
       if (!stale.length) {
         keys.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
+        /* A successful stamp probe is enough to prove the server is reachable.
+           Reconnection can find no changed rows, but the UI still needs to
+           leave its conservative "checking" state so punches become usable. */
+        if (keys.includes("larsaStaffV8")) options.onStatusChange?.("synced");
         return;
       }
       const { data: rows, error } = await supabase
@@ -539,9 +544,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         appliedRows += 1;
       });
       console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
-      if (appliedRows > 0) options.onStatusChange?.("synced");
+      /* Reachability is independent of whether another device changed a row. */
+      if (keys.includes("larsaStaffV8")) options.onStatusChange?.("synced");
     } catch {
-      options.onStatusChange?.("offline");
+      if (keys.includes("larsaStaffV8")) options.onStatusChange?.("offline");
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
       refreshing = false;
@@ -569,7 +575,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      every second so a cross-device clock status normally converges in about a
      second without polling every shared store at that rate. */
   const revalidateTimer = setInterval(() => {
-    if (!document.hidden) refreshFromServer("periodic revalidate");
+    if (!document.hidden) refreshFromServer("periodic revalidate", NON_ATTENDANCE_KEYS);
   }, 3_000);
   const attendanceRevalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
@@ -578,8 +584,15 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
      to see the truth. */
-  const onVisible = () => { if (!document.hidden) refreshFromServer("app focused"); };
-  const onOnline = () => { refreshFromServer("network back"); };
+  const onVisible = () => {
+    if (document.hidden) return;
+    void refreshFromServer("app focused", ["larsaStaffV8"])
+      .then(() => refreshFromServer("app focused (other stores)", NON_ATTENDANCE_KEYS));
+  };
+  const onOnline = () => {
+    void refreshFromServer("network back", ["larsaStaffV8"])
+      .then(() => refreshFromServer("network back (other stores)", NON_ATTENDANCE_KEYS));
+  };
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
   window.addEventListener("focus", onVisible);
