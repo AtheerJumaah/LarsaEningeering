@@ -92,7 +92,7 @@ test("an uncertain save stays queued and the same id is retried", () => {
   const guarded = page.slice(page.indexOf("const punchClockGuarded"), page.indexOf("/* The Timeclock panel's clock button"));
   assert.match(guarded, /finally \{ punchLock\.current = false; \}/);
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
-  assert.match(writer, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
+  assert.match(writer, /writeAttendanceQueue\(queueKey, pending\)/);
   assert.match(writer, /const result = await recordAttendancePunch\(event\);/);
   const unavailableAt = writer.indexOf("if (result.outcome === \"unavailable\"");
   const confirmedConsumeAt = writer.indexOf("pending.splice", writer.indexOf("lastOutcome = result.outcome;"));
@@ -104,13 +104,13 @@ test("a confirmed server punch cannot be turned into a repeat press by a cache w
   const writer = page.slice(page.indexOf("const punchClock = useCallback"), page.indexOf("const punchClockGuarded"));
   const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;");
   const consumeQueue = writer.indexOf("pending.splice", serverConfirmed);
-  const saveQueue = writer.indexOf('localStorage.setItem(queueKey, JSON.stringify(pending))', consumeQueue);
+  const saveQueue = writer.indexOf('writeAttendanceQueue(queueKey, pending)', consumeQueue);
   const refreshCache = writer.indexOf('localStorage.setItem("larsaStaffV8", JSON.stringify(store))', saveQueue);
   assert.ok(serverConfirmed >= 0 && consumeQueue > serverConfirmed && saveQueue > consumeQueue,
     "remove a server-confirmed request from the pending queue first");
   assert.ok(refreshCache > saveQueue, "the local cache is updated after the queue is consumed");
-  assert.match(writer.slice(saveQueue, refreshCache), /catch \{[\s\S]*?\}/,
-    "localStorage errors must not escape the confirmed server path");
+  assert.match(writer.slice(saveQueue, refreshCache), /clearAttendanceQueue\(queueKey\)/,
+    "storage errors must not escape the confirmed server path");
   assert.match(writer, /saved on the server, but this device could not refresh/,
     "tell the employee the server saved it if this browser cannot refresh");
 });

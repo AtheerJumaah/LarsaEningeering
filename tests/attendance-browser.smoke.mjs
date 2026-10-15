@@ -42,7 +42,7 @@ await context.route('**/*.supabase.co/**',async route=>{
 });
 await context.addInitScript(user=>{
   const original=Storage.prototype.setItem;
-  Storage.prototype.setItem=function(k,v){if(window.__attendanceQuotaFail && k.startsWith('larsaAttendancePunchQueueV1:'))throw new DOMException('quota','QuotaExceededError');return original.call(this,k,v);};
+  Storage.prototype.setItem=function(k,v){if(window.__attendanceQuotaFail && this===window.localStorage && k.startsWith('larsaAttendancePunchQueueV1:'))throw new DOMException('quota','QuotaExceededError');return original.call(this,k,v);};
   if(!localStorage.getItem('larsaStaffV8'))localStorage.setItem('larsaStaffV8',JSON.stringify({users:[user],logs:[]}));
   sessionStorage.setItem('larsa-control-session',JSON.stringify({user,method:'pin'}));
 },user);
@@ -56,13 +56,14 @@ async function clockPage(){
 }
 const label=page=>page.locator('.native.active button.clock-punch');
 const waitLabel=(page,text)=>page.waitForFunction(text=>document.querySelector('.native.active button.clock-punch')?.textContent.includes(text),text,{timeout:20000});
+const waitForEvent=async(expected)=>{for(let i=0;i<250&&events.length<expected;i++)await new Promise(resolve=>setTimeout(resolve,20));assert.equal(events.length,expected);};
 try {
   const page=await clockPage();
   await waitLabel(page,'Clock In');
   delay=1200;
   await label(page).click();
   assert.equal(await label(page).isDisabled(),true,'saving disables duplicate presses');
-  await waitLabel(page,'Clock Out');assert.equal(events.length,1);passed.push('one slow deliberate In, immediate Saving, no duplicate');delay=0;
+  await waitLabel(page,'Clock Out');await waitForEvent(1);passed.push('one slow deliberate In, immediate Saving, no duplicate');delay=0;
   await page.getByRole('button',{name:'Start Break',exact:true}).click();
   await page.getByRole('button',{name:'End Break',exact:true}).waitFor();
   await page.getByRole('button',{name:'End Break',exact:true}).click();
@@ -86,13 +87,14 @@ try {
   assert.equal(ids.at(-1),committedId);passed.push('timeout after server commit: retry returns same event, no duplicate');
   await second.reload();await waitLabel(second,'Clock In');
   assert.equal(events.length,6);passed.push('refresh does not punch and preserves final status');
-  // Storage quota failure must not claim success or send an unqueued request.
+  // A localStorage quota failure falls back to the per-tab queue and still
+  // sends the deliberate action through the authoritative writer.
   await second.waitForFunction(()=>Boolean(localStorage.getItem('larsaSupabaseBridgeV1')));
   await second.evaluate(()=>{window.__attendanceQuotaFail=true;});
   await label(second).click();
-  try { await waitLabel(second,'Clock In'); }
+  try { await waitLabel(second,'Clock Out'); }
   catch(error) {console.log('STORAGE TEST STATE',events.length,await second.evaluate(()=>({label:document.querySelector('.clock-punch')?.textContent,queue:localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test'),patch:Storage.prototype.setItem.toString(),message:document.body.innerText.slice(-1400)})));throw error;}
-  assert.equal(events.length,6);passed.push('pending storage failure prevents an unsafe punch');
+  assert.equal(events.length,7);assert.equal(events.at(-1).status,'In');passed.push('localStorage quota fallback still records the deliberate punch');
   await second.evaluate(()=>{window.__attendanceQuotaFail=false;});
   await label(second).click();await waitLabel(second,'Clock Out');
   delay=1200;

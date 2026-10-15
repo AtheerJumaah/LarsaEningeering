@@ -32,7 +32,7 @@ test("a same-state retry is idempotent and concurrent devices serialize by emplo
 
 test("an ambiguous timeout keeps the same event queued for retry", () => {
   assert.match(punch, /const queueKey = attendancePunchQueueKey\(user\.id\);/);
-  assert.match(punch, /localStorage\.setItem\(queueKey, JSON\.stringify\(pending\)\)/);
+  assert.match(punch, /writeAttendanceQueue\(queueKey, pending\)/);
   assert.match(punch, /if \(result\.outcome === "unavailable"/);
   assert.match(punch, /pending\.splice\(0, pending\.length, \.\.\.remaining\);/);
   assert.match(punchClient, /setTimeout\(\(\) => \{[\s\S]*controller\.abort\(\)[\s\S]*resolve\(\{ outcome: "unavailable" \}\)/);

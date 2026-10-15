@@ -14,6 +14,9 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
   const events=[];const confirmCalls=[];let release;
   const context=vm.createContext({useCallback:fn=>fn,sessionUserRef:{current:user},punchLock:{current:false},accessUsers:[user],
     attendancePunchQueueKey:uid=>'queue:'+uid,parseStore:key=>JSON.parse(data.get(key)||'null'),
+    readAttendanceQueue:key=>JSON.parse(data.get(key)||'null'),
+    writeAttendanceQueue:(key,pending)=>{data.set(key,JSON.stringify(pending));return true;},
+    clearAttendanceQueue:key=>data.delete(key),
     localStorage:{setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
     confirmClockState:async(...args)=>{confirmCalls.push(args);return confirmation;},
     notify(){},pushSyncedKeyNow(){},refreshStaffEngine(){},setStorageTick(){},markAttendanceEventSent(){},

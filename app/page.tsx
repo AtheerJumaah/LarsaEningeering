@@ -1364,6 +1364,63 @@ function parseStore(key: string) {
 function attendancePunchQueueKey(uid: string) {
   return `larsaAttendancePunchQueueV1:${uid}`;
 }
+/* Attendance actions must survive an uncertain network request, but a
+ * browser's localStorage can be unavailable (Safari private browsing,
+ * storage quota, an embedded panel policy) even while the network is fine.
+ * Keep the durable localStorage path first, then fall back to sessionStorage
+ * for this tab. The fallback contains only the pending event and is never
+ * sent to the server except through the normal authoritative RPC. */
+function readAttendanceQueue(key: string) {
+  const candidates: unknown[] = [];
+  const stores: Storage[] = [];
+  if (typeof window !== "undefined") {
+    try { stores.push(window.localStorage); } catch { /* unavailable */ }
+    try { stores.push(window.sessionStorage); } catch { /* unavailable */ }
+  }
+  for (const storage of stores) {
+    if (!storage) continue;
+    try {
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) candidates.push(parsed);
+    } catch { /* try the next storage backend */ }
+  }
+  if (!candidates.length) return null;
+  const objectRows = candidates.flatMap((value) => Array.isArray(value) ? value : [])
+    .filter((event): event is { client_event_id: string; occurred_at?: string } => Boolean(event && typeof event === "object" && typeof (event as { client_event_id?: unknown }).client_event_id === "string"));
+  if (objectRows.length) {
+    /* Merge divergent copies by id so a fallback write cannot hide an older
+       unresolved action that was already present in the primary store. */
+    const unique = new Map<string, { client_event_id: string; occurred_at?: string }>();
+    objectRows.forEach((event) => unique.set(event.client_event_id, event));
+    return [...unique.values()].sort((left, right) => (Date.parse(left.occurred_at || "") || 0) - (Date.parse(right.occurred_at || "") || 0));
+  }
+  /* Managed-punch registries are simple string arrays rather than events. */
+  return candidates.sort((left, right) => (Array.isArray(right) ? right.length : 0) - (Array.isArray(left) ? left.length : 0))[0];
+}
+function writeAttendanceQueue(key: string, pending: unknown[]) {
+  const payload = JSON.stringify(pending);
+  try {
+    localStorage.setItem(key, payload);
+    try { sessionStorage.removeItem(key); } catch { /* best effort */ }
+    return true;
+  } catch {
+    try {
+      sessionStorage.setItem(key, payload);
+      /* Remove a stale local copy when possible so future reads use the
+         session fallback instead of an older queue. */
+      try { localStorage.removeItem(key); } catch { /* unavailable */ }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+function clearAttendanceQueue(key: string) {
+  try { localStorage.removeItem(key); } catch { /* unavailable */ }
+  try { sessionStorage.removeItem(key); } catch { /* unavailable */ }
+}
 function saveDownload(name: string, body: string, type = "application/json") {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([body], { type }));
@@ -5916,6 +5973,7 @@ export default function Home() {
     persistSession(normalizedUser, method, rememberRef.current);
     sessionUserRef.current = normalizedUser;
     sessionMethodRef.current = method;
+    try { authBroadcastRef.current?.postMessage({ type: "session", userId: normalizedUser.id }); } catch { /* BroadcastChannel is optional */ }
     setSessionUser(normalizedUser);
     setSessionMethod(method);
     setPreviewOwner(null);
@@ -6252,12 +6310,19 @@ export default function Home() {
     // The local part alone is accepted, so "ajumaah" works as well as the
     // full address — a frequent cause of "not recognized" on a phone.
     const enteredLocal = enteredEmail.includes("@") ? enteredEmail.split("@")[0] : enteredEmail;
+    const enteredFullAddress = enteredEmail.includes("@");
     const emailMatches = (row: StaffUser) => {
       const staffEmail = row.email?.trim().toLowerCase() || "";
       const account = row.username?.trim().toLowerCase() || "";
-      return staffEmail === enteredEmail
-        || (Boolean(account) && `${account}@larsaeng.com` === enteredEmail)
-        || (Boolean(account) && account === enteredLocal)
+      /* A full address must match exactly. Matching only the local part of a
+         mistyped domain can select the wrong employee when two domains share
+         the same name. Local-part convenience is kept only for username-only
+         input, where there is no domain claim to contradict. */
+      if (enteredFullAddress) {
+        return staffEmail === enteredEmail
+          || (Boolean(account) && `${account}@larsaeng.com` === enteredEmail);
+      }
+      return (Boolean(account) && account === enteredLocal)
         || (Boolean(staffEmail) && staffEmail.split("@")[0] === enteredLocal);
     };
     const pinUser = loginMode === "pin" ? await findByPin(users, enteredPin) : null; const user = loginMode === "pin"
@@ -6385,6 +6450,7 @@ export default function Home() {
 
   const signOut = useCallback(() => {
     setLarsaSyncWritesPaused(true);
+    try { authBroadcastRef.current?.postMessage({ type: "signed-out" }); } catch { /* BroadcastChannel is optional */ }
     sessionStorage.removeItem("larsa-control-session");
     // Signing out is deliberate: drop the kept session too, but leave the
     // remembered address so the next sign-in is still one field shorter.
@@ -6418,6 +6484,40 @@ export default function Home() {
       // The outer sign-in remains authoritative if an embedded view is reloading.
     }
   }, []);
+
+  /* A browser can keep two tabs alive with different sessionStorage values.
+     Broadcast explicit account changes so a second tab cannot continue
+     displaying or punching as the previous employee. The punch writer still
+     checks its own session ID, so this is a convergence guard, not an
+     authorization boundary. */
+  const authBroadcastRef = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("larsa-control-auth-v1");
+    authBroadcastRef.current = channel;
+    channel.onmessage = (event) => {
+      const message = event.data as { type?: string; userId?: string } | null;
+      const current = sessionUserRef.current;
+      if (!current) return;
+      if (message?.type === "signed-out" || (message?.type === "session" && message.userId && message.userId !== current.id)) {
+        signOut();
+        setLoginError("This account changed in another tab. Please sign in again.");
+      }
+    };
+    return () => { channel.close(); if (authBroadcastRef.current === channel) authBroadcastRef.current = null; };
+  }, [signOut]);
+
+  /* Once the shared roster has been loaded, it is authoritative for the
+     restored session. Do not let an offboarded/disabled employee remain
+     active just because an old browser session was cached overnight. */
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id || previewOwner || !accessUsers.length) return;
+    const current = accessUsers.find((row) => row.id === sessionUser.id);
+    if (!current || current.enabled === false || current.offboarded) {
+      signOut();
+      setLoginError("This account is no longer active. Please contact an administrator.");
+    }
+  }, [hydrated, accessUsers, sessionUser?.id, previewOwner, signOut]);
 
   /* A kept browser session ends with the same verification window as a fresh
      sign-in. When it expires, the next screen is the normal email + code flow.
@@ -7182,7 +7282,7 @@ export default function Home() {
       decided = intent;
     }
     const queueKey = attendancePunchQueueKey(user.id);
-    const storedQueue = parseStore(queueKey);
+    const storedQueue = readAttendanceQueue(queueKey);
     const queue: AttendancePunchInput[] = Array.isArray(storedQueue)
       ? storedQueue.filter((event) => event?.uid === user.id && ["In", "Out", "Break Start", "Break End"].includes(event.status))
       : [];
@@ -7209,17 +7309,16 @@ export default function Home() {
       });
     }
     const pending = queue;
-    try {
-      localStorage.setItem(queueKey, JSON.stringify(pending));
-      if (user.id !== actor.id) {
-        const registryKey = `larsaAttendanceManagedPendingV1:${actor.id}`;
-        const registry = parseStore(registryKey);
-        localStorage.setItem(registryKey, JSON.stringify(Array.from(new Set([...(Array.isArray(registry) ? registry : []), user.id]))));
-      }
-    }
-    catch {
+    if (!writeAttendanceQueue(queueKey, pending)) {
       notify("This device could not save the pending clock action. Please check storage and try again.");
       return false;
+    }
+    if (user.id !== actor.id) {
+      try {
+        const registryKey = `larsaAttendanceManagedPendingV1:${actor.id}`;
+        const registry = readAttendanceQueue(registryKey);
+        writeAttendanceQueue(registryKey, Array.from(new Set([...(Array.isArray(registry) ? registry : []), user.id])));
+      } catch { /* the managed queue itself remains safe; registry is a hint */ }
     }
 
     if (queueOnly) {
@@ -7248,10 +7347,10 @@ export default function Home() {
           const items = Array.isArray(review) ? review : [];
           if (!items.some(item => item.client_event_id === event.client_event_id)) items.push({ ...event, needs_review: true, review_reason: "Original punch time conflicts with the server sequence or is outside the automatic retry window." });
           localStorage.setItem(reviewKey, JSON.stringify(items));
-          const sharedQueue = parseStore(queueKey);
+          const sharedQueue = readAttendanceQueue(queueKey);
           const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
           pending.splice(0, pending.length, ...remaining);
-          localStorage.setItem(queueKey, JSON.stringify(pending));
+          if (!writeAttendanceQueue(queueKey, pending)) throw new Error("attendance queue storage unavailable");
         } catch { notify("A pending punch needs review, but this device cannot store it safely. No time was substituted."); return false; }
         notify("A delayed clock action needs an attendance correction. Its original time was preserved for review; it was not changed to the reconnection time.");
         continue;
@@ -7269,11 +7368,10 @@ export default function Home() {
          idempotency key before touching the disposable local view: a quota
          error below must never turn a completed punch into an apparent
          failure that asks the employee to press again. */
-      const sharedQueue = parseStore(queueKey);
+      const sharedQueue = readAttendanceQueue(queueKey);
       const remaining = (Array.isArray(sharedQueue) ? sharedQueue : pending).filter(item => item.client_event_id !== event.client_event_id);
       pending.splice(0, pending.length, ...remaining);
-      try { localStorage.setItem(queueKey, JSON.stringify(pending)); }
-      catch { /* the server remains authoritative; the same id is safe to retry */ }
+      if (!writeAttendanceQueue(queueKey, pending)) clearAttendanceQueue(queueKey);
 
       /* The transaction response is the authoritative state. Add its exact
          ledger event to the local view only once, then repair all old active
@@ -7382,9 +7480,9 @@ export default function Home() {
     if (!hydrated || !sessionUser?.id) return;
     const retryPending = () => {
       if (!navigator.onLine || punchLock.current) return;
-      const registry = parseStore(`larsaAttendanceManagedPendingV1:${sessionUser.id}`);
+      const registry = readAttendanceQueue(`larsaAttendanceManagedPendingV1:${sessionUser.id}`);
       for (const uid of [sessionUser.id, ...(Array.isArray(registry) ? registry : [])]) {
-        const queued = parseStore(attendancePunchQueueKey(uid));
+        const queued = readAttendanceQueue(attendancePunchQueueKey(uid));
         if (!Array.isArray(queued) || !queued.length) continue;
         const latest = queued[queued.length - 1] as AttendancePunchInput;
         if (latest?.uid !== uid || !["In", "Out", "Break Start", "Break End"].includes(latest.status)) continue;
@@ -18446,7 +18544,7 @@ function QuickClock({
   }, []);
 
   const open = summary.openClock;
-  const pendingActions: AttendancePunchInput[] = user ? (parseStore(attendancePunchQueueKey(user.id)) || []) : [];
+  const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
   const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
   const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
