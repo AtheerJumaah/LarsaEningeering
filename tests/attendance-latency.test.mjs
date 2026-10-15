@@ -6,6 +6,10 @@ const migration = fs.readFileSync(
   new URL("../supabase/migrations/repair_022_attendance_single_snapshot.sql", import.meta.url),
   "utf8",
 );
+const correctionIndex = fs.readFileSync(
+  new URL("../supabase/migrations/repair_023_attendance_correction_index.sql", import.meta.url),
+  "utf8",
+);
 
 test("attendance RPC derives shift and current status from one effective snapshot", () => {
   assert.match(migration, /with effective as materialized/i);
@@ -14,4 +18,16 @@ test("attendance RPC derives shift and current status from one effective snapsho
   assert.match(migration, /where e\.status in \('In','Out'\)/);
   assert.match(migration, /p_status in \('In','Out'\)/);
   assert.match(migration, /client_event_id,occurred_at,uid/);
+});
+
+test("attendance corrections use a compact indexed overlay instead of expanding the staff blob", () => {
+  assert.match(correctionIndex, /create table if not exists public\.attendance_corrections/i);
+  assert.match(correctionIndex, /primary key/);
+  assert.match(correctionIndex, /create index if not exists attendance_corrections_effective_idx/i);
+  assert.match(correctionIndex, /create trigger attendance_corrections_refresh/i);
+  assert.match(correctionIndex, /left join public\.attendance_corrections/i);
+  assert.doesNotMatch(
+    correctionIndex.slice(correctionIndex.indexOf("create or replace function public.attendance_effective_events")),
+    /jsonb_array_elements/i,
+  );
 });
