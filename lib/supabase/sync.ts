@@ -1,11 +1,11 @@
-/* Makes the app's three localStorage stores shared instead of per-browser,
+/* Makes the app's shared localStorage mirrors company-authoritative instead of per-browser,
  * without touching any of the hundreds of call sites in app/page.tsx or the
- * three engine HTML files that already read and write them. How:
+ * engine HTML files that already read and write them. How:
  *
  *   1. On load, pull each key's row from Supabase and, if there is real data
  *      there, overwrite localStorage with it before the app renders its
  *      first screen.
- *   2. Wrap localStorage.setItem so that any write to one of these three
+ *   2. Wrap localStorage.setItem so that any write to one of these shared
  *      keys (from the parent app OR from inside an engine iframe, since
  *      iframes on the same origin share the same localStorage) also pushes
  *      to Supabase, debounced so a flurry of writes becomes one network
@@ -33,6 +33,10 @@ import { mergeStoreText, protectOutgoing } from "./merge";
    round-tripping harmlessly instead of resurrecting as a conflict. */
 export const SYNCED_KEYS = [
   "larsaStaffV8",
+  /* Performance targets, development records, and review state are company
+     data too. Leaving this store browser-only made the same employee see a
+     different organisation depending on which device they opened first. */
+  "larsaStaffGrowthV1",
   "larsa_enterprise_v3_new_account_20260630",
   "larsa_enterprise_v3_new_account_20260630_v34_clean",
   "larsa_hr_visual_counts_v5",
@@ -370,9 +374,21 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           if (nextText !== before) caughtUpKeys.push(key);
           console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
         } else if (hasContent(local)) {
-          // First device to sign in with real local data seeds the table.
-          console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
-          await pushKey(key);
+          /* The staff roster is the identity and attendance authority. Never
+             let an arbitrary browser recreate it when the server row is
+             missing: that is exactly how two devices can show different
+             employees, colours, and organisation details. A missing staff
+             row is a server/configuration fault, not permission to promote a
+             stale cache. Other first-run stores may still be seeded once. */
+          if (key === "larsaStaffV8") {
+            console.error("[larsa-sync] authoritative staff roster is missing on the server; refusing to promote browser cache");
+            originalSetItem(key, "{}");
+            lastKnown.set(key, "{}");
+            caughtUpKeys.push(key);
+          } else {
+            console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
+            await pushKey(key);
+          }
         } else {
           console.log(`[larsa-sync] "${key}" empty both locally and remotely — nothing to do`);
         }

@@ -60,12 +60,12 @@ async function ensureAttendanceAuth(client: SupabaseClient): Promise<boolean> {
 
 /** Warm the shared auth session while the app is syncing, rather than making
  * the employee's first deliberate Clock In/Out wait for getSession or an
- * anonymous sign-in. This is intentionally fire-and-forget at the call site;
+ * anonymous sign-in. Callers may await it before enabling the first punch;
  * a punch still retains the retry path below if the warmup fails. */
-export function warmAttendanceAuth(): void {
-  if (!supabaseConfigured()) return;
+export function warmAttendanceAuth(): Promise<boolean> {
+  if (!supabaseConfigured()) return Promise.resolve(false);
   const client = getSupabaseClient();
-  if (client) void ensureAttendanceAuth(client);
+  return client ? ensureAttendanceAuth(client) : Promise.resolve(false);
 }
 
 function resetAttendanceAuth(client: SupabaseClient) {

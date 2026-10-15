@@ -4548,6 +4548,17 @@ export default function Home() {
     : typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "connecting";
   const [attendanceConnection, setAttendanceConnection] = useState<AttendanceConnection>(initialAttendanceConnection);
   const attendanceConnectionRef = useRef<AttendanceConnection>(initialAttendanceConnection);
+  /* A browser cache is useful for the offline read-only screen, but it must
+     never be mistaken for the company's current roster while an online
+     session is starting. This flag stays true after the first authoritative
+     server pull; later reconnects keep the existing screen visible while they
+     revalidate in the background. */
+  const [authoritativeStateReady, setAuthoritativeStateReady] = useState(!supabaseConfigured());
+  const authoritativeStateReadyRef = useRef(!supabaseConfigured());
+  const setAuthoritativeState = useCallback((ready: boolean) => {
+    authoritativeStateReadyRef.current = ready;
+    setAuthoritativeStateReady(ready);
+  }, []);
   const setAttendanceConnectionState = useCallback((next: AttendanceConnection) => {
     attendanceConnectionRef.current = next;
     setAttendanceConnection(next);
@@ -4785,6 +4796,10 @@ export default function Home() {
       onStatusChange: (status) => {
         if (status === "connecting") {
           setAttendanceConnectionState("connecting");
+          /* On the first load, hide cached account data until the server has
+             supplied the authoritative roster. During a later reconnect we
+             keep the already-authoritative screen visible. */
+          if (!authoritativeStateReadyRef.current) setAuthoritativeState(false);
           return;
         }
         /* Once the shared blob has been pulled, restore anything the durable
@@ -4797,17 +4812,28 @@ export default function Home() {
              create a new server event. Existing pending events remain in the
              durable queue and will retry with the same event id after sync. */
           setAttendanceConnectionState("offline");
+          if (!authoritativeStateReadyRef.current) setAuthoritativeState(false);
           markClockConfirmed();
           return;
         }
         if (status !== "synced") return;
         setAttendanceConnectionState("online");
+        setAuthoritativeState(true);
         /* The sync bootstrap has just established/reused the Supabase session.
            Warm the punch module's auth cache before the employee presses
            Clock In/Out, so the first deliberate action does not pay the
            session-lock lookup on its critical path. */
         void warmAttendanceAuth();
-        markClockConfirmed();
+        /* Do not release the first-punch gate until the shared auth session is
+           warm. The old fire-and-forget call let the first click race the
+           Supabase session lock, which is the source of the multi-second
+           "Saving…" report on a fresh phone/tab. A short ceiling preserves
+           availability if auth itself is degraded; the punch path still
+           retries safely with the same event id. */
+        void Promise.race([
+          warmAttendanceAuth(),
+          new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 1200)),
+        ]).finally(() => markClockConfirmed());
         reconcileStoreFromLedger().then(({ restored, changed }) => {
           if (changed || restored > 0) {
             setStorageTick((value) => value + 1);
@@ -6137,6 +6163,12 @@ export default function Home() {
   };
 
   useEffect(() => {
+    /* Do not restore an employee identity from sessionStorage while an online
+       browser is still waiting for the shared roster. The cached user can be
+       from another organisation snapshot, or can have been disabled since
+       this device last opened the app. Offline remains read-only and may show
+       the last safe session, but it cannot create attendance events. */
+    if (supabaseConfigured() && attendanceConnectionRef.current === "connecting") return;
     const timer = window.setTimeout(() => {
       try {
         const saved = sessionStorage.getItem("larsa-control-session")
@@ -6172,7 +6204,7 @@ export default function Home() {
       }
     }, 0);
     return () => clearTimeout(timer);
-  }, [completeSignIn, readStaffUsers]);
+  }, [completeSignIn, readStaffUsers, attendanceConnection]);
 
   // Every account that already had a working email + password before this
   // feature shipped is grandfathered in as verified the first time anyone
@@ -6305,6 +6337,14 @@ export default function Home() {
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
+    if (supabaseConfigured()
+      && typeof navigator !== "undefined"
+      && navigator.onLine
+      && attendanceConnectionRef.current !== "online") {
+      refreshSharedStateNow();
+      setLoginError("Company data is still syncing. Please wait a moment, then sign in again.");
+      return;
+    }
     const users = readStaffUsers();
     if (!users.length) {
       setLoginError("Staff access is still loading. Please try again.");
@@ -10082,6 +10122,26 @@ export default function Home() {
   // screen fed only by data it is allowed to see, fetched straight from
   // Supabase rather than from the shared, everyone-signed-in-can-read
   // localStorage sync used by the rest of the app.
+  if (!viewerSession && sessionUser && supabaseConfigured() && !authoritativeStateReady
+      && (typeof navigator === "undefined" || navigator.onLine)) {
+    return (
+      <div className={dark ? "unified-app dark" : "unified-app"}>
+        <div className="auth-layer" role="status" aria-live="polite">
+          <section className="auth-card">
+            <div className="auth-brand">
+              <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={210} height={82} priority />
+              <span><ShieldCheck size={18} /> Secure staff access</span>
+            </div>
+            <div className="auth-copy">
+              <span className="eyebrow">Company data</span>
+              <h1>Syncing your workspace…</h1>
+              <p>The server is loading the current account, organisation, colours, and attendance state. This browser cache is not used as the source of truth.</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
   if (viewerSession) {
     return <ViewerPortal session={viewerSession} onSignOut={viewerSignOut} />;
   }
