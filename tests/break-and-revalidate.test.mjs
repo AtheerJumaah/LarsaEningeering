@@ -56,7 +56,7 @@ test("the break buttons carry what they display and cannot be double-fired", () 
   assert.match(page, /punchBreak: \(note\?: string, intent\?: "Break Start" \| "Break End"\) => Promise<boolean>;/);
   assert.match(page, /if \(await punchBreakGuarded\(note, "Break End"\)\) setNote\(""\);/);
   assert.match(page, /if \(await punchBreakGuarded\(note, "Break Start"\)\) setNote\(""\);/);
-  const guards = page.match(/disabled=\{!clockReady \|\| breaking\}/g) || [];
+  const guards = page.match(/disabled=\{!clockReady \|\| !punchAvailable \|\| breaking\}/g) || [];
   assert.equal(guards.length, 2, "both break buttons must be gated");
   assert.match(page, /const \[breaking, setBreaking\] = useState\(false\);/);
 });

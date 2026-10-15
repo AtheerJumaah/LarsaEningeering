@@ -82,11 +82,11 @@ test("but correcting and trimming recorded hours is untouched", () => {
   assert.match(page, /const resetSession = useCallback/);
 });
 
-test("clocking yourself in and out is available immediately and deduplicated by the server", () => {
+test("clocking yourself in and out is server-gated and deduplicated by the server", () => {
   assert.match(page, /const punchClock = useCallback/);
   assert.match(page, /const punchBreak = useCallback/);
   const button = page.slice(page.indexOf('className={`clock-punch'), page.indexOf('</button>', page.indexOf('className={`clock-punch')));
-  assert.match(button, /disabled=\{punching \|\| Boolean\(pendingStatus\)\}/);
+  assert.match(button, /disabled=\{!punchAvailable \|\| punching \|\| Boolean\(pendingStatus\)\}/);
   assert.doesNotMatch(button, /clockReady/);
   assert.match(page, /await recordAttendancePunch\(event\)/);
 });

@@ -143,6 +143,7 @@ type NativeView =
   | "myPay"
   | "payrollPortal";
 type SignInMethod = "email" | "pin";
+type AttendanceConnection = "connecting" | "online" | "offline" | "local";
 type NavChannel = "home" | "time" | "performance" | "hr" | "accounting" | "engineering" | "admin";
 type BackupScope = "all" | "staff" | "hr" | "accounting";
 type PermissionAction = "view" | "add" | "edit" | "delete" | "approve" | "export" | "manage";
@@ -4479,6 +4480,32 @@ export default function Home() {
   const [clockConfirmed, setClockConfirmed] = useState(false);
   const clockConfirmedRef = useRef(false);
   const clockConfirmedWaiters = useRef<(() => void)[]>([]);
+  /* Attendance remains visible from the local cache, but new punches must be
+     backed by a confirmed server connection. A deployment without Supabase
+     is explicitly treated as local mode for development/legacy installs. */
+  const initialAttendanceConnection: AttendanceConnection = !supabaseConfigured()
+    ? "local"
+    : typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "connecting";
+  const [attendanceConnection, setAttendanceConnection] = useState<AttendanceConnection>(initialAttendanceConnection);
+  const attendanceConnectionRef = useRef<AttendanceConnection>(initialAttendanceConnection);
+  const setAttendanceConnectionState = useCallback((next: AttendanceConnection) => {
+    attendanceConnectionRef.current = next;
+    setAttendanceConnection(next);
+  }, []);
+  useEffect(() => {
+    if (!supabaseConfigured()) {
+      setAttendanceConnectionState("local");
+      return;
+    }
+    const onOffline = () => setAttendanceConnectionState("offline");
+    const onOnline = () => setAttendanceConnectionState("connecting");
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [setAttendanceConnectionState]);
   /* When each person was last told "that press contradicts the record", per
      direction. A second press of the same direction inside two minutes is
      honoured against the staff document instead — see punchClock. Kept in a
@@ -4696,20 +4723,25 @@ export default function Home() {
         }, 100);
       },
       onStatusChange: (status) => {
+        if (status === "connecting") {
+          setAttendanceConnectionState("connecting");
+          return;
+        }
         /* Once the shared blob has been pulled, restore anything the durable
            ledger holds that the blob lost — the standing repair for the
            class of incident where a stale device replaced the shared state.
            Restored punches re-enter the blob, re-render, and sync back up
            for every other device. */
         if (status === "offline") {
-          /* No server this session. The clock still has to work — refusing to
-             let somebody clock in because the network is down would be worse
-             than the staleness this guards against — so it is released, and
-             the punch is judged against the best copy this device has. */
+          /* Keep the cached attendance visible, but do not let a stale view
+             create a new server event. Existing pending events remain in the
+             durable queue and will retry with the same event id after sync. */
+          setAttendanceConnectionState("offline");
           markClockConfirmed();
           return;
         }
         if (status !== "synced") return;
+        setAttendanceConnectionState("online");
         markClockConfirmed();
         reconcileStoreFromLedger().then(({ restored, changed }) => {
           if (changed || restored > 0) {
@@ -4748,6 +4780,7 @@ export default function Home() {
        ceiling. Releasing it costs no safety: the actual guarantee is
        confirmClockState, which is consulted on the press itself and falls
        back honestly when it cannot reach the ledger. */
+    if (!supabaseConfigured()) setAttendanceConnectionState("local");
     const clockGateCeiling = window.setTimeout(markClockConfirmed, supabaseConfigured() ? 12000 : 0);
     return () => {
       window.clearTimeout(clockGateCeiling);
@@ -4762,7 +4795,7 @@ export default function Home() {
       });
       delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
     };
-  }, [hydrated, refs, markClockConfirmed]);
+  }, [hydrated, refs, markClockConfirmed, setAttendanceConnectionState]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -7101,6 +7134,22 @@ export default function Home() {
   const punchClock = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string, queueOnly = false) => {
     const actor = sessionUserRef.current;
     if (!actor) return false;
+    /* A cached status is safe to display, but it is not safe to use as the
+       basis for a new attendance event. Keep the original local queue intact
+       and wait for the sync layer to confirm the server again. */
+    /* The writer is also extracted by the legacy embedded engine tests, where
+       the connection helpers are intentionally absent; that harness models a
+       confirmed writer and should keep exercising its queue semantics. */
+    const serverAttendanceConfigured = typeof supabaseConfigured === "function" && supabaseConfigured();
+    const connectionState = typeof attendanceConnectionRef !== "undefined" ? attendanceConnectionRef.current : "online";
+    if (serverAttendanceConfigured && (connectionState !== "online" || (typeof navigator !== "undefined" && !navigator.onLine))) {
+      if (!quiet) notify(
+        connectionState === "offline"
+          ? "You are offline. Attendance is view-only until the connection is restored."
+          : "Checking the attendance connection. Clock In/Out will be enabled when the server is confirmed.",
+      );
+      return false;
+    }
     const user = targetUid ? accessUsers.find(person => person.id === targetUid) : actor;
     if (!user) return false;
     if (user.id !== actor.id) {
@@ -10204,6 +10253,7 @@ export default function Home() {
               summary={homeSummary}
               punch={punchClockGuarded}
               clockReady={clockConfirmed}
+              connection={attendanceConnection}
               punchBreak={punchBreakGuarded}
               submitCorrection={submitCorrection}
               users={accessUsers}
@@ -18214,9 +18264,10 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady,
+  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady, connection,
 }: {
   clockReady: boolean;
+  connection: AttendanceConnection;
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
@@ -18403,6 +18454,14 @@ function QuickClock({
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
+  const punchAvailable = connection === "online" || connection === "local";
+  const connectionLabel = connection === "online"
+    ? "Online · Server synced"
+    : connection === "offline"
+    ? "Offline · View only"
+    : connection === "local"
+    ? "Local mode · No server"
+    : "Checking connection…";
   /* Once a shift is open, the selected mode is no longer a device-local
      preference. It is part of the authoritative punch that all devices must
      display. Keep the local selection for the next Clock In only, but make the
@@ -18466,6 +18525,11 @@ function QuickClock({
       </section>
 
       <section className="clock-face">
+        <div className={`attendance-connection ${connection}`} role="status" aria-live="polite">
+          <span className="connection-bars" aria-hidden="true"><i /><i /><i /></span>
+          <span>{connectionLabel}</span>
+          <small>{punchAvailable ? "Clock actions enabled" : "Your saved attendance is still visible"}</small>
+        </div>
         {pending.length > 0 && <p role="status">Pending synchronization: {pending.length} action{pending.length === 1 ? "" : "s"}. Your original punch times are saved on this device, but not yet confirmed by the server. Reconnect; no extra click is needed.</p>}
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
@@ -18481,7 +18545,7 @@ function QuickClock({
               key={item.id}
               className={`mode-${item.tone}${displayMode === item.id ? " active" : ""}`}
               onClick={() => setMode(item.id)}
-              disabled={clockedIn}
+              disabled={clockedIn || !punchAvailable}
             ><i aria-hidden="true" />{item.label}</button>
           ))}
         </div>
@@ -18490,15 +18554,16 @@ function QuickClock({
           <input
             value={note}
             onChange={(event) => setNote(event.target.value)}
+            disabled={!punchAvailable || Boolean(pendingStatus)}
             placeholder="Running late, leaving early, working from a job site…"
           />
         </label>
-        {/* Clock-in/out is available during bootstrap; Postgres serializes the
-            transition and the client keeps uncertain requests for safe retry. */}
+        {/* A cached status is displayable during bootstrap/offline, but a new
+            punch is enabled only after the server connection is confirmed. */}
         <button
           type="button"
           className={`clock-punch ${clockedIn ? "out" : `in tone-${modeTone(mode)}`}`}
-          disabled={punching || Boolean(pendingStatus)}
+          disabled={!punchAvailable || punching || Boolean(pendingStatus)}
           onClick={async () => {
             if (punching) return;
             setPunching(true);
@@ -18534,25 +18599,25 @@ function QuickClock({
             {onBreak.note ? ` · ${onBreak.note}` : ""}
           </span>
           <button type="button"
-            disabled={!clockReady || breaking}
+            disabled={!clockReady || !punchAvailable || breaking}
             onClick={async () => {
               if (breaking) return;
               setBreaking(true);
               try { if (await punchBreakGuarded(note, "Break End")) setNote(""); }
               finally { setBreaking(false); }
-            }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "End Break"}</button>
+            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Saving…" : "End Break"}</button>
         </section>
       ) : open ? (
         <section className="break-banner">
           <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
           <button type="button"
-            disabled={!clockReady || breaking}
+            disabled={!clockReady || !punchAvailable || breaking}
             onClick={async () => {
               if (breaking) return;
               setBreaking(true);
               try { if (await punchBreakGuarded(note, "Break Start")) setNote(""); }
               finally { setBreaking(false); }
-            }}>{!clockReady ? "Checking…" : breaking ? "Saving…" : "Start Break"}</button>
+            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Saving…" : "Start Break"}</button>
         </section>
       ) : null}
 

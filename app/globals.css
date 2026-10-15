@@ -1764,6 +1764,33 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .unified-app.dark .clock-face { background: #16181d; border-color: #272b33; }
 
+.attendance-connection {
+  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  justify-content: center; min-height: 32px; padding: 7px 12px;
+  border: 1px solid #dfe4eb; border-radius: 999px; background: #f8fafc;
+  color: #445064; font-size: 11px; font-weight: 850; letter-spacing: .01em;
+}
+.attendance-connection small { color: #7a8190; font-size: 10px; font-weight: 700; }
+.attendance-connection.online { border-color: #b8e5ca; background: #effaf3; color: #0f6b3c; }
+.attendance-connection.offline { border-color: #f0c8bf; background: #fff4f1; color: #97291a; }
+.attendance-connection.local { border-color: #d7dbe2; background: #f1f3f7; color: #5b616e; }
+.unified-app.dark .attendance-connection { border-color: #343a45; background: #20242c; color: #d8dee8; }
+.unified-app.dark .attendance-connection small { color: #9aa3b2; }
+.unified-app.dark .attendance-connection.online { border-color: rgba(110, 231, 183, .35); background: rgba(110, 231, 183, .12); color: #9ce7c0; }
+.unified-app.dark .attendance-connection.offline { border-color: rgba(248, 113, 113, .4); background: rgba(248, 113, 113, .12); color: #ffaaa0; }
+.connection-bars { display: inline-flex; align-items: end; gap: 2px; height: 13px; }
+.connection-bars i { display: block; width: 3px; border-radius: 3px; background: currentColor; opacity: .42; }
+.connection-bars i:nth-child(1) { height: 5px; }
+.connection-bars i:nth-child(2) { height: 9px; }
+.connection-bars i:nth-child(3) { height: 13px; }
+.attendance-connection.online .connection-bars i,
+.attendance-connection.local .connection-bars i { opacity: 1; }
+.attendance-connection.offline .connection-bars i:nth-child(3) { opacity: .18; }
+.attendance-connection.connecting .connection-bars i { animation: attendance-connection-pulse 1.1s ease-in-out infinite; }
+.attendance-connection.connecting .connection-bars i:nth-child(2) { animation-delay: .12s; }
+.attendance-connection.connecting .connection-bars i:nth-child(3) { animation-delay: .24s; }
+@keyframes attendance-connection-pulse { 0%, 100% { opacity: .28; } 50% { opacity: 1; } }
+
 .clock-readout small {
   display: block; font-size: 10.5px; font-weight: 900; letter-spacing: .1em;
   text-transform: uppercase; color: #7a8190;

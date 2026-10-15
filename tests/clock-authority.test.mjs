@@ -45,9 +45,9 @@ test("the server response repairs local active flags and persists the record", (
   assert.match(punch, /result\.workMode/);
 });
 
-test("clock-in/out remains usable during the first sync, and the iframe uses the same writer", () => {
+test("clock-in/out is gated until sync is confirmed, and the iframe uses the same writer", () => {
   const button = page.slice(page.indexOf('className={`clock-punch'), page.indexOf('</button>', page.indexOf('className={`clock-punch')));
-  assert.match(button, /disabled=\{punching \|\| Boolean\(pendingStatus\)\}/);
+  assert.match(button, /disabled=\{!punchAvailable \|\| punching \|\| Boolean\(pendingStatus\)\}/);
   assert.doesNotMatch(button, /clockReady/);
   assert.match(page, /void punchClockGuarded\(mode, note \|\| "", intent\);/);
 });
@@ -66,7 +66,7 @@ test("a newer queued action keeps the banner, timer, and button in one pending s
   assert.match(page, /const pendingStatus = displayClock\.pendingIsNewer \? pendingPunch\?\.status : undefined;/);
   assert.match(page, /pendingStatus\s*\n\s*\? `Clock \$\{pendingStatus === "In" \? "in" : "out"\} pending synchronization`/);
   assert.match(page, /open && !pendingStatus \? "Time on shift" : "Current time"/);
-  assert.match(page, /disabled=\{punching \|\| Boolean\(pendingStatus\)\}/);
+  assert.match(page, /disabled=\{!punchAvailable \|\| punching \|\| Boolean\(pendingStatus\)\}/);
 });
 
 
