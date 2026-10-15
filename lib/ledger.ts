@@ -201,19 +201,25 @@ function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
   const store = readJson<StaffStoreLike>("larsaStaffV8", {});
   if (!Array.isArray(store.logs)) store.logs = [];
   const removed = new Set((store.removedLogIds || []).map(String));
-  if (removed.has(id) || store.logs.some((log) => String(log?.id || "") === id)) return;
-  store.logs.push({
-    id,
-    uid,
-    type: row.work_mode ? String(row.work_mode) : "Office",
-    status,
-    time,
-    active: false,
-    lastSeen: time,
-    ...(row.note ? { note: String(row.note) } : {}),
-    ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
-    recovery: "realtime-ledger",
-  });
+  if (removed.has(id)) return;
+  /* A duplicate realtime delivery still needs to repair active flags. The
+     event may already be in this tab's cache from a previous sync while its
+     denormalized `active` value is stale; returning early leaves the user
+     looking Clocked In after a confirmed Clock Out. */
+  if (!store.logs.some((log) => String(log?.id || "") === id)) {
+    store.logs.push({
+      id,
+      uid,
+      type: row.work_mode ? String(row.work_mode) : "Office",
+      status,
+      time,
+      active: false,
+      lastSeen: time,
+      ...(row.note ? { note: String(row.note) } : {}),
+      ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
+      recovery: "realtime-ledger",
+    });
+  }
   /* Recompute only the denormalized active flags. The immutable event itself
      is never changed, and a removed id can never become active again. */
   store.logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
@@ -227,6 +233,14 @@ function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
     if (log.status === "In" || log.status === "Out") log.active = openByUid.get(String(log.uid || "")) === log;
   });
   try { localStorage.setItem("larsaStaffV8", JSON.stringify(store)); } catch { /* UI catches up on the next full sync */ }
+  /* localStorage writes do not fire a `storage` event in the same window.
+     Tell the React shell immediately so a remote Clock Out repaints without
+     waiting for the slower app_state sync or a manual refresh. */
+  try {
+    window.dispatchEvent(new CustomEvent("larsa:attendance-realtime", {
+      detail: { id, uid, status, time },
+    }));
+  } catch { /* non-browser test doubles and older browsers can skip the hint */ }
 }
 
 /* Called on EVERY write of larsaStaffV8 (installed below): any log id we have

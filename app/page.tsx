@@ -4590,8 +4590,13 @@ export default function Home() {
       if (event.key && !event.key.toLowerCase().startsWith("larsa")) return;
       setStorageTick((value) => value + 1);
     };
+    const onAttendanceRealtime = () => setStorageTick((value) => value + 1);
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("larsa:attendance-realtime", onAttendanceRealtime);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("larsa:attendance-realtime", onAttendanceRealtime);
+    };
   }, [hydrated]);
 
   /* The sync effect above-any-toast problem: it runs before `notify` is
