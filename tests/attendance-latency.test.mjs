@@ -18,6 +18,10 @@ const removedIds = fs.readFileSync(
   new URL("../supabase/migrations/20261016123000_attendance_removed_ids_index.sql", import.meta.url),
   "utf8",
 );
+const removedIdsFix = fs.readFileSync(
+  new URL("../supabase/migrations/20261016124500_attendance_removed_ids_trigger_fix.sql", import.meta.url),
+  "utf8",
+);
 
 test("attendance RPC derives shift and current status from one effective snapshot", () => {
   assert.match(migration, /with effective as materialized/i);
@@ -52,4 +56,7 @@ test("attendance punches use an indexed tombstone lookup instead of parsing the 
   assert.match(removedIds, /create trigger attendance_removed_events_refresh/i);
   assert.match(removedIds, /from public\.attendance_removed_events r/i);
   assert.match(removedIds, /patched := replace\([\s\S]*attendance_removed_events r/i);
+  assert.match(removedIdsFix, /create or replace function public\.refresh_attendance_removed_events/i);
+  assert.match(removedIdsFix, /on conflict \(client_event_id\) do nothing/i);
+  assert.doesNotMatch(removedIdsFix, /delete from public\.attendance_removed_events/i);
 });

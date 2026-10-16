@@ -43,6 +43,8 @@ begin
   end if;
 
   begin
+    -- Tombstones are add-only. A stale browser document must never resurrect
+    -- a deleted attendance event by shrinking the list.
     with current_ids as materialized (
       select distinct nullif(x.value, '') as client_event_id
       from jsonb_array_elements_text(
@@ -53,12 +55,6 @@ begin
     insert into public.attendance_removed_events (client_event_id)
     select client_event_id from current_ids
     on conflict (client_event_id) do nothing;
-
-    delete from public.attendance_removed_events r
-    where not exists (
-      select 1 from current_ids x
-      where x.client_event_id = r.client_event_id
-    );
   exception when others then
     raise warning 'refresh_attendance_removed_events failed open: %', sqlerrm;
   end;
