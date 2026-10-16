@@ -14,6 +14,10 @@ const latencyHardening = fs.readFileSync(
   new URL("../supabase/migrations/20261016110000_attendance_latency_indexes.sql", import.meta.url),
   "utf8",
 );
+const removedIds = fs.readFileSync(
+  new URL("../supabase/migrations/20261016123000_attendance_removed_ids_index.sql", import.meta.url),
+  "utf8",
+);
 
 test("attendance RPC derives shift and current status from one effective snapshot", () => {
   assert.match(migration, /with effective as materialized/i);
@@ -41,4 +45,11 @@ test("attendance readers are indexed and non-attendance blob edits skip correcti
   assert.match(latencyHardening, /tg_op = 'UPDATE'/i);
   assert.match(latencyHardening, /old\.data->'logs'/i);
   assert.match(latencyHardening, /new\.data->'logs'/i);
+});
+
+test("attendance punches use an indexed tombstone lookup instead of parsing the staff blob", () => {
+  assert.match(removedIds, /create table if not exists public\.attendance_removed_events/i);
+  assert.match(removedIds, /create trigger attendance_removed_events_refresh/i);
+  assert.match(removedIds, /from public\.attendance_removed_events r/i);
+  assert.match(removedIds, /patched := replace\([\s\S]*attendance_removed_events r/i);
 });
