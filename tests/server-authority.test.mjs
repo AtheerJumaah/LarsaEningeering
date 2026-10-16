@@ -10,6 +10,8 @@ test("shared company state waits for the authoritative server roster before rest
   assert.match(page, /Do not restore an employee identity from sessionStorage while an online/);
   assert.match(page, /Connecting securely…/);
   assert.match(page, /The secure connection is taking longer than usual/);
+  assert.match(page, /const deadline = Date\.now\(\) \+ 12000/);
+  assert.match(page, /while \(currentConnection\(\) !== "online"/);
   assert.match(page, /Syncing your workspace…/);
 });
 
