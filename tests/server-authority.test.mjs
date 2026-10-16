@@ -8,7 +8,8 @@ const sync = await readFile(new URL("../lib/supabase/sync.ts", import.meta.url),
 test("shared company state waits for the authoritative server roster before restoring a session", () => {
   assert.match(page, /authoritativeStateReady/);
   assert.match(page, /Do not restore an employee identity from sessionStorage while an online/);
-  assert.match(page, /Company data is still syncing\. Please wait a moment/);
+  assert.match(page, /Connecting securely…/);
+  assert.match(page, /The secure connection is taking longer than usual/);
   assert.match(page, /Syncing your workspace…/);
 });
 

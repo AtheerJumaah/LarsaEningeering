@@ -128,5 +128,5 @@ test("pending punches resume automatically and reuse their queued event id", () 
   assert.match(page, /window\.addEventListener\("online", retryPending\)/);
   assert.match(page, /window\.addEventListener\("focus", retryPending\)/);
   assert.match(page, /punchClockGuarded\(latest\.work_mode \|\| "Office", latest\.note \|\| "", latest\.status, true, uid\)/);
-  assert.match(page, /Don't tap again\./);
+  assert.match(page, /no extra click is needed\./);
 });

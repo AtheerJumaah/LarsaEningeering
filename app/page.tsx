@@ -6342,8 +6342,17 @@ export default function Home() {
       && navigator.onLine
       && attendanceConnectionRef.current !== "online") {
       refreshSharedStateNow();
-      setLoginError("Preparing your secure workspace… Please wait a moment, then sign in again.");
-      return;
+      setLoginError("Connecting securely…");
+      const deadline = Date.now() + 12000;
+      const currentConnection = () => attendanceConnectionRef.current as AttendanceConnection;
+      while (currentConnection() !== "online" && Date.now() < deadline) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      }
+      if (currentConnection() !== "online") {
+        setLoginError("The secure connection is taking longer than usual. Check your connection and try again.");
+        return;
+      }
+      setLoginError("");
     }
     const users = readStaffUsers();
     if (!users.length) {
