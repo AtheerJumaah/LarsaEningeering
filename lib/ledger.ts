@@ -363,11 +363,19 @@ export function initAttendanceLedger(): () => void {
         .from("attendance_events")
         .select("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, inserted_at")
         .gte("inserted_at", since)
-        .order("inserted_at", { ascending: true })
+        /* Read the newest rows first.  A busy company can exceed the 200-row
+           watchdog cap in the look-back window; ascending order would then
+           return only the oldest rows and leave the newest punch waiting for
+           the next stamp window.  We apply the bounded page oldest-first
+           below so active flags still settle in event order. */
+        .order("inserted_at", { ascending: false })
         .limit(200);
       if (error || !Array.isArray(data)) return;
-      data.forEach((row) => applyRealtimeAttendanceEvent(row as Partial<LedgerEvent>));
-      const stamps = data
+      const ordered = [...data].sort((left, right) =>
+        Date.parse(String((left as { inserted_at?: string }).inserted_at || ""))
+        - Date.parse(String((right as { inserted_at?: string }).inserted_at || "")));
+      ordered.forEach((row) => applyRealtimeAttendanceEvent(row as Partial<LedgerEvent>));
+      const stamps = ordered
         .map((row) => String((row as { inserted_at?: string }).inserted_at || ""))
         .filter((stamp) => Number.isFinite(Date.parse(stamp)));
       if (stamps.length) lastAttendancePollStamp = stamps.at(-1) || lastAttendancePollStamp;

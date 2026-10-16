@@ -69,6 +69,10 @@ test("attendance fallback polls the compact ledger independently of the large st
   assert.match(ledger, /from\("attendance_events"\)/);
   assert.match(ledger, /\.select\("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, inserted_at"\)/);
   assert.match(ledger, /\.limit\(200\)/);
+  assert.match(ledger, /\.order\("inserted_at", \{ ascending: false \}\)/,
+    "the bounded fallback page must prioritize the newest punch");
+  assert.match(ledger, /const ordered = \[\.\.\.data\]\.sort/,
+    "newest-first results must be applied back in chronological order");
   assert.match(ledger, /setInterval\(\(\) => \{ void pollRecentAttendance\(\); \}, 1_000\)/);
   assert.match(ledger, /const attendancePollInFlight =|let attendancePollInFlight/);
 });
