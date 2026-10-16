@@ -22,6 +22,10 @@ test("a missing server staff roster never promotes an arbitrary browser cache", 
   assert.match(sync, /originalSetItem\(key, "\{\}"\)/);
 });
 
+test("login is unblocked after the staff roster, without waiting for secondary stores", () => {
+  assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*options\.onStatusChange\?\.\("synced"\);[\s\S]*Promise\.all\(SYNCED_KEYS/);
+});
+
 test("the first punch waits for auth warm-up with a bounded fallback", () => {
   assert.match(page, /void warmAttendanceAuth\(\);/);
   assert.match(page, /Promise\.race\(\[[\s\S]*warmAttendanceAuth\(\),[\s\S]*1200/);

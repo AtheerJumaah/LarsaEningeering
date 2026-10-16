@@ -349,7 +349,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       await ensureSession();
       /* Fire-and-forget: the offset is a refinement, never a gate. */
       sampleServerClock(supabase, originalSetItem).catch(() => {});
-      await Promise.all(SYNCED_KEYS.map(async (key) => {
+      /* Pull one store at a time through the same guarded merge path. The
+         staff roster is the login/identity authority; secondary accounting,
+         HR, and growth documents can be much larger and must never strand
+         the sign-in form while a phone is on a slow connection. */
+      const pullKey = async (key: SyncedKey) => {
         const baseline = localStorage.getItem(key);
         const { data: row, error: selectError } = await supabase
           .from("app_state")
@@ -392,12 +396,28 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         } else {
           console.log(`[larsa-sync] "${key}" empty both locally and remotely — nothing to do`);
         }
-      }));
+      };
+      await pullKey("larsaStaffV8");
       if (cancelled) return;
       bootstrapped = true;
       options.onStatusChange?.("synced");
-      console.log("[larsa-sync] initial catch-up complete, keys updated:", caughtUpKeys);
-      caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
+      const criticalCaughtUp = caughtUpKeys.splice(0, caughtUpKeys.length);
+      console.log("[larsa-sync] staff roster catch-up complete; login is unblocked", criticalCaughtUp);
+      criticalCaughtUp.forEach((key) => options.onRemoteChange?.(key));
+      /* The rest of the company state continues in the background. A slow or
+         temporarily unavailable secondary store is logged and retried by the
+         normal focus/reconnect polling, but cannot keep employees locked out. */
+      void Promise.all(SYNCED_KEYS
+        .filter((key) => key !== "larsaStaffV8")
+        .map((key) => pullKey(key)))
+        .then(() => {
+          if (cancelled) return;
+          console.log("[larsa-sync] secondary store catch-up complete", caughtUpKeys);
+          caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
+        })
+        .catch((err) => {
+          console.error("[larsa-sync] secondary store catch-up deferred; retrying in background:", err);
+        });
     } catch (err) {
       console.error("[larsa-sync] bootstrap failed — retrying on focus, reconnect, or polling:", err);
       options.onStatusChange?.("offline");
