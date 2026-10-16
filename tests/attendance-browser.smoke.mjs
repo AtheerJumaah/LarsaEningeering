@@ -73,13 +73,13 @@ try {
   await label(page).click();await waitLabel(page,'Clock In');
   await second.bringToFront();await waitLabel(second,'Clock In');assert.equal(events.at(-1).status,'Out');passed.push('second tab automatically reflects Out without reload');
   fail=true;await label(second).click();
-  await second.getByText(/Pending synchronization: 1 action/).waitFor();await waitLabel(second,'Clock Out');
+  await second.getByText(/Action recorded.*confirming with the server/).waitFor();await waitLabel(second,'Clock Out');
   assert.equal(events.length,4);const pendingId=ids.at(-1);
   fail=false;await second.evaluate(()=>window.dispatchEvent(new Event('online')));await waitLabel(second,'Clock Out');
   await second.waitForFunction(()=>JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:attendance-browser-test')||'[]').length===0,{timeout:20000});
   assert.equal(events.length,5);assert.equal(events.at(-1).client_event_id,pendingId);passed.push('offline action pending, reconnect uses same ID and original time');
   delay=9500;const before=events.length;await label(second).click();
-  await second.getByText(/Pending synchronization: 1 action/).waitFor({timeout:15000});
+  await second.getByText(/Action recorded.*confirming with the server/).waitFor({timeout:15000});
   assert.equal(events.length,before+1);const committedId=events.at(-1).client_event_id;
   delay=0;await second.evaluate(()=>window.dispatchEvent(new Event('online')));
   await waitLabel(second,'Clock In');assert.equal(events.length,before+1);

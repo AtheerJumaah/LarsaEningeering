@@ -6342,7 +6342,7 @@ export default function Home() {
       && navigator.onLine
       && attendanceConnectionRef.current !== "online") {
       refreshSharedStateNow();
-      setLoginError("Company data is still syncing. Please wait a moment, then sign in again.");
+      setLoginError("Preparing your secure workspace… Please wait a moment, then sign in again.");
       return;
     }
     const users = readStaffUsers();
@@ -7415,7 +7415,7 @@ export default function Home() {
       }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
         setStorageTick(value => value + 1);
-        if (!quiet) notify("Your clock action is waiting to sync. Keep the app open or reconnect; it will retry automatically. Don't tap again.");
+        if (!quiet) notify("Clock action recorded; confirming with the server. No extra click is needed.");
         return false;
       }
       lastOutcome = result.outcome;
@@ -18493,6 +18493,8 @@ function QuickClock({
   const [mode, setMode] = useState("Office");
   const [note, setNote] = useState("");
   const [punching, setPunching] = useState(false);
+  const [punchStartedAt, setPunchStartedAt] = useState<number | null>(null);
+  const [punchWaitSeconds, setPunchWaitSeconds] = useState(0);
   const [breaking, setBreaking] = useState(false);
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({
@@ -18644,6 +18646,20 @@ function QuickClock({
     return () => clearInterval(timer);
   }, []);
 
+  /* A punch can legitimately take a moment while the authoritative server
+     confirms the idempotent event. Show a deliberate progress state instead
+     of leaving the employee with a static "Saving…" label that looks frozen. */
+  useEffect(() => {
+    if (!punching || punchStartedAt === null) {
+      setPunchWaitSeconds(0);
+      return;
+    }
+    const update = () => setPunchWaitSeconds(Math.max(0, Math.floor((Date.now() - punchStartedAt) / 1000)));
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [punching, punchStartedAt]);
+
   const open = summary.openClock;
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
@@ -18729,7 +18745,7 @@ function QuickClock({
           <span>{connectionLabel}</span>
           <small>{punchAvailable ? "Clock actions enabled" : "Your saved attendance is still visible"}</small>
         </div>
-        {pending.length > 0 && <p role="status">Pending synchronization: {pending.length} action{pending.length === 1 ? "" : "s"}. Your original punch times are saved on this device, but not yet confirmed by the server. Reconnect; no extra click is needed.</p>}
+        {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action recorded" : `${pending.length} actions recorded`}</b> · confirming with the server. Your original time is protected; no extra click is needed.</p>}
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
@@ -18759,22 +18775,33 @@ function QuickClock({
         </label>
         {/* A cached status is displayable during bootstrap/offline, but a new
             punch is enabled only after the server connection is confirmed. */}
+        {punching && <p className="clock-action-status" role="status" aria-live="polite">
+          <span className="clock-action-orb" aria-hidden="true" />
+          {punchWaitSeconds >= 8
+            ? "Still confirming — no extra click needed."
+            : punchWaitSeconds >= 2
+              ? "Confirming securely…"
+              : "Confirming…"}
+          {punchWaitSeconds >= 2 ? <small>{punchWaitSeconds}s</small> : null}
+        </p>}
         <button
           type="button"
           className={`clock-punch ${clockedIn ? "out" : `in tone-${modeTone(mode)}`}`}
           disabled={!punchAvailable || punching || Boolean(pendingStatus)}
           onClick={async () => {
             if (punching) return;
+            setPunchStartedAt(Date.now());
             setPunching(true);
             try {
               if (await punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In")) setNote("");
             } finally {
               setPunching(false);
+              setPunchStartedAt(null);
             }
           }}
         >
           <Timer size={22} />
-          {punching ? "Saving…" : clockedIn ? "Clock Out" : "Clock In"}
+          {punching ? (clockedIn ? "Confirming Clock Out…" : "Confirming Clock In…") : clockedIn ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
@@ -18804,7 +18831,7 @@ function QuickClock({
               setBreaking(true);
               try { if (await punchBreakGuarded(note, "Break End")) setNote(""); }
               finally { setBreaking(false); }
-            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Saving…" : "End Break"}</button>
+            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Confirming…" : "End Break"}</button>
         </section>
       ) : open ? (
         <section className="break-banner">
@@ -18816,7 +18843,7 @@ function QuickClock({
               setBreaking(true);
               try { if (await punchBreakGuarded(note, "Break Start")) setNote(""); }
               finally { setBreaking(false); }
-            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Saving…" : "Start Break"}</button>
+            }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Confirming…" : "Start Break"}</button>
         </section>
       ) : null}
 

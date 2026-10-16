@@ -23,7 +23,14 @@ test("a retry reuses the pending event and does not lose the employee's note", (
   assert.match(punch, /if \(!quiet && queue\[queue\.length - 1\]\?\.status !== decided\)/);
   assert.match(punch, /client_event_id: `p\$\{user\.id\}\$\{Date\.now\(\)\}/);
   assert.match(punch, /note: note\.trim\(\) \|\| null,/);
-  assert.match(punch, /Your clock action is waiting to sync\./);
+  assert.match(punch, /Clock action recorded; confirming with the server\./);
+});
+
+test("the clock button explains a slow confirmation instead of showing a frozen Saving label", () => {
+  assert.match(page, /Confirming Clock (?:In|Out)…/);
+  assert.match(page, /Still confirming — no extra click needed\./);
+  assert.match(page, /clock-action-status/);
+  assert.doesNotMatch(page, /punching \? "Saving…"/);
 });
 
 test("the same server state refreshes the screen without another press", () => {

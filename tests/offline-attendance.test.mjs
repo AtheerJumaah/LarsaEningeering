@@ -25,6 +25,6 @@ test("offline or uncertain connections cannot create a new server punch", () => 
 
 test("existing pending punches remain queued for the same-event retry path", () => {
   assert.match(page, /same event id/);
-  assert.match(page, /Reconnect; no extra click is needed/);
+  assert.match(page, /Clock action recorded; confirming with the server/);
   assert.match(page, /window\.addEventListener\("online", retryPending\)/);
 });
