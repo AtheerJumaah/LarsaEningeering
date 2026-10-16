@@ -10,6 +10,10 @@ const correctionIndex = fs.readFileSync(
   new URL("../supabase/migrations/repair_023_attendance_correction_index.sql", import.meta.url),
   "utf8",
 );
+const latencyHardening = fs.readFileSync(
+  new URL("../supabase/migrations/20261016110000_attendance_latency_indexes.sql", import.meta.url),
+  "utf8",
+);
 
 test("attendance RPC derives shift and current status from one effective snapshot", () => {
   assert.match(migration, /with effective as materialized/i);
@@ -30,4 +34,11 @@ test("attendance corrections use a compact indexed overlay instead of expanding 
     correctionIndex.slice(correctionIndex.indexOf("create or replace function public.attendance_effective_events")),
     /jsonb_array_elements/i,
   );
+});
+
+test("attendance readers are indexed and non-attendance blob edits skip correction expansion", () => {
+  assert.match(latencyHardening, /create index if not exists attendance_events_inserted_at_idx/i);
+  assert.match(latencyHardening, /tg_op = 'UPDATE'/i);
+  assert.match(latencyHardening, /old\.data->'logs'/i);
+  assert.match(latencyHardening, /new\.data->'logs'/i);
 });

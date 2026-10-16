@@ -7461,8 +7461,20 @@ export default function Home() {
           const latestShift = store.logs.filter(item => item.uid === user.id && (item.status === "In" || item.status === "Out"))
             .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
           if (latestShift?.status === "In") latestShift.active = true;
-          localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-          pushSyncedKeyNow("larsaStaffV8");
+          /* The attendance_events ledger is the authoritative, low-latency
+             cross-device path.  Do not immediately upload the ~400 KB legacy
+             staff document after every employee punch: that write takes the
+             app_state row lock, expands the correction overlay, and can delay
+             both the next punch and the realtime echo by seconds.  Keep this
+             local compatibility view in sync, but suppress only this one
+             automatic blob write; the ledger is durable and reconciliation
+             restores the view on the next refresh/open. */
+          setLarsaSyncWritesPaused(true);
+          try {
+            localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+          } finally {
+            setLarsaSyncWritesPaused(false);
+          }
         }
       } catch {
         /* The database commit must not be reported as a failed punch because
