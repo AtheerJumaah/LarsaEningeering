@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Strip integrity + crossorigin — blob URLs from a file:// document inherit
     // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
     // The manifest bytes are ours; SRI protects against CDN compromise, not this.
-    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, ''); if (template.indexOf('larsa-pulse-board-v33.js') === -1) { const pulseScript = '<script src="/engines/larsa-pulse-board-v33.js"><\/script>'; template = template.replace(/<\/body>/i, pulseScript + '</body>'); }
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, ''); template = template.replace(/\/engines\/larsa-pulse-board-v33\.js/g, '/engines/larsa-pulse-board-v33.js?v=4d373f7'); if (template.indexOf('larsa-pulse-board-v33.js') === -1) { const pulseScript = '<script src="/engines/larsa-pulse-board-v33.js?v=4d373f7"><\/script>'; template = template.replace(/<\/body>/i, pulseScript + '</body>'); }
 
     const resourceScript = '<script>window.__resources = ' +
       JSON.stringify(resourceMap).split('</' + 'script>').join('<\\/' + 'script>') +
