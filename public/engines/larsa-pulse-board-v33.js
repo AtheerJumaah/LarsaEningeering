@@ -8,7 +8,31 @@
   // The packed engine keeps activePage and larsaSharedAttendanceSessions as
   // global lexical bindings, not window properties. Mirror them so this
   // external presentation layer can reliably activate on the real Timesheet.
-  function syncLegacyGlobals(){try{if(typeof activePage!=='undefined')W.activePage=activePage}catch(e){};try{if(typeof larsaSharedAttendanceSessions==='function')W.larsaSharedAttendanceSessions=larsaSharedAttendanceSessions}catch(e){}}
+    function syncLegacyGlobals(){try{if(typeof activePage!=='undefined')W.activePage=activePage}catch(e){};try{if(typeof larsaSharedAttendanceSessions==='function')W.larsaSharedAttendanceSessions=larsaSharedAttendanceSessions}catch(e){};try{if(W.activePage==='timesheet')refineTimesheet()}catch(e){}}
+    function refineTimesheet(){
+      if(W.activePage!=='timesheet')return;
+      var over=document.querySelector('.v33-overline');
+      var title=document.querySelector('.v33-hero h2');
+      var intro=document.querySelector('.v33-hero p');
+      var boardTitle=document.querySelector('.v33-board h3');
+      var boardIntro=document.querySelector('.v33-board p');
+      if(over)over.textContent='Timesheet · team work board';
+      if(title)title.textContent='Team timesheet at a glance';
+      if(intro)intro.textContent='Review recorded hours by employee, day, and work mode · US Central.';
+      if(boardTitle)boardTitle.textContent=/Monthly rhythm bands/i.test(boardTitle.textContent||'')?'Monthly timesheet rhythm':'Employee timesheet by day';
+      if(boardIntro)boardIntro.textContent=/Monthly timesheet rhythm/i.test(boardTitle&&boardTitle.textContent||'')?'Expand a week to compare employees and daily coverage.':'Colored ribbons show work mode; select any day for exact clock-in/out.';
+      document.querySelectorAll('.v33-weekBand summary').forEach(function(summary){
+        if(summary.querySelector('.v33-siteMetric'))return;
+        var metrics=summary.querySelectorAll('.v33-bandMetric');
+        if(metrics.length<3)return;
+        var value=function(node){var match=(node.textContent||'').match(/-?\d+(?:\.\d+)?/);return match?Number(match[0]):0};
+        var site=Math.max(0,value(metrics[0])-value(metrics[1])-value(metrics[2]));
+        var metric=document.createElement('span');
+        metric.className='v33-bandMetric v33-siteMetric';
+        metric.innerHTML='Site<strong>'+fmt(site)+'h</strong>';
+        summary.insertBefore(metric,metrics[metrics.length-1]);
+      });
+    }
   function num(v){var n=Number(v);return Number.isFinite(n)?n:0}
   function fmt(v){var n=Math.round(num(v)*100)/100;return String(n).replace(/\.00$/,'').replace(/(\.\d)0$/,'$1')}
   function mode(s){var x=String((s&&s.Type)||(s&&s.type)||(s&&s.mode)||'').toLowerCase();return x.indexOf('site')>=0?'Site':(x.indexOf('remote')>=0||x.indexOf('online')>=0?'Online':'Office')}
