@@ -6750,6 +6750,13 @@ export default function Home() {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin === window.location.origin && event.data?.type === "larsa-signout") signOut();
+      if (event.origin === window.location.origin && event.data?.type === "larsa-timesheet-ready") {
+        const frame = staffRef.current;
+        if (frame && activeRef.current.id === "staff-timesheet") {
+          frame.dataset.timesheetReady = "true";
+          frame.style.visibility = "";
+        }
+      }
     };
     addEventListener("message", onMessage);
     return () => removeEventListener("message", onMessage);
