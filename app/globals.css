@@ -199,6 +199,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: var(--bg);
 }
 .engine.active, .native.active { display: block; }
+.engine.timesheet-route-pending:not([data-timesheet-ready="true"]) { visibility: hidden; }
 .native { overflow: auto; }
 .native-scroll { width: min(1560px, 100%); min-height: 100%; display: grid; align-content: start; gap: 16px; margin: auto; padding: 24px; }
 

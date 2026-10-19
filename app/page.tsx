@@ -6637,6 +6637,32 @@ export default function Home() {
       try {
         ensureEmbeddedStyle(doc, item.engine);
         if (item.engine === "staff") {
+          const openingTimesheet = item.section === "timesheet";
+          if (openingTimesheet) {
+            /* The staff engine remains mounted while the parent changes tabs.
+               Keep its previous page out of the first paint until the v33
+               Timesheet shell is actually present. This closes the gap where
+               the legacy page could flash before the iframe nav click ran. */
+            frame.dataset.timesheetRoute = item.id;
+            frame.dataset.timesheetReady = "false";
+            frame.style.visibility = "hidden";
+            let revealAttempts = 0;
+            const revealTimesheet = () => {
+              if (activeRef.current.id !== item.id || frame.dataset.timesheetRoute !== item.id) return;
+              if (doc.querySelector("#content .v33-shell")) {
+                frame.dataset.timesheetReady = "true";
+                frame.style.visibility = "";
+                return;
+              }
+              revealAttempts += 1;
+              if (revealAttempts < 240) window.setTimeout(revealTimesheet, 50);
+            };
+            revealTimesheet();
+          } else {
+            frame.dataset.timesheetReady = "true";
+            delete frame.dataset.timesheetRoute;
+            frame.style.visibility = "";
+          }
           const login = doc.getElementById("login");
           if (login && !login.classList.contains("hidden")) {
             applySessionToFrame("staff", user, method || "email");
@@ -6874,6 +6900,21 @@ export default function Home() {
     if (record && activeRef.current && activeRef.current.id !== item.id) {
       const from = activeRef.current;
       setNavHistory((stack) => [...stack, from].slice(-30));
+    }
+    if (item.engine === "staff" && item.section === "timesheet") {
+      const frame = staffRef.current;
+      if (frame) {
+        frame.dataset.timesheetRoute = item.id;
+        frame.dataset.timesheetReady = "false";
+        frame.style.visibility = "hidden";
+      }
+    } else if (item.engine === "staff") {
+      const frame = staffRef.current;
+      if (frame) {
+        frame.dataset.timesheetReady = "true";
+        delete frame.dataset.timesheetRoute;
+        frame.style.visibility = "";
+      }
     }
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
@@ -10612,7 +10653,7 @@ export default function Home() {
             <iframe
               key={engine}
               ref={refs[engine]}
-              className={active.engine === engine ? "engine active" : "engine"}
+              className={`engine${active.engine === engine ? " active" : ""}${active.id === "staff-timesheet" && engine === "staff" ? " timesheet-route-pending" : ""}`}
               /* Normally the engine is fetched from /engines. The offline
                  single-file preview has no server to fetch from, so it supplies
                  the markup on window.__LARSA_ENGINE_HTML and the frame is fed
