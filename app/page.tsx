@@ -4643,6 +4643,9 @@ export default function Home() {
      leaves the device, and the list is capped. */
   const [recentTrail, setRecentTrail] = useState<string[]>([]);
   const [accessUsers, setAccessUsers] = useState<StaffUser[]>([]);
+  const accessUsersRef = useRef<StaffUser[]>([]);
+  const clockSessionsRef = useRef<ClockSession[]>([]);
+  accessUsersRef.current = accessUsers;
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   /* The authoritative counts, read from Supabase. The local `notifications`
      array above is now only a fallback for a deployment with no backend — when
@@ -7572,14 +7575,24 @@ export default function Home() {
   useEffect(() => {
     const holder = window as unknown as { __larsaAttendanceSessions?: () => Record<string, unknown>[] };
     const readSessions = () => {
-      const store = parseStore("larsaStaffV8") as Record<string, unknown> | null;
-      const users = Array.isArray(store?.users) ? store.users as StaffUser[] : [];
+      /* Reuse the memoized session walk the parent already computed for its
+         own attendance surfaces. Re-parsing the entire staff blob here made
+         opening Timesheet repeat the heaviest attendance calculation on the
+         main thread, which could delay the first paint by many seconds. */
+      /* The refs are available in the live parent and avoid a second full
+         attendance walk. Keep the store fallback so embedded-runtime tests
+         and older shells can still evaluate this bridge in isolation. */
+      const bridgeUsers = typeof accessUsersRef !== "undefined" ? accessUsersRef.current : null;
+      const store = bridgeUsers ? null : parseStore("larsaStaffV8") as Record<string, unknown> | null;
+      const users = bridgeUsers || (Array.isArray(store?.users) ? store.users as StaffUser[] : []);
       const actor = users.find(user => user.id === sessionUserRef.current?.id);
       if (!actor || actor.enabled === false) return [];
       const allowed = new Set(scopedUsers(actor, users.map(user => ({ ...user, enabled: true }))).map(user => user.id));
       const companyScope = isAdmin(actor) || actor.permissionProfile?.scope === "company";
       const rows = new Map<string, Record<string, unknown>>();
-      buildClockSessions(store, users).forEach(session => {
+      const bridgeSessions = typeof clockSessionsRef !== "undefined" ? clockSessionsRef.current : null;
+      const sessions = bridgeSessions || buildClockSessions(store, users);
+      sessions.forEach(session => {
         if (!companyScope && !allowed.has(session.uid)) return;
         const key = `${session.uid}|${session.clockIn}|${session.mode}`;
         const row = rows.get(key) || {
@@ -9811,6 +9824,7 @@ export default function Home() {
   const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
   const attendanceMinute = Math.floor(serverNowMs() / 60_000);
   const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers, attendanceMinute]);
+  clockSessionsRef.current = clockSessions;
   const accountingSnapshot = useMemo(
     () => (hydrated
       ? readAccountingSnapshot()
