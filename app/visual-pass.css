@@ -260,6 +260,9 @@ button[aria-label="Back to home"] svg {
 .struct-dep-title small { font-size: 11.5px; color: var(--muted); }
 .struct-x { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); cursor: pointer; }
 .struct-x:hover { color: #b91c1c; border-color: rgba(185, 28, 28, 0.4); }
+.struct-edit { margin-left: auto; color: var(--ink); }
+.struct-edit + .struct-x { margin-left: 2px; }
+.struct-edit:hover { color: var(--blue); border-color: rgba(37, 65, 150, 0.4); }
 
 /* Headcount as a share of the biggest department. */
 .struct-share { display: block; height: 6px; border-radius: 999px; background: rgba(23, 24, 27, 0.08); overflow: hidden; }

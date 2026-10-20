@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDialog } from "./Dialog";
-import { GripVertical, Plus, X } from "lucide-react";
+import { GripVertical, Pencil, Plus, X } from "lucide-react";
 import {
   assignableTo,
   canCreateDepartments,
@@ -147,6 +147,36 @@ export function OrgStructure({
   function setTeamField(team: Team, field: "leadIds" | "memberIds", ids: string[]) {
     save({ ...chart, teams: chart.teams.map((row) => (row.id === team.id ? { ...row, [field]: ids } : row)) }, "Saved.");
   }
+  async function renameDepartment(department: Department) {
+    const value = await dialog.prompt({
+      title: "Rename department",
+      message: "Choose the name shown to everyone in the organization.",
+      defaultValue: department.name,
+      confirmLabel: "Save name",
+      placeholder: "Department name",
+    });
+    const name = String(value || "").trim();
+    if (!name || name === department.name) return;
+    save({
+      ...chart,
+      departments: chart.departments.map((row) => (row.id === department.id ? { ...row, name } : row)),
+    }, "Department name saved.");
+  }
+  async function renameTeam(team: Team) {
+    const value = await dialog.prompt({
+      title: "Rename team",
+      message: "Choose the name shown to everyone in the organization.",
+      defaultValue: team.name,
+      confirmLabel: "Save name",
+      placeholder: "Team name",
+    });
+    const name = String(value || "").trim();
+    if (!name || name === team.name) return;
+    save({
+      ...chart,
+      teams: chart.teams.map((row) => (row.id === team.id ? { ...row, name } : row)),
+    }, "Team name saved.");
+  }
   async function removeTeam(team: Team) {
     if (!(await dialog.confirm("Remove " + team.name + "?"))) return;
     save({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id) }, "Team removed.");
@@ -274,6 +304,9 @@ export function OrgStructure({
                   <b>{department.name}</b>
                   <small>{teams.length} {teams.length === 1 ? "team" : "teams"} {"\u00b7"} {headcount} {headcount === 1 ? "person" : "people"}</small>
                 </span>
+                {editable ? (
+                  <button type="button" className="struct-x struct-edit" title="Rename department" aria-label={`Rename ${department.name}`} onClick={() => renameDepartment(department)}><Pencil size={13} /></button>
+                ) : null}
                 {editable && isOrgAdmin(viewer) ? (
                   <button type="button" className="struct-x" title="Remove department" onClick={() => removeDepartment(department)}><X size={14} /></button>
                 ) : null}
@@ -315,6 +348,9 @@ export function OrgStructure({
                     ><GripVertical size={13} /></span>
                     <b>{team.name}</b>
                     <span className="struct-count">{membersOf(team).length}</span>
+                    {editable ? (
+                      <button type="button" className="struct-x struct-edit" title="Rename team" aria-label={`Rename ${team.name}`} onClick={() => renameTeam(team)}><Pencil size={12} /></button>
+                    ) : null}
                     {editable ? (
                       <button type="button" className="struct-x" title="Remove team" onClick={() => removeTeam(team)}><X size={13} /></button>
                     ) : null}

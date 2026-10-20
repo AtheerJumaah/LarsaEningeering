@@ -78,6 +78,23 @@ test("structure dropdowns are not nested inside draggable cards", async () => {
   assert.match(structure, /onClick=\{\(\) => \{ onAdd\(row\.id\); setOpen\(false\); \}\}/);
 });
 
+test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
+  const structure = await read("app/OrgStructure.tsx");
+
+  // Renaming is a small update to the existing chart. The department/team
+  // ids and all assignments remain untouched, so timesheet permissions and
+  // saved relationships continue to point at the same records.
+  assert.match(structure, /async function renameDepartment\(department: Department\)/);
+  assert.match(structure, /defaultValue: department\.name/);
+  assert.match(structure, /departments: chart\.departments\.map\(\(row\) => \(row\.id === department\.id \? \{ \.\.\.row, name \} : row\)\)/);
+  assert.match(structure, /async function renameTeam\(team: Team\)/);
+  assert.match(structure, /defaultValue: team\.name/);
+  assert.match(structure, /teams: chart\.teams\.map\(\(row\) => \(row\.id === team\.id \? \{ \.\.\.row, name \} : row\)\)/);
+  assert.match(structure, /title="Rename department"/);
+  assert.match(structure, /title="Rename team"/);
+  assert.match(structure, /className="struct-x struct-edit"/);
+});
+
 test("Corrections and Performance History leave a missing name empty instead of inventing one", async () => {
   const page = await read("app/page.tsx");
 
