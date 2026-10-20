@@ -105,7 +105,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { ChangeEvent, CSSProperties, FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, FormEvent, MouseEvent, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 /* The three embedded engines keep their state in top-level `const` and `let`
    bindings, which never become window properties, so the only way in from the
@@ -4503,6 +4503,17 @@ function visibleProjectIds(user: StaffUser | null, projects: AccountingProject[]
 }
 
 export default function Home() {
+  /* The visual shell used to be visible while React was hydrating and while
+     the saved theme/surface was being restored. On a fast navigation that
+     exposed the previous administration panel for a frame (and sometimes
+     longer when the browser was under load). Keep the document hidden until
+     the first client layout pass has completed; after that, navigation is
+     entirely in-app and never needs a second paint. */
+  useLayoutEffect(() => {
+    document.documentElement.setAttribute("data-larsa-ready", "true");
+    return () => document.documentElement.removeAttribute("data-larsa-ready");
+  }, []);
+
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
   // Embedded engines are intentionally lazy. Loading all three large legacy
   // documents (and their timers) on every login was the main source of tab
@@ -10536,10 +10547,10 @@ export default function Home() {
           <div className={active.native === "overview" ? "native active" : "native"}>
             <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
           </div>
-          <div className={active.native === "admin" ? "native active" : "native"}>
+          <NativePanel active={active.native} view="admin">
             <AdminCenter choose={choose} user={sessionUser} />
-          </div>
-          <div className={active.native === "access" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="access">
             <AccessCenter
               users={directoryUsers}
               projects={accountingSnapshot.projects}
@@ -10558,11 +10569,11 @@ export default function Home() {
               canEdit={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "edit"))}
               canDelete={Boolean(sessionUser && hasItemPermission(sessionUser, ACCESS_ITEM, "delete"))}
             />
-          </div>
-          <div className={active.native === "notifications" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="notifications">
             <NotificationsCenter users={directoryUsers} currentUser={sessionUser} />
-          </div>
-          <div className={active.native === "data" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="data">
             <DataCenter
               storage={storage}
               backup={exportBackup}
@@ -10581,7 +10592,7 @@ export default function Home() {
               canManage={Boolean(sessionUser && hasItemPermission(sessionUser, ITEMS.find((item) => item.id === "data")!, "manage"))}
               runCheck={runSystemCheck}
             />
-          </div>
+          </NativePanel>
           <div className={active.native === "quickClock" ? "native active" : "native"}>
             <QuickClock
               user={sessionUser}
@@ -10619,7 +10630,7 @@ export default function Home() {
               save={saveApprovalFlow}
             />
           </div>
-          <div className={active.native === "corrections" ? "native active" : "native"}>
+          <NativePanel active={active.native} view="corrections">
             <CorrectionsCentre
               viewer={sessionUser}
               users={accessUsers}
@@ -10632,10 +10643,10 @@ export default function Home() {
               addSession={addClockSession}
               removeSession={removeClockSession}
             />
-          </div>
+          </NativePanel>
           <div className={active.native === "orgStructure" ? "native active" : "native"}>
             <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
-          </div><div className={active.native === "platformSettings" ? "native active" : "native"}><PlatformSettings viewer={sessionUser} users={accessUsers} /></div><div className={active.native === "presence" ? "native active" : "native"}>
+          </div><NativePanel active={active.native} view="platformSettings"><PlatformSettings viewer={sessionUser} users={accessUsers} /></NativePanel><div className={active.native === "presence" ? "native active" : "native"}>
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
           </div>
           <div className={active.native === "settings" ? "native active" : "native"}>
@@ -11309,6 +11320,24 @@ function Overview({
       </section>}
     </div>
   );
+}
+
+/* Native administration screens are mutually exclusive. Keeping every one
+   mounted and relying on `display:none` made hidden screens continue to run
+   effects and compete for the first paint when a tab changed. The panel
+   boundary makes the active screen the only screen that exists in the
+   workspace, so a tab switch cannot reveal stale markup from another area. */
+function NativePanel({
+  active,
+  view,
+  children,
+}: {
+  active: NativeView | undefined;
+  view: NativeView;
+  children: ReactNode;
+}) {
+  if (active !== view) return null;
+  return <div className="native active">{children}</div>;
 }
 
 function AdminCenter({

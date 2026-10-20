@@ -189,6 +189,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .top-signout { width: 44px; padding: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 
 .workspace { position: relative; height: calc(100dvh - 74px); overflow: hidden; }
+/* Do not let a server-rendered/previous shell become visible while the
+   current React tree is hydrating. This is deliberately in the base sheet so
+   it wins before any page-specific visual pass can paint an older panel. */
+html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .engine, .native {
   position: absolute;
   inset: 0;

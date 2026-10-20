@@ -340,6 +340,21 @@ test("the page title outweighs its own subtitle", () => {
     "the title must be heavier than the line describing it");
 });
 
+test("administration switches mount one current panel and never expose a pre-hydration shell", () => {
+  // The app used to keep every admin screen mounted and only hide it with CSS.
+  // A hidden screen could still run effects and briefly paint during a tab
+  // change. NativePanel makes the selected screen the only mounted one.
+  for (const view of ["admin", "access", "notifications", "data", "corrections", "platformSettings"]) {
+    assert.match(page, new RegExp(`NativePanel active=\\{active\\.native\\} view=\\"${view}\\"`), `${view} must use the exclusive panel boundary`);
+  }
+  assert.match(page, /function NativePanel\(/);
+  assert.match(page, /if \(active !== view\) return null;/);
+  // The base stylesheet hides the server/old shell until the first client
+  // layout pass marks the current tree ready.
+  assert.match(globals, /html:not\(\[data-larsa-ready\]\) \.unified-app \{ visibility: hidden; \}/);
+  assert.match(page, /useLayoutEffect\(\(\) => \{\s*document\.documentElement\.setAttribute\("data-larsa-ready", "true"\)/);
+});
+
 test("the clock labels read from the left", () => {
   assert.match(globals, /\.clocks span \{[\s\S]*?text-align: start;/);
   assert.ok(!/\.clocks span \{[^}]*text-align: right/.test(globals),
