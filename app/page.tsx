@@ -6894,7 +6894,12 @@ export default function Home() {
       registration.update().catch(() => undefined);
       updateCheck = () => { if (!document.hidden) registration.update().catch(() => undefined); };
       document.addEventListener("visibilitychange", updateCheck);
-      versionTimer = window.setInterval(updateCheck, 60_000);
+      // Keep an open tab close to the deployed version. Fifteen seconds is
+      // short enough that a UI fix becomes visible promptly, but infrequent
+      // enough to avoid turning the service-worker update check into polling
+      // traffic. The worker still reloads the page only after a replacement
+      // has actually activated.
+      versionTimer = window.setInterval(updateCheck, 15_000);
     }).catch(() => undefined);
     /* Only a REPLACEMENT is worth a reload. On a first install there was no
        controller, and reloading then would restart the app under somebody's
