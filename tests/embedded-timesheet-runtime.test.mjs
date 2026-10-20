@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 const raw=readFileSync(new URL('../public/engines/timeclock.html',import.meta.url),'utf8');
+const pulse=readFileSync(new URL('../public/engines/larsa-pulse-board-v33.js',import.meta.url),'utf8');
 const inner=JSON.parse(raw.split('\n').find(line=>line.startsWith('"<!DOCTYPE html>')));
 function functions(names){
   const found=[];
@@ -46,4 +47,11 @@ test('real parent bridge respects current employee scope and sums daily net segm
   assert.equal(rows[0].uid,'e');assert.equal(rows[0].Hours,1.25);assert.equal(rows[0].BreakHours,0.75);
   sessionUserRef.current=null;assert.equal(window.__larsaAttendanceSessions().length,0);
   sessionUserRef.current={id:'e'};users[0].enabled=false;assert.equal(window.__larsaAttendanceSessions().length,0);
+});
+
+test('timesheet presentation reuses timezone formatters and does not add an artificial first-pass wait',()=>{
+  assert.match(pulse,/var DATE_PARTS_FORMATTER=new Intl\.DateTimeFormat/);
+  assert.match(pulse,/var TIME_FORMATTER=new Intl\.DateTimeFormat/);
+  assert.match(pulse,/function periodRows\(st\)\{var b=bounds\(st\), filter=st\.mode\|\|'all';return sourceSessions\(\)/);
+  assert.doesNotMatch(pulse,/__v33DataWarm/);
 });

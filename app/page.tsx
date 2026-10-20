@@ -4515,10 +4515,11 @@ export default function Home() {
   }, []);
 
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
-  // Embedded engines are intentionally lazy. Loading all three large legacy
-  // documents (and their timers) on every login was the main source of tab
-  // memory pressure, blinking, and occasional Chromium "Out of Memory"
-  // crashes. An engine is mounted only after the user actually opens it.
+  // Keep the two less-common legacy engines lazy. The staff engine is
+  // different: Clock In / Out and Timesheet are the primary daily workflow,
+  // and waiting for its large document to download after the click made the
+  // Timesheet tab look frozen. It is warmed in the background after sign-in,
+  // while HR and Accounting remain on-demand to avoid the old memory spike.
   const [loadedEngines, setLoadedEngines] = useState<Set<Engine>>(() => new Set());
   const activeRef = useRef(active);
   const [sessionUser, setSessionUser] = useState<StaffUser | null>(null);
@@ -4699,6 +4700,24 @@ export default function Home() {
     [],
   );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
+
+  /* Prewarm the staff engine after the signed-in workspace has painted. This
+     keeps the first Timesheet click inside an already-loaded frame without
+     mounting the much larger HR and Accounting documents for everybody. The
+     functional state update is intentional: a fast click may load staff at
+     the same time, and this must never create a second iframe. */
+  useEffect(() => {
+    if (!sessionUser?.id) return;
+    const timer = window.setTimeout(() => {
+      setLoadedEngines((previous) => {
+        if (previous.has("staff")) return previous;
+        const next = new Set(previous);
+        next.add("staff");
+        return next;
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [sessionUser?.id]);
 
   // If NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are set, this makes the three
   // localStorage stores shared across everyone's browser instead of one

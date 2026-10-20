@@ -2,6 +2,14 @@
 (function(){
   'use strict';
   var W=window, installed=false, TZ='America/Chicago';
+  // These formatters are used once per visible/session row. Constructing a
+  // new Intl.DateTimeFormat inside dateKey() made a large attendance history
+  // spend seconds doing formatter setup before the first board could paint.
+  var DATE_PARTS_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'});
+  var DAY_LABEL_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:'long',month:'short',day:'numeric'});
+  var DAY_LABEL_SHORT_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:'short',month:'short',day:'numeric'});
+  var TIME_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:TZ,hour:'numeric',minute:'2-digit'});
+  var DATE_TIME_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   function addStyle(){if(document.getElementById('larsa-pulse-board-v33-style'))return;var l=document.createElement('link');l.id='larsa-pulse-board-v33-style';l.rel='stylesheet';l.href='/engines/larsa-pulse-board-v33.css?v=0f5a9c2';(document.head||document.documentElement).appendChild(l);var s=document.createElement('style');s.textContent='.v33-trendDay{cursor:pointer}.v33-trendDay:focus-visible{outline:2px solid var(--accent);outline-offset:3px}#content.v33-boot-pending{visibility:hidden}#content.v33-boot-pending:before{content:"Opening Timesheet…";visibility:visible;display:block;padding:48px 20px;text-align:center;color:var(--muted);font-weight:800;letter-spacing:.01em}';(document.head||document.documentElement).appendChild(s)}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
   function el(id){return document.getElementById(id)}
@@ -40,17 +48,17 @@
   function mode(s){var x=String((s&&s.Type)||(s&&s.type)||(s&&s.mode)||'').toLowerCase();return x.indexOf('site')>=0?'Site':(x.indexOf('remote')>=0||x.indexOf('online')>=0?'Online':'Office')}
   function name(s){return String((s&&s.Employee)||(s&&s.employee)||(s&&s.name)||'Unknown')}
   function iso(s){return s&&((s.In)||(s.in)||(s.time))}
-  function dateKey(value){if(!value)return '';var d=new Date(value);if(isNaN(d))return '';var p=new Intl.DateTimeFormat('en-US',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d).reduce(function(o,x){o[x.type]=x.value;return o},{});return p.year+'-'+p.month+'-'+p.day}
-  function dayLabel(key,short){var d=new Date(key+'T12:00:00');return new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:short?'short':'long',month:'short',day:'numeric'}).format(d)}
-  function time(value){if(!value)return '—';var d=new Date(value);if(isNaN(d))return '—';return new Intl.DateTimeFormat('en-US',{timeZone:TZ,hour:'numeric',minute:'2-digit'}).format(d)}
-  function dateTime(value){if(!value)return 'Not recorded';var d=new Date(value);if(isNaN(d))return 'Not recorded';return new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(d)}
+  function dateKey(value){if(!value)return '';var d=new Date(value);if(isNaN(d))return '';var p=DATE_PARTS_FORMATTER.formatToParts(d).reduce(function(o,x){o[x.type]=x.value;return o},{});return p.year+'-'+p.month+'-'+p.day}
+  function dayLabel(key,short){var d=new Date(key+'T12:00:00');return (short?DAY_LABEL_SHORT_FORMATTER:DAY_LABEL_FORMATTER).format(d)}
+  function time(value){if(!value)return '—';var d=new Date(value);if(isNaN(d))return '—';return TIME_FORMATTER.format(d)}
+  function dateTime(value){if(!value)return 'Not recorded';var d=new Date(value);if(isNaN(d))return 'Not recorded';return DATE_TIME_FORMATTER.format(d)}
   function today(){return dateKey(new Date())}
   function shiftKey(key,days){var d=new Date(key+'T12:00:00');d.setDate(d.getDate()+days);return dateKey(d)}
   function startOfWeek(key){var d=new Date(key+'T12:00:00'), day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return dateKey(d)}
   function sourceSessions(){try{return typeof larsaSharedAttendanceSessions==='function'?(larsaSharedAttendanceSessions()||[]):[]}catch(e){return []}}
   function users(rows){var seen={},out=[];try{((state&&state.users)||[]).filter(function(u){return u.enabled!==false}).forEach(function(u){var n=u.name||u.email||u.id;if(!seen[n]){seen[n]=1;out.push(n)}})}catch(e){};rows.forEach(function(s){var n=name(s);if(!seen[n]){seen[n]=1;out.push(n)}});return out.sort(function(a,b){return a.localeCompare(b)})}
   function bounds(st){var p=st.period||'week', t=today(), a=t,b=t;if(p==='today')return {a:t,b:t};if(p==='week'){a=startOfWeek(t);b=shiftKey(a,6)}else if(p==='month'){var d=new Date(t+'T12:00:00');d.setDate(1);a=dateKey(d);d.setMonth(d.getMonth()+1);d.setDate(0);b=dateKey(d)}else if(p==='custom'){a=st.from||t;b=st.to||a;if(a>b){var q=a;a=b;b=q}}return {a:a,b:b}}
-  function periodRows(st){var b=bounds(st), filter=st.mode||'all';if(!W.__v33DataWarm){W.__v33DataWarm=true;setTimeout(function(){if(W.activePage==='timesheet')draw()},250);return []}return sourceSessions().map(function(s){var k=dateKey(iso(s));return {s:s,k:k}}).filter(function(x){return x.k>=b.a&&x.k<=b.b&&(filter==='all'||mode(x.s)===filter)}).sort(function(a,b){return new Date(iso(b.s))-new Date(iso(a.s))}).map(function(x){return x.s})}
+  function periodRows(st){var b=bounds(st), filter=st.mode||'all';return sourceSessions().map(function(s){var k=dateKey(iso(s));return {s:s,k:k}}).filter(function(x){return x.k>=b.a&&x.k<=b.b&&(filter==='all'||mode(x.s)===filter)}).sort(function(a,b){return new Date(iso(b.s))-new Date(iso(a.s))}).map(function(x){return x.s})}
   function byDay(rows){var o={};rows.forEach(function(s){var k=dateKey(iso(s));if(!o[k])o[k]={Office:0,Online:0,Site:0,rows:[]};o[k][mode(s)]+=num(s.Hours);o[k].rows.push(s)});return o}
   function rangeDays(a,b){var out=[],k=a;while(k&&k<=b&&out.length<370){out.push(k);k=shiftKey(k,1)}return out}
   function kpi(label,val,sub,color){return '<div class="v33-kpi" style="--v33-color:'+color+'"><span class="label">'+esc(label)+'</span><strong>'+esc(val)+'</strong><small>'+esc(sub)+'</small></div>'}

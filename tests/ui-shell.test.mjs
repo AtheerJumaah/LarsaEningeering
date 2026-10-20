@@ -355,6 +355,13 @@ test("administration switches mount one current panel and never expose a pre-hyd
   assert.match(page, /useLayoutEffect\(\(\) => \{\s*document\.documentElement\.setAttribute\("data-larsa-ready", "true"\)/);
 });
 
+test("the staff engine is warmed before Timesheet is opened", () => {
+  // Timesheet lives in the staff engine. Loading that iframe only after the
+  // click made the redesigned board wait behind the legacy document boot.
+  assert.match(page, /Prewarm the staff engine after the signed-in workspace has painted/);
+  assert.match(page, /setLoadedEngines\(\(previous\) => \{[\s\S]*?previous\.has\("staff"\)[\s\S]*?next\.add\("staff"\)/);
+});
+
 test("the clock labels read from the left", () => {
   assert.match(globals, /\.clocks span \{[\s\S]*?text-align: start;/);
   assert.ok(!/\.clocks span \{[^}]*text-align: right/.test(globals),
