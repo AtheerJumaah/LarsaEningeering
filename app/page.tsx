@@ -4521,6 +4521,10 @@ export default function Home() {
   // Timesheet tab look frozen. It is warmed in the background after sign-in,
   // while HR and Accounting remain on-demand to avoid the old memory spike.
   const [loadedEngines, setLoadedEngines] = useState<Set<Engine>>(() => new Set());
+  /* The Timesheet iframe is intentionally kept invisible until its new v33
+     shell is ready. This state gives the user a small, honest wait cue while
+     the legacy document remains completely out of view. */
+  const [timesheetLoading, setTimesheetLoading] = useState(false);
   const activeRef = useRef(active);
   const [sessionUser, setSessionUser] = useState<StaffUser | null>(null);
   const sessionUserRef = useRef<StaffUser | null>(null);
@@ -6702,12 +6706,14 @@ export default function Home() {
             frame.dataset.timesheetRoute = item.id;
             frame.dataset.timesheetReady = "false";
             frame.style.visibility = "hidden";
+            setTimesheetLoading(true);
             let revealAttempts = 0;
             const revealTimesheet = () => {
               if (activeRef.current.id !== item.id || frame.dataset.timesheetRoute !== item.id) return;
               if (doc.querySelector("#content .v33-shell")) {
                 frame.dataset.timesheetReady = "true";
                 frame.style.visibility = "";
+                setTimesheetLoading(false);
                 return;
               }
               revealAttempts += 1;
@@ -6715,6 +6721,7 @@ export default function Home() {
             };
             revealTimesheet();
           } else {
+            setTimesheetLoading(false);
             frame.dataset.timesheetReady = "true";
             delete frame.dataset.timesheetRoute;
             frame.style.visibility = "";
@@ -6831,6 +6838,7 @@ export default function Home() {
         if (frame && activeRef.current.id === "staff-timesheet") {
           frame.dataset.timesheetReady = "true";
           frame.style.visibility = "";
+          setTimesheetLoading(false);
         }
       }
     };
@@ -6999,12 +7007,14 @@ export default function Home() {
     }
     if (item.engine === "staff" && item.section === "timesheet") {
       const frame = staffRef.current;
+      setTimesheetLoading(true);
       if (frame) {
         frame.dataset.timesheetRoute = item.id;
         frame.dataset.timesheetReady = "false";
         frame.style.visibility = "hidden";
       }
     } else if (item.engine === "staff") {
+      setTimesheetLoading(false);
       const frame = staffRef.current;
       if (frame) {
         frame.dataset.timesheetReady = "true";
@@ -10785,6 +10795,16 @@ export default function Home() {
               allow="clipboard-read; clipboard-write; notifications"
             />
           ) : null)}
+          {active.id === "staff-timesheet" && timesheetLoading ? (
+            <div className="timesheet-loading" role="status" aria-live="polite">
+              <span className="timesheet-loading-mark" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span>Opening Timesheet</span>
+            </div>
+          ) : null}
         </section>
       </main>
 

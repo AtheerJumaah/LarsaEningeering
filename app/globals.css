@@ -204,6 +204,35 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 }
 .engine.active, .native.active { display: block; }
 .engine.timesheet-route-pending:not([data-timesheet-ready="true"]) { visibility: hidden; }
+.timesheet-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .01em;
+}
+.timesheet-loading-mark { display: inline-flex; align-items: center; gap: 4px; }
+.timesheet-loading-mark span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: timesheet-wait .9s ease-in-out infinite;
+}
+.timesheet-loading-mark span:nth-child(2) { animation-delay: .14s; opacity: .7; }
+.timesheet-loading-mark span:nth-child(3) { animation-delay: .28s; opacity: .45; }
+@keyframes timesheet-wait {
+  0%, 80%, 100% { transform: scale(.7); opacity: .35; }
+  40% { transform: scale(1); opacity: 1; }
+}
 .native { overflow: auto; }
 .native-scroll { width: min(1560px, 100%); min-height: 100%; display: grid; align-content: start; gap: 16px; margin: auto; padding: 24px; }
 

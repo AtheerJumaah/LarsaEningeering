@@ -362,6 +362,17 @@ test("the staff engine is warmed before Timesheet is opened", () => {
   assert.match(page, /setLoadedEngines\(\(previous\) => \{[\s\S]*?previous\.has\("staff"\)[\s\S]*?next\.add\("staff"\)/);
 });
 
+test("Timesheet keeps the legacy iframe hidden and shows only a compact wait cue", () => {
+  assert.match(page, /const \[timesheetLoading, setTimesheetLoading\] = useState\(false\)/);
+  assert.match(page, /setTimesheetLoading\(true\)/);
+  assert.match(page, /setTimesheetLoading\(false\)/);
+  assert.match(page, /className="timesheet-loading"/);
+  assert.match(page, />Opening Timesheet<\/span>/);
+  assert.match(globals, /\.timesheet-loading \{/);
+  assert.match(globals, /@keyframes timesheet-wait/);
+  assert.match(globals, /\.engine\.timesheet-route-pending:not\(\[data-timesheet-ready="true"\]\) \{ visibility: hidden; \}/);
+});
+
 test("the clock labels read from the left", () => {
   assert.match(globals, /\.clocks span \{[\s\S]*?text-align: start;/);
   assert.ok(!/\.clocks span \{[^}]*text-align: right/.test(globals),
