@@ -259,6 +259,11 @@ export function OrgStructure({
   const placed = new Set<string>();
   chart.teams.forEach((team) => membersOf(team).forEach((id) => placed.add(id)));
   const unassigned = active.filter((row) => !placed.has(row.id));
+  const leadershipIds = new Set<string>([
+    ...chart.departments.flatMap((department) => department.headIds || []),
+    ...chart.teams.flatMap((team) => team.leadIds || []),
+  ]);
+  const additionalReportingPeople = active.filter((person) => !leadershipIds.has(person.id));
   const largest = Math.max(1, ...departments.map((row) => peopleIn(row).length));
 
   function moveDepartment(fromId: string, toId: string) {
@@ -533,6 +538,27 @@ export function OrgStructure({
           );
         })}
       </div>
+
+      {isOrgAdmin(viewer) && additionalReportingPeople.length ? (
+        <section className="struct-reporting-panel">
+          <div className="struct-reporting-panel-head">
+            <div><span className="struct-label">Line reporting</span><h3>Additional reporting lines</h3></div>
+            <p>Assign operational or technical managers independently from team membership.</p>
+          </div>
+          <div className="struct-reporting-list">
+            {additionalReportingPeople.map((person) => {
+              const managerIds = reportingFor(person.id);
+              return (
+                <div className="struct-reporting-person" key={`person-reporting-${person.id}`}>
+                  <span className="struct-reporting-label"><small>{person.department || "Unassigned"}</small><b>{person.name}</b></span>
+                  <Chips ids={managerIds} empty="No line manager" onRemove={(id) => setReporting(person.id, managerIds.filter((row) => row !== id))} />
+                  <AddPerson pool={active.filter((row) => row.id !== person.id)} chosen={managerIds} label="Add manager" onAdd={(id) => setReporting(person.id, [...managerIds, id])} />
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {unassigned.length && isOrgAdmin(viewer) ? (
         <section className="struct-dep struct-unassigned">

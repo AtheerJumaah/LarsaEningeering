@@ -88,7 +88,7 @@ test("every current and future department uses the same searchable assignment pi
   // loops. That combination means a newly-created department/team cannot
   // accidentally fall back to a different, fragile control.
   assert.equal((structure.match(/function AddPerson\(/g) || []).length, 1);
-  assert.equal((structure.match(/<AddPerson\b/g) || []).length, 5);
+  assert.equal((structure.match(/<AddPerson\b/g) || []).length, 6);
   assert.match(structure, /\{departments\.map\(\(department\) => \{/);
   assert.match(structure, /\{teams\.map\(\(team\) => \(/);
   assert.match(structure, /label="Add head"/);

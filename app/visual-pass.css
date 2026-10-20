@@ -253,6 +253,14 @@ button[aria-label="Back to home"] svg {
 .struct-reporting-label b { color: var(--ink); font-size: 11px; letter-spacing: 0; text-transform: none; }
 .struct-reporting .struct-chips { flex: 1 1 120px; }
 .struct-reporting .struct-select-trigger { min-height: 28px; padding: 5px 8px; font-size: 11px; }
+.struct-reporting-panel { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised, #fff); }
+.struct-reporting-panel-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; }
+.struct-reporting-panel-head h3 { margin: 2px 0 0; font-size: 14px; }
+.struct-reporting-panel-head p { margin: 0; color: var(--muted); font-size: 12px; }
+.struct-reporting-list { display: grid; gap: 6px; }
+.struct-reporting-person { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 9px; border-radius: 9px; background: var(--soft); }
+.struct-reporting-person .struct-reporting-label { min-width: 145px; }
+.struct-reporting-person .struct-chips { flex: 1 1 180px; }
 .struct-savebar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-raised, #fff); }
 .struct-savebar.is-dirty { border-color: color-mix(in srgb, var(--larsa-accent, #315b91) 38%, var(--line)); background: color-mix(in srgb, var(--larsa-accent, #315b91) 5%, #fff); }
 .struct-save-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 800; color: var(--ink); }
