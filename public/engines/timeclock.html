@@ -217,6 +217,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   box-shadow: 0 18px 48px rgba(15, 23, 42, .08);
 }
 #v21ConstraintPanel > .cardHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 5px;
   margin: -2px -2px 18px;
   padding: 0 0 16px;
   border-bottom: 1px solid var(--line);
@@ -228,14 +231,14 @@ document.addEventListener('DOMContentLoaded', async function() {
 }
 #v21ConstraintPanel > .cardHeader::after {
   content: "Set the rule once, then review every employee in one calm view.";
+  grid-column: 1 / -1;
   display: block;
-  position: absolute;
-  margin: 29px 0 0;
+  position: static;
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
-#v21ConstraintPanel > .cardHeader { position: relative; }
 #v21ConstraintPanel .v21-constraint-editor {
   display: grid;
   gap: 12px;
