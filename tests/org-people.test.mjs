@@ -81,6 +81,22 @@ test("structure dropdowns are not nested inside draggable cards", async () => {
   assert.match(structure, /No matching people/);
 });
 
+test("every current and future department uses the same searchable assignment picker", async () => {
+  const structure = await read("app/OrgStructure.tsx");
+
+  // AddPerson is one stable component, while departments and teams are data
+  // loops. That combination means a newly-created department/team cannot
+  // accidentally fall back to a different, fragile control.
+  assert.equal((structure.match(/function AddPerson\(/g) || []).length, 1);
+  assert.equal((structure.match(/<AddPerson\b/g) || []).length, 3);
+  assert.match(structure, /\{departments\.map\(\(department\) => \{/);
+  assert.match(structure, /\{teams\.map\(\(team\) => \(/);
+  assert.match(structure, /label="Add head"/);
+  assert.match(structure, /label="Add lead"/);
+  assert.match(structure, /label="Add member"/);
+  assert.match(structure, /className="struct-select-search"/);
+});
+
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
   const structure = await read("app/OrgStructure.tsx");
 
