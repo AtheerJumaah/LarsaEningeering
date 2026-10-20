@@ -221,21 +221,8 @@ export function OrgStructure({
         const target = event.target as Node;
         if (!pickerRef.current?.contains(target)) setOpen(false);
       }
-      function closeWhenPointerLeaves(event: PointerEvent) {
-        const target = event.target as Node | null;
-        /* The menu is absolutely positioned, so the wrapper's CSS box ends at
-           the trigger even though the menu is still its DOM child. Checking
-           the event target keeps the menu open while the pointer travels into
-           it, and closes it only after the pointer actually leaves the whole
-           picker. */
-        if (target && !pickerRef.current?.contains(target)) setOpen(false);
-      }
       document.addEventListener("pointerdown", closeOutside);
-      document.addEventListener("pointermove", closeWhenPointerLeaves);
-      return () => {
-        document.removeEventListener("pointerdown", closeOutside);
-        document.removeEventListener("pointermove", closeWhenPointerLeaves);
-      };
+      return () => document.removeEventListener("pointerdown", closeOutside);
     }, [open]);
 
     if (!options.length) return null;
@@ -289,7 +276,7 @@ export function OrgStructure({
 
       <div className="struct-grid">
         {departments.map((department) => {
-          const editable = canEditDepartment(chart, viewer, department.id);
+          const editable = canEditDepartment(chart, viewer, department.id, users);
           const teams = chart.teams.filter(
             (team) => team.departmentId === department.id && (isOrgAdmin(viewer) || visibleTeamIds.has(team.id)),
           );

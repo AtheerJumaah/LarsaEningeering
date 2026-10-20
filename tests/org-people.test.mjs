@@ -73,8 +73,8 @@ test("structure dropdowns are not nested inside draggable cards", async () => {
   assert.doesNotMatch(structure, /className=\{"struct-team"[\s\S]*?key=\{team\.id\}\s*draggable/);
   assert.match(structure, /className="hier-drag"[\s\S]*?role="button"[\s\S]*?draggable/);
   assert.match(structure, /className="struct-picker"/);
-  assert.match(structure, /function closeWhenPointerLeaves\(event: PointerEvent\)/);
-  assert.match(structure, /document\.addEventListener\("pointermove", closeWhenPointerLeaves\)/);
+  assert.doesNotMatch(structure, /closeWhenPointerLeaves|pointermove/);
+  assert.match(structure, /document\.addEventListener\("pointerdown", closeOutside\)/);
   assert.match(structure, /role="listbox"/);
   assert.match(structure, /onClick=\{\(\) => \{ onAdd\(row\.id\); setOpen\(false\); \}\}/);
 });
@@ -94,6 +94,7 @@ test("authorized structure editors can rename departments and teams without repl
   assert.match(structure, /title="Rename department"/);
   assert.match(structure, /title="Rename team"/);
   assert.match(structure, /className="struct-x struct-edit"/);
+  assert.match(structure, /canEditDepartment\(chart, viewer, department\.id, users\)/);
 });
 
 test("Corrections and Performance History leave a missing name empty instead of inventing one", async () => {
