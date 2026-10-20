@@ -382,6 +382,16 @@ test("Rules & Constraints uses the refined editor layout", () => {
   assert.match(timeclock, /@media \(max-width: 640px\)/);
 });
 
+test("Performance uses the Larsa core visual system without changing its data renderer", () => {
+  assert.match(timeclock, /id="larsa-performance-core-design"/);
+  assert.match(timeclock, /className='larsa-performance-hero'/);
+  assert.match(timeclock, /larsa-performance-legend/);
+  assert.match(timeclock, /#content\.larsa-performance-core \.v22-kpi:nth-child\(2\)::before/);
+  assert.match(timeclock, /#content\.larsa-performance-core \.v22-chart-card:nth-child\(4\) \.v22-bar-fill/);
+  assert.match(timeclock, /function decoratePerformance\(\)/);
+  assert.match(timeclock, /wrap\('renderPerformance'\)/);
+});
+
 test("the clock labels read from the left", () => {
   assert.match(globals, /\.clocks span \{[\s\S]*?text-align: start;/);
   assert.ok(!/\.clocks span \{[^}]*text-align: right/.test(globals),
