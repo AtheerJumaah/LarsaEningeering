@@ -88,13 +88,30 @@ test("every current and future department uses the same searchable assignment pi
   // loops. That combination means a newly-created department/team cannot
   // accidentally fall back to a different, fragile control.
   assert.equal((structure.match(/function AddPerson\(/g) || []).length, 1);
-  assert.equal((structure.match(/<AddPerson\b/g) || []).length, 3);
+  assert.equal((structure.match(/<AddPerson\b/g) || []).length, 5);
   assert.match(structure, /\{departments\.map\(\(department\) => \{/);
   assert.match(structure, /\{teams\.map\(\(team\) => \(/);
   assert.match(structure, /label="Add head"/);
   assert.match(structure, /label="Add lead"/);
   assert.match(structure, /label="Add member"/);
+  assert.match(structure, /label="Add manager"/);
   assert.match(structure, /className="struct-select-search"/);
+});
+
+test("reporting lines stay independent from department heads and team leads", async () => {
+  const [org, flow, structure] = await Promise.all([
+    readFile(new URL("../lib/org.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/approval-flow.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/OrgStructure.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(org, /reporting\?: Record<string, string\[\]>;/);
+  assert.match(org, /const hasReportingEntry = Boolean\(org\.reporting/);
+  assert.match(org, /department head report to an executive/);
+  assert.match(flow, /reporting\?: Record<string, string\[\]>;/);
+  assert.match(flow, /const configuredManagers = Array\.isArray\(org\?\.reporting\?\.\[employeeId\]\)/);
+  assert.match(structure, /function reportingFor\(personId: string\): string\[\]/);
+  assert.match(structure, /label="Add manager"/);
 });
 
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {

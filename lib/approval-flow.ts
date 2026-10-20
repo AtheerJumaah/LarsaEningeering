@@ -31,6 +31,7 @@ export type ApprovalFlowOrg = {
     leadIds?: string[];
     memberIds?: string[];
   }>;
+  reporting?: Record<string, string[]>;
 };
 
 /** Request types whose standing route is editable in Approval Flow. */
@@ -104,8 +105,14 @@ export function defaultApprovalChain(
   heads.forEach((id) => pushUnique(route, id, users, employeeId));
   if (route.length) return route.slice(0, 3);
 
-  const namedManager = users.find((user) => sameId(employee.manager, user));
-  if (namedManager) pushUnique(route, namedManager.id, users, employeeId);
+  const configuredManagers = Array.isArray(org?.reporting?.[employeeId])
+    ? org!.reporting![employeeId]
+    : [];
+  configuredManagers.forEach((id) => pushUnique(route, id, users, employeeId));
+  if (!route.length) {
+    const namedManager = users.find((user) => sameId(employee.manager, user));
+    if (namedManager) pushUnique(route, namedManager.id, users, employeeId);
+  }
   return route.slice(0, 3);
 }
 

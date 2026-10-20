@@ -42,6 +42,13 @@ export type Team = {
 export type OrgChart = {
   departments: Department[];
   teams: Team[];
+  /**
+   * Optional line-management relationships, independent of department heads
+   * and team leads. A person may have more than one line manager here (for
+   * example an operational manager and a technical manager) without changing
+   * their functional role in the chart.
+   */
+  reporting?: Record<string, string[]>;
 };
 
 export type OrgUser = {
@@ -72,7 +79,17 @@ export function readStoredOrg(): OrgChart | null {
   const blob = readBlob();
   const org = blob ? (blob.org as OrgChart | undefined) : undefined;
   if (!org || typeof org !== "object" || !Array.isArray(org.departments)) return null;
-  return { departments: org.departments, teams: Array.isArray(org.teams) ? org.teams : [] };
+  const reporting = org.reporting && typeof org.reporting === "object"
+    ? Object.fromEntries(Object.entries(org.reporting).map(([id, managers]) => [
+      id,
+      Array.isArray(managers) ? managers.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [],
+    ]))
+    : undefined;
+  return {
+    departments: org.departments,
+    teams: Array.isArray(org.teams) ? org.teams : [],
+    ...(reporting ? { reporting } : {}),
+  };
 }
 
 export function writeOrg(next: OrgChart): boolean {
@@ -121,6 +138,15 @@ function looksLikeLeader(role: string | undefined): boolean {
    says they lead put forward as head. Ids are derived from the name so the
    same chart comes out on every device until somebody saves a real one. */
 export function buildFallbackOrg(users: OrgUser[]): OrgChart {
+  const byId = new Map(users.map((user) => [user.id.toLowerCase(), user]));
+  const byDisplayName = new Map(users.map((user) => [String(user.name || "").trim().toLowerCase(), user]));
+  const reporting: Record<string, string[]> = {};
+  users.forEach((user) => {
+    const named = String(user.manager || "").trim().toLowerCase();
+    if (!named) return;
+    const manager = byId.get(named) || byDisplayName.get(named);
+    if (manager && manager.id !== user.id) reporting[user.id] = [manager.id];
+  });
   const byName = new Map<string, OrgUser[]>();
   users.forEach((user) => {
     if (user.enabled === false) return;
@@ -145,7 +171,7 @@ export function buildFallbackOrg(users: OrgUser[]): OrgChart {
       memberIds: members.map((row) => row.id),
     });
   });
-  return { departments, teams };
+  return { departments, teams, reporting };
 }
 
 /* What the app should actually use: a saved chart if there is one, otherwise
@@ -186,15 +212,18 @@ export function departmentsContaining(org: OrgChart, userId: string): Department
   return org.departments.filter((row) => ids.has(row.id));
 }
 
-/* Anyone named as somebody's manager on their staff record. Kept separate from
-   the chart so that filling in "manager" on a person is enough to give their
-   manager a team to work with, without anybody drawing the chart first. */
-export function directReportsOf(users: OrgUser[], manager: OrgUser | null | undefined): OrgUser[] {
+/* Anyone who reports to a manager. The chart's reporting lines take priority
+   when that person has an explicit entry; older staff records still use the
+   name-based manager field until an admin saves a line in the chart. */
+export function directReportsOf(users: OrgUser[], manager: OrgUser | null | undefined, org?: OrgChart): OrgUser[] {
   if (!manager) return [];
   const id = manager.id;
   const name = String(manager.name || "").trim().toLowerCase();
   return users.filter((row) => {
     if (row.id === id) return false;
+    if (org?.reporting && Object.prototype.hasOwnProperty.call(org.reporting, row.id)) {
+      return (org.reporting[row.id] || []).includes(id);
+    }
     const value = String(row.manager || "").trim().toLowerCase();
     if (!value) return false;
     return value === id.toLowerCase() || value === name;
@@ -226,7 +255,7 @@ export function staffIdsVisibleTo(org: OrgChart, user: OrgUser | null | undefine
     (team.memberIds || []).forEach((id) => ids.add(id));
     (team.leadIds || []).forEach((id) => ids.add(id));
   });
-  directReportsOf(users, user).forEach((row) => ids.add(row.id));
+  directReportsOf(users, user, org).forEach((row) => ids.add(row.id));
   return ids;
 }
 
@@ -245,7 +274,7 @@ export function isResponsibleForOthers(org: OrgChart, user: OrgUser | null | und
   if (departmentsHeadedBy(org, user.id).length) return true;
   if (teamsLedBy(org, user.id).length) return true;
   if ((user.teamGrants || []).length || (user.departmentGrants || []).length) return true;
-  return directReportsOf(users, user).length > 0;
+  return directReportsOf(users, user, org).length > 0;
 }
 
 /* Super Admin shapes the whole chart. A department head shapes their own
@@ -259,7 +288,7 @@ export function canEditDepartment(
   if (isOrgAdmin(user)) return true;
   if (!user) return false;
   if (departmentsHeadedBy(org, user.id).some((row) => row.id === departmentId)) return true;
-  const directIds = new Set(directReportsOf(users, user).map((row) => row.id));
+  const directIds = new Set(directReportsOf(users, user, org).map((row) => row.id));
   return org.teams.some((team) => team.departmentId === departmentId
     && [...(team.memberIds || []), ...(team.leadIds || [])].some((id) => directIds.has(id)));
 }
@@ -275,7 +304,7 @@ export function assignableTo(org: OrgChart, user: OrgUser | null | undefined, us
   if (isOrgAdmin(user)) return active;
   if (!user) return [];
   const allowed = new Set<string>();
-  directReportsOf(active, user).forEach((row) => allowed.add(row.id));
+  directReportsOf(active, user, org).forEach((row) => allowed.add(row.id));
   org.teams
     .filter((team) => team.departmentId === departmentId)
     .forEach((team) => {
@@ -302,11 +331,21 @@ export function managersOf(org: OrgChart, userId: string, users: OrgUser[]): str
     const department = departmentById(org, team.departmentId);
     if (department) (department.headIds || []).forEach((id) => { if (id !== userId) ids.add(id); });
   });
+  /* A line manager is independent from the functional chart. This is what
+     lets a department head report to an executive, or a technical lead and
+     an operational manager both appear without either role overwriting the
+     other. An explicit empty list intentionally means "no extra line". */
+  const hasReportingEntry = Boolean(org.reporting && Object.prototype.hasOwnProperty.call(org.reporting, userId));
+  if (hasReportingEntry) {
+    (org.reporting?.[userId] || []).forEach((id) => { if (id !== userId) ids.add(id); });
+  }
   const self = users.find((row) => row.id === userId);
-  const named = String(self && self.manager ? self.manager : "").trim().toLowerCase();
-  if (named) {
-    const match = users.find((row) => row.id.toLowerCase() === named || String(row.name || "").trim().toLowerCase() === named);
-    if (match && match.id !== userId) ids.add(match.id);
+  if (!hasReportingEntry) {
+    const named = String(self && self.manager ? self.manager : "").trim().toLowerCase();
+    if (named) {
+      const match = users.find((row) => row.id.toLowerCase() === named || String(row.name || "").trim().toLowerCase() === named);
+      if (match && match.id !== userId) ids.add(match.id);
+    }
   }
   return [...ids];
 }

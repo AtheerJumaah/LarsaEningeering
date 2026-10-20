@@ -38,7 +38,7 @@ test("management and history expose scoped, separate time and performance report
   assert.match(page, /staffIdsVisibleTo\(org, viewer, users\)/);
   assert.match(page, /"structure" \| "time" \| "performance"/);
   assert.match(page, />Today<\/button>.*>7 days<\/button>.*>30 days<\/button>.*>6 months<\/button>.*>Year<\/button>/s);
-  assert.match(org, /directReportsOf\(users, user\)/);
+  assert.match(org, /directReportsOf\(users, user, org\)/);
   /* The structure page was rewritten as cards; the old inline-create field
      went with it and adding now uses a prompt. Recorded in the audit report
      as a divergence from the previously tested contract — this asserts what

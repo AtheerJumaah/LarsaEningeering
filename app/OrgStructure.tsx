@@ -189,6 +189,28 @@ export function OrgStructure({
     return Boolean(nameOf(id));
   }
 
+  /* Functional roles (department head and team lead) are intentionally not
+     treated as a person's only manager. The reporting map lets an admin add
+     an operational or technical manager without removing those roles. Older
+     staff records still get their existing Reports To value as the starting
+     line until an explicit list is saved here. */
+  function reportingFor(personId: string): string[] {
+    if (chart.reporting && Object.prototype.hasOwnProperty.call(chart.reporting, personId)) {
+      return (chart.reporting[personId] || []).filter((id) => id !== personId && isKnown(id));
+    }
+    const person = active.find((row) => row.id === personId);
+    const named = String(person?.manager || "").trim().toLowerCase();
+    if (!named) return [];
+    const manager = active.find((row) => row.id.toLowerCase() === named || String(row.name || "").trim().toLowerCase() === named);
+    return manager && manager.id !== personId ? [manager.id] : [];
+  }
+
+  function setReporting(personId: string, managerIds: string[]) {
+    const reporting = { ...(chart.reporting || {}) };
+    reporting[personId] = [...new Set(managerIds.filter((id) => id !== personId && isKnown(id)))];
+    save({ ...chart, reporting }, "Reporting line updated.");
+  }
+
   function save(next: OrgChart, message: string) {
     setDraft(next);
     setNote(`${message} Review the change, then click Save changes.`);
@@ -418,6 +440,23 @@ export function OrgStructure({
                   <AddPerson pool={active} chosen={department.headIds || []} label="Add head" onAdd={(id) => setHeads(department, [...(department.headIds || []), id])} />
                 ) : null}
               </div>
+              {(department.headIds || []).filter(isKnown).map((headId) => {
+                const managerIds = reportingFor(headId);
+                const managerPool = isOrgAdmin(viewer) ? active : assignableTo(chart, viewer, users, department.id);
+                return (
+                  <div className="struct-reporting" key={`department-reporting-${department.id}-${headId}`}>
+                    <span className="struct-reporting-label"><small>Reports to</small><b>{nameOf(headId)}</b></span>
+                    <Chips
+                      ids={managerIds}
+                      empty="No line manager"
+                      onRemove={editable ? (id) => setReporting(headId, managerIds.filter((row) => row !== id)) : undefined}
+                    />
+                    {editable ? (
+                      <AddPerson pool={managerPool.filter((row) => row.id !== headId)} chosen={managerIds} label="Add manager" onAdd={(id) => setReporting(headId, [...managerIds, id])} />
+                    ) : null}
+                  </div>
+                );
+              })}
 
               {teams.map((team) => (
                 <div
@@ -457,6 +496,22 @@ export function OrgStructure({
                       <AddPerson pool={pool} chosen={team.leadIds || []} label="Add lead" onAdd={(id) => setTeamField(team, "leadIds", [...(team.leadIds || []), id])} />
                     ) : null}
                   </div>
+                  {(team.leadIds || []).filter(isKnown).map((leadId) => {
+                    const managerIds = reportingFor(leadId);
+                    return (
+                      <div className="struct-reporting" key={`team-reporting-${team.id}-${leadId}`}>
+                        <span className="struct-reporting-label"><small>Reports to</small><b>{nameOf(leadId)}</b></span>
+                        <Chips
+                          ids={managerIds}
+                          empty="No line manager"
+                          onRemove={editable ? (id) => setReporting(leadId, managerIds.filter((row) => row !== id)) : undefined}
+                        />
+                        {editable ? (
+                          <AddPerson pool={pool.filter((row) => row.id !== leadId)} chosen={managerIds} label="Add manager" onAdd={(id) => setReporting(leadId, [...managerIds, id])} />
+                        ) : null}
+                      </div>
+                    );
+                  })}
                   <div className="struct-field">
                     <span className="struct-label">Members</span>
                     <Chips

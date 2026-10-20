@@ -248,6 +248,11 @@ button[aria-label="Back to home"] svg {
 .struct-add { margin-left: auto; }
 .struct-note { margin: 0; font-size: 12.5px; color: var(--muted); }
 .struct-empty { font-size: 12.5px; color: var(--muted); }
+.struct-reporting { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 9px; margin: -2px 0 7px 24px; padding: 7px 9px; border: 1px dashed var(--line); border-radius: 9px; background: color-mix(in srgb, var(--soft) 55%, transparent); }
+.struct-reporting-label { display: inline-flex; flex-direction: column; gap: 1px; min-width: 92px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.struct-reporting-label b { color: var(--ink); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.struct-reporting .struct-chips { flex: 1 1 120px; }
+.struct-reporting .struct-select-trigger { min-height: 28px; padding: 5px 8px; font-size: 11px; }
 .struct-savebar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-raised, #fff); }
 .struct-savebar.is-dirty { border-color: color-mix(in srgb, var(--larsa-accent, #315b91) 38%, var(--line)); background: color-mix(in srgb, var(--larsa-accent, #315b91) 5%, #fff); }
 .struct-save-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 800; color: var(--ink); }
