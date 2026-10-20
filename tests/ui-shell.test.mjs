@@ -13,6 +13,7 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const page = read("app/page.tsx");
 const globals = read("app/globals.css");
 const pass = read("app/visual-pass.css");
+const timeclock = read("public/engines/timeclock.html");
 const css = `${globals}\n${pass}`;
 
 test("the six work-area cards are preserved as large decorated cards", () => {
@@ -371,6 +372,14 @@ test("Timesheet keeps the legacy iframe hidden and shows only a compact wait cue
   assert.match(globals, /\.timesheet-loading \{/);
   assert.match(globals, /@keyframes timesheet-wait/);
   assert.match(globals, /\.engine\.timesheet-route-pending:not\(\[data-timesheet-ready="true"\]\) \{ visibility: hidden; \}/);
+});
+
+test("Rules & Constraints uses the refined editor layout", () => {
+  assert.match(timeclock, /id="larsa-rules-constraints-refinement"/);
+  assert.match(timeclock, /#v21ConstraintPanel \.v21-constraint-who/);
+  assert.match(timeclock, /#v21ConstraintPanel \.v21-constraint-what/);
+  assert.match(timeclock, /#v21ConstraintPanel \.table tbody tr:hover td/);
+  assert.match(timeclock, /@media \(max-width: 640px\)/);
 });
 
 test("the clock labels read from the left", () => {

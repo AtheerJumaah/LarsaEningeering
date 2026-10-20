@@ -202,6 +202,126 @@ document.addEventListener('DOMContentLoaded', async function() {
 
 </style>
 
+<style id="larsa-rules-constraints-refinement">
+/* Rules & Constraints: make the editor feel like one deliberate workspace
+   instead of a long form followed by an unstructured data dump. */
+#v21ConstraintPanel {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--line));
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%),
+    var(--panel);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .08);
+}
+#v21ConstraintPanel > .cardHeader {
+  margin: -2px -2px 18px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+  align-items: flex-start;
+}
+#v21ConstraintPanel > .cardHeader .cardTitle {
+  font-size: 21px;
+  letter-spacing: -.035em;
+}
+#v21ConstraintPanel > .cardHeader::after {
+  content: "Set the rule once, then review every employee in one calm view.";
+  display: block;
+  position: absolute;
+  margin: 29px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+#v21ConstraintPanel > .cardHeader { position: relative; }
+#v21ConstraintPanel .v21-constraint-editor {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--soft) 72%, var(--panel));
+}
+#v21ConstraintPanel .v21-constraint-row {
+  display: grid;
+  gap: 14px;
+  align-items: end;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+#v21ConstraintPanel .v21-constraint-who {
+  grid-template-columns: minmax(230px, .8fr) minmax(0, 1.8fr);
+  align-items: start;
+}
+#v21ConstraintPanel .v21-constraint-what {
+  grid-template-columns: minmax(190px, .9fr) minmax(125px, .58fr) minmax(125px, .58fr) minmax(240px, 1.45fr) 96px;
+}
+#v21ConstraintPanel .v21-constraint-addfield .btn {
+  width: 100%;
+  min-height: 44px !important;
+  border-radius: 12px;
+  box-shadow: 0 8px 16px rgba(15, 23, 42, .12);
+}
+#v21ConstraintPanel .v21-alert {
+  margin-top: 14px !important;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+#v21ConstraintPanel .v21-alert b { color: var(--ink); }
+#v21ConstraintPanel .tableWrap {
+  margin-top: 18px !important;
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+}
+#v21ConstraintPanel .table {
+  min-width: 840px;
+  table-layout: fixed;
+}
+#v21ConstraintPanel .table th,
+#v21ConstraintPanel .table td { padding: 13px 15px; }
+#v21ConstraintPanel .table th:nth-child(1) { width: 18%; }
+#v21ConstraintPanel .table th:nth-child(2) { width: 15%; }
+#v21ConstraintPanel .table th:nth-child(3) { width: 55%; }
+#v21ConstraintPanel .table th:nth-child(4) { width: 12%; }
+#v21ConstraintPanel .table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--soft) 42%, var(--panel)); }
+#v21ConstraintPanel .table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+#v21ConstraintPanel .v21-constraint-pill {
+  display: inline-flex;
+  max-width: 100%;
+  margin: 2px 5px 2px 0;
+  padding: 6px 9px;
+  border-radius: 999px;
+  line-height: 1.25;
+  white-space: normal;
+  vertical-align: middle;
+}
+#v21ConstraintPanel .v21-constraint-actions { justify-content: flex-start; }
+#v21ConstraintPanel .v21-constraint-actions .btn { min-width: 58px; }
+@media (max-width: 1100px) {
+  #v21ConstraintPanel .v21-constraint-who,
+  #v21ConstraintPanel .v21-constraint-what {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #v21ConstraintPanel .v21-constraint-addfield { grid-column: 2; }
+}
+@media (max-width: 640px) {
+  #v21ConstraintPanel { padding: 15px; border-radius: 18px; }
+  #v21ConstraintPanel .v21-constraint-who,
+  #v21ConstraintPanel .v21-constraint-what { grid-template-columns: minmax(0, 1fr); }
+  #v21ConstraintPanel .v21-constraint-addfield { grid-column: auto; }
+  #v21ConstraintPanel > .cardHeader::after { position: static; margin: 5px 0 0; }
+}
+</style>
+
 <script>
 /* The packed staff panel has a legacy local fallback. When it is embedded in
    the Next app, that fallback must not get a chance to reject a click from its
