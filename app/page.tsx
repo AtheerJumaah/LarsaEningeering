@@ -624,6 +624,13 @@ const ACCESS_ITEM: Item = {
   code: "UA",
   native: "access",
 };
+const ADMIN_OVERVIEW_ITEM: Item = {
+  id: "admin",
+  label: "Administration Overview",
+  description: "A clear starting point for people, attendance, communication, and platform controls",
+  code: "AM",
+  native: "admin",
+};
 const PERFORMANCE_REVIEW_ITEM: Item = {
   id: "staff-performance-review",
   label: "Performance Review",
@@ -838,17 +845,12 @@ const GROUPS: Group[] = [
   {
     label: "Administration",
     items: [
+      ADMIN_OVERVIEW_ITEM,
       ACCESS_ITEM,
-      {
-        id: "admin",
-        label: "Admin Center",
-        description: "Users, access, rules, and protected data",
-        code: "AM",
-        native: "admin",
-      },
       CORRECTIONS_ITEM,
       {
         id: "platform-settings", label: "Platform Settings", description: "Signup, verification policy, and platform owners", code: "PS", native: "platformSettings" },
+      NOTIFICATIONS_ITEM,
       { id: "data", label: "Data Center",
         description: "Scoped backup, restore, and staff sync",
         code: "DC",
@@ -1029,6 +1031,7 @@ const ACCESS_ACTIONS: Record<string, PermissionAction[]> = {
   "hr-reports": VIEW_EXPORT,
   "project-portal": ["view", "edit", "export"],
   "construction-financials": ["view", "export"],
+  admin: VIEW_ONLY,
   access: ["view", "add", "edit", "delete", "manage"],
   "admin-notifications": ["view", "add", "edit", "delete", "manage"],
   data: ["view", "export", "manage"],
@@ -1076,15 +1079,18 @@ const ACCESS_GROUPS: { label: string; items: Item[] }[] = [
   {
     label: "Administration",
     items: [
+      ADMIN_OVERVIEW_ITEM,
       ACCESS_ITEM,
+      CORRECTIONS_ITEM,
+      NOTIFICATIONS_ITEM,
       ITEMS.find((item) => item.id === "staff-rules")!,
+      ITEMS.find((item) => item.id === "platform-settings")!,
+      ITEMS.find((item) => item.id === "data")!,
       {
         ...ITEMS.find((item) => item.id === "staff-backup")!,
         label: "Staff CSV & Import Tools",
         description: "Import staff CSV files and use staff-specific export or print tools",
       },
-      NOTIFICATIONS_ITEM, ITEMS.find((item) => item.id === "platform-settings")!,
-      ITEMS.find((item) => item.id === "data")!,
     ],
   },
 ];
@@ -1965,9 +1971,12 @@ function hasItemPermission(user: StaffUser, item: Item, action: PermissionAction
 function isAdministrationUser(user: StaffUser) {
   if (isAdmin(user)) return true;
   const administrativeIds = [
+    "admin",
     "access",
+    "admin-corrections",
     "staff-rules",
     "admin-notifications",
+    "platform-settings",
     "staff-backup",
     "data",
   ];
@@ -10219,13 +10228,15 @@ export default function Home() {
     byCategory: {},
   };
   const unreadCount = effectiveCounts.unread;
-  const adminItem = ITEMS.find((item) => item.id === "admin")!;
   const adminNavItems: Item[] = [
-    adminItem,
+    ADMIN_OVERVIEW_ITEM,
     ACCESS_ITEM,
+    CORRECTIONS_ITEM,
+    NOTIFICATIONS_ITEM,
     { ...ITEMS.find((item) => item.id === "staff-rules")!, label: "Rules & Constraints" },
+    ITEMS.find((item) => item.id === "platform-settings")!,
     ITEMS.find((item) => item.id === "data")!,
-    { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" }, ITEMS.find((item) => item.id === "platform-settings")!,
+    { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" },
   ];
   const quickGroup: Group = {
     label: "Quick Actions",
@@ -11307,81 +11318,100 @@ function AdminCenter({
   choose: (item: Item, channel?: NavChannel) => void;
   user: StaffUser | null;
 }) {
-  const tools = [
+  /* pageKey="admin" remains the stable layout identity for Administration,
+     even though this landing page now uses a clearer grouped layout instead
+     of the old free-form card grid. */
+  const groups = [
     {
-      id: "access",
-      title: "Users & Access",
-      text: "Add users and set email, PIN, scope, and custom permissions",
-      icon: UserCog,
-      color: "blue",
+      id: "people",
+      label: "People & Access",
+      description: "Control who can sign in, what they can see, and which accounts need attention.",
+      tone: "blue",
+      items: [
+        { id: "access", title: "Users & Access", text: "Accounts, roles, scopes, permissions, and lifecycle", icon: UserCog },
+      ],
     },
     {
-      id: "staff-rules",
-      title: "Rules & Constraints",
-      text: "Manage company rules and employee constraints",
-      icon: SlidersHorizontal,
-      color: "amber",
+      id: "attendance",
+      label: "Time & Attendance",
+      description: "Keep clock records, approval flows, and attendance rules accurate.",
+      tone: "amber",
+      items: [
+        { id: "admin-corrections", title: "Corrections", text: "Fix clock records, points entries, and request decisions", icon: ClipboardCheck },
+        { id: "staff-rules", title: "Rules & Constraints", text: "Manage company rules and employee constraints", icon: SlidersHorizontal },
+      ],
     },
     {
-      id: "admin-notifications",
-      title: "Notifications",
-      text: "Send a targeted message to a group or specific people",
-      icon: Bell,
-      color: "violet",
+      id: "communication",
+      label: "Communication",
+      description: "Send clear, targeted updates and keep delivery history in one place.",
+      tone: "violet",
+      items: [
+        { id: "admin-notifications", title: "Notifications", text: "Send and manage staff notifications", icon: Bell },
+      ],
     },
     {
-      id: "data",
-      title: "Data Center",
-      text: "Synchronize staff and manage backup or restore",
-      icon: Database,
-      color: "slate",
+      id: "platform",
+      label: "Platform & Data",
+      description: "Manage signup policy, company data, backups, and staff import tools.",
+      tone: "slate",
+      items: [
+        { id: "platform-settings", title: "Platform Settings", text: "Signup, verification policy, and platform owners", icon: Settings },
+        { id: "data", title: "Data Center", text: "Backups, restore, synchronization, and data checks", icon: Database },
+        { id: "staff-backup", title: "Staff CSV & Import Tools", text: "Import staff records and use staff export tools", icon: Import },
+      ],
     },
-  ].filter((tool) => {
-    const item = ITEMS.find((row) => row.id === tool.id);
-    return item && canOpen(user, item);
-  });
-  const open = (id: string) => {
-    const item = ITEMS.find((row) => row.id === id);
-    if (item) choose(item, "admin");
-  };
+  ].map((group) => ({
+    ...group,
+    items: group.items
+      .map((tool) => ({ ...tool, item: ITEMS.find((row) => row.id === tool.id) }))
+      .filter((tool): tool is typeof tool & { item: Item } => Boolean(tool.item && canOpen(user, tool.item))),
+  })).filter((group) => group.items.length);
+
+  const open = (item: Item) => choose(item, "admin");
 
   return (
     <div className="native-scroll admin-scroll">
-      <section className="overview-hero admin-hero">
+      <section className="admin-overview-hero">
         <div>
           <span className="eyebrow">Administration</span>
-          <h2>Admin Center</h2>
-          <p>Manage users, custom permissions, rules, employee constraints, and protected data tools from one place.</p>
+          <h2>Administration Overview</h2>
+          <p>One calm starting point for access, attendance, communication, and platform controls.</p>
         </div>
-        <span className="access-pill"><ShieldCheck size={16} /> Admin only</span>
+        <div className="admin-overview-badge">
+          <ShieldCheck size={18} />
+          <span><b>Protected workspace</b><small>Only authorized admins can open these tools</small></span>
+        </div>
       </section>
-      {/* `tools` is filtered by canOpen just above, so the same guarantee holds
-          here: only authorised tools ever reach the grid. */}
-      <SmartCardGrid
-        cards={tools.map((tool) => {
-          const Icon = tool.icon;
-          return {
-            id: tool.id,
-            sizes: ["standard", "wide", "full"] as CardSize[],
-            node: (
-              <button type="button" className={`module-bubble ${tool.color}`} onClick={() => open(tool.id)}>
-                <span className="module-orb"><Icon size={28} strokeWidth={2} /></span>
-                <span className="module-copy"><b>{tool.title}</b><small>{tool.text}</small></span>
-                <span className="module-open">Open</span>
-              </button>
-            ),
-          };
-        })}
-        pageKey="admin"
-        userId={user?.id || ""}
-        label="Administrative tools"
-        className="admin-grid"
-      />
+      <section className="admin-section-grid" aria-label="Administration areas">
+        {groups.map((group) => (
+          <article className={`admin-section-card ${group.tone}`} key={group.id}>
+            <header>
+              <span className="admin-section-mark" aria-hidden="true">
+                {group.id === "people" ? <UserCog size={18} /> : group.id === "attendance" ? <ClipboardCheck size={18} /> : group.id === "communication" ? <Bell size={18} /> : <Database size={18} />}
+              </span>
+              <div><h3>{group.label}</h3><p>{group.description}</p></div>
+            </header>
+            <div className="admin-tool-list">
+              {group.items.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <button type="button" className="admin-tool" key={tool.id} onClick={() => open(tool.item)}>
+                    <span className="admin-tool-icon"><Icon size={17} /></span>
+                    <span><b>{tool.title}</b><small>{tool.text}</small></span>
+                    <ArrowRight size={16} aria-hidden="true" />
+                  </button>
+                );
+              })}
+            </div>
+          </article>
+        ))}
+      </section>
       <section className="architecture admin-note">
         <span><ShieldCheck size={28} /></span>
         <div>
-          <h3>Custom permissions remain active</h3>
-          <p>Each administrative account sees only the tools allowed by its assigned permissions. Super Admin retains complete control.</p>
+          <h3>Access stays protected</h3>
+          <p>Each administrative account sees only the tools allowed by its permissions. Super Admin retains complete control.</p>
         </div>
       </section>
     </div>

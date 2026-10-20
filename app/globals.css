@@ -306,11 +306,77 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .module-bubble.rose { --bubble-soft: #ffe4e6; --bubble-ink: #be123c; }
 .module-bubble.slate { --bubble-soft: #e2e8f0; --bubble-ink: #334155; }
 .admin-scroll { width: min(1180px, 100%); }
-.admin-hero {
+.admin-overview-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
   background:
-    radial-gradient(circle at 92% 8%, rgba(51,65,85,.10), transparent 32%),
+    radial-gradient(circle at 92% 8%, rgba(51,65,85,.12), transparent 32%),
     var(--panel);
+  box-shadow: var(--shadow);
 }
+.admin-overview-hero h2 { margin: 6px 0 8px; font-size: 32px; line-height: 1.08; letter-spacing: -.035em; }
+.admin-overview-hero p { max-width: 660px; margin: 0; color: var(--muted); font-size: 14px; font-weight: 700; line-height: 1.5; }
+.admin-overview-badge {
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--soft);
+  color: #334155;
+}
+.admin-overview-badge > svg { flex: none; }
+.admin-overview-badge span { display: grid; gap: 2px; }
+.admin-overview-badge b { font-size: 12px; }
+.admin-overview-badge small { color: var(--muted); font-size: 10px; font-weight: 700; line-height: 1.35; }
+.dark .admin-overview-badge { color: #e2e8f0; }
+.admin-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.admin-section-card {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: 0 8px 26px rgba(30,30,28,.045);
+}
+.admin-section-card header { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; gap: 11px; }
+.admin-section-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 13px; }
+.admin-section-card h3 { margin: 2px 0 4px; font-size: 16px; letter-spacing: -.015em; }
+.admin-section-card header p { margin: 0; color: var(--muted); font-size: 11px; font-weight: 700; line-height: 1.45; }
+.admin-section-card.blue .admin-section-mark { background: #dbeafe; color: #1e40af; }
+.admin-section-card.amber .admin-section-mark { background: #ffedd5; color: #9a3412; }
+.admin-section-card.violet .admin-section-mark { background: #ede9fe; color: #6d28d9; }
+.admin-section-card.slate .admin-section-mark { background: #e2e8f0; color: #334155; }
+.admin-tool-list { display: grid; gap: 8px; }
+.admin-tool {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--soft);
+  color: var(--ink);
+  text-align: left;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.admin-tool:hover { border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); background: var(--panel); transform: translateY(-1px); }
+.admin-tool-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: var(--panel); color: var(--muted); }
+.admin-tool > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.admin-tool b { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-tool small { overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 700; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.admin-tool > svg { color: var(--muted); }
 .admin-note { margin-top: 2px; }
 .mark { width: 44px; height: 44px; display: grid; place-items: center; flex: none; border-radius: 13px; font-size: 11px; font-weight: 950; }
 .mark.green { background: #dcfce7; color: #166534; }
@@ -1343,6 +1409,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .theme { width: 42px; min-height: 42px; }
   .top-signout { width: 42px; min-height: 42px; }
   .native-scroll { gap: 12px; padding: 12px; }
+  .admin-overview-hero { display: grid; align-items: start; padding: 18px; }
+  .admin-overview-hero h2 { font-size: 26px; }
+  .admin-overview-badge { min-width: 0; }
+  .admin-section-grid { grid-template-columns: minmax(0, 1fr); }
   .home-scroll { padding: 14px; }
   .overview-hero { display: grid; align-items: start; padding: 18px; }
   .overview-hero h2, .data-title h2 { font-size: 26px; }
