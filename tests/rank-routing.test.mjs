@@ -129,11 +129,13 @@ test("chainless requests route to approvers at or above the requester's rank", (
   assert.match(submit, /if \(!autoApproved\) \{/);
 });
 
-test("corrections and late points notify only rank-eligible reviewers", () => {
-  const correction = page.slice(page.indexOf("Attendance corrections do NOT walk an approval chain"), page.indexOf("Attendance corrections do NOT walk an approval chain") + 700);
-  assert.match(correction, /rankOf\(row\) >= rankOf\(actor\)/);
-  const unlock = page.slice(page.indexOf("Late points do NOT walk an approval chain"), page.indexOf("Late points do NOT walk an approval chain") + 1000);
-  assert.match(unlock, /rankOf\(entry\) >= rankOf\(user\)/);
+test("corrections and late points notify the configured first approver", () => {
+  const correction = page.slice(page.indexOf("const submitCorrection"), page.indexOf("const submitCorrection") + 2600);
+  assert.match(correction, /const configured = chainFor\(store, actor\.id, draft\.kind\);/);
+  assert.match(correction, /const approvers = flow\.length[\s\S]*?flow\[0\]/);
+  const unlock = page.slice(page.indexOf("const saveMyPoints"), page.indexOf("const saveMyPoints") + 4200);
+  assert.match(unlock, /const configured = chainFor\(store, user\.id, "Points"\);/);
+  assert.match(unlock, /const reviewers = flow\.length[\s\S]*?flow\[0\]/);
 });
 
 test("the engine's own decide buttons enforce the same two rules", () => {
@@ -147,8 +149,9 @@ test("the engine's own decide buttons enforce the same two rules", () => {
 });
 
 // --------------------------------------------------------- the Points chain
-test("the Approval Flow screen offers Leave, Schedule and Points", () => {
-  assert.match(page, /const FLOW_TYPES = \["Leave", "Schedule", "Points"\] as const;/);
+test("the Approval Flow screen offers every request type", () => {
+  assert.match(page, /const FLOW_TYPES = \[\.\.\.APPROVAL_FLOW_TYPES\] as const;/);
+  assert.match(page, /"Missed Clock",\s*"Missed Break",\s*"Extra Hours"/);
   assert.match(engine, /<option>Leave<\/option><option>Schedule<\/option><option>Points<\/option>/);
 });
 

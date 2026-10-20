@@ -23,6 +23,7 @@ import {
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen, findDevice } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
+import { APPROVAL_FLOW_TYPES, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
   ArrowRight,
@@ -1708,12 +1709,12 @@ function rankOf(user: Pick<StaffUser, "access"> | null | undefined): number {
 }
 
 /* One person's configured approval chain for one request type, read from the
-   same flowConfig both the native screens and the Timeclock engine write. A
-   chain is OPTIONAL -- an empty answer means requests of that type travel
-   chainless, decided by any authorized approver at or above the requester's
-   rank. Points chains briefly lived under the tab's old name, "Performance",
-   so that key is still read as a fallback: records must keep meaning what
-   they meant when they were written. */
+   same flowConfig both the native screens and the Timeclock engine write.
+   Missing configuration is now a real default: team leader → department
+   head, department head alone when there is no team leader, and a named
+   direct manager as the safe fallback when the chart is not built yet. An
+   empty chain is only chainless when somebody explicitly cleared it in the
+   Approval Flow editor. */
 function chainFor(
   store: Record<string, unknown> | null,
   employeeId: string,
@@ -1722,7 +1723,35 @@ function chainFor(
   const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
   const own = flowConfig[employeeId] || {};
   const steps = own[type] || (type === "Points" ? own.Performance : undefined) || [];
-  return Array.isArray(steps) ? steps.filter(Boolean) : [];
+  const configured = Array.isArray(steps) ? steps.filter(Boolean) : [];
+  const meta = (store?.flowConfigMeta || {}) as ApprovalFlowMeta;
+  if (meta[employeeId]?.[type]?.mode === "manual") return configured;
+  if (configured.length) return configured;
+  const users = Array.isArray(store?.users) ? store!.users as StaffUser[] : [];
+  const org = (store?.org && typeof store.org === "object")
+    ? store.org as ApprovalFlowOrg
+    : effectiveOrg(users);
+  return defaultApprovalChain(users, org, employeeId);
+}
+
+/* Keep all standing defaults current after a person, team, or department is
+   added.  This is intentionally idempotent and preserves manual overrides. */
+function ensureStoreApprovalFlows(store: Record<string, unknown>): boolean {
+  const users = Array.isArray(store.users) ? store.users as StaffUser[] : [];
+  if (!users.length) return false;
+  const org = (store.org && typeof store.org === "object")
+    ? store.org as ApprovalFlowOrg
+    : effectiveOrg(users);
+  const routing = ensureDefaultApprovalFlows(
+    users,
+    org,
+    (store.flowConfig || null) as Record<string, Record<string, string[]>> | null,
+    (store.flowConfigMeta || null) as ApprovalFlowMeta | null,
+  );
+  if (!routing.changed) return false;
+  store.flowConfig = routing.flowConfig;
+  store.flowConfigMeta = routing.flowConfigMeta;
+  return true;
 }
 
 // Maps detailed area/action grants onto the capability names the Timeclock
@@ -5048,6 +5077,22 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [hydrated, readStaffUsers, storageTick]);
 
+  /* Migrate existing employees to the structure-based default as soon as the
+     authoritative directory is available. This is idempotent and only writes
+     when a generated route changed; manual Approval Flow overrides are marked
+     in flowConfigMeta and are never replaced. */
+  useEffect(() => {
+    if (!hydrated || !accessUsers.length) return;
+    const timer = window.setTimeout(() => {
+      const store = parseStore("larsaStaffV8") as Record<string, unknown> | null;
+      if (!store || !Array.isArray(store.users) || !ensureStoreApprovalFlows(store)) return;
+      localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+      pushSyncedKeyNow("larsaStaffV8");
+      setStorageTick((value) => value + 1);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [accessUsers, hydrated, storageTick]);
+
   useEffect(() => {
     if (!hydrated || !accessUsers.length) return;
     const timer = window.setTimeout(() => {
@@ -5212,7 +5257,23 @@ export default function Home() {
                   if(typeof toast==="function")toast("You do not have permission for this action.");
                   return;
                 }
+                /* The embedded engine has a legacy Approval Flow editor too.
+                   Keep its explicit save/clear actions distinguishable from
+                   generated hierarchy defaults, so a later structure edit
+                   never silently overwrites a choice made there. */
+                var flowEdit=null;
+                if(name==="saveFlowFromForm"){
+                  try{flowEdit={uid:typeof val==='function'?val('flowEmp'):'',type:typeof val==='function'?val('flowType'):''};}catch(e){flowEdit=null;}
+                }
                 var result=original.apply(this,args);
+                if(flowEdit&&flowEdit.uid&&flowEdit.type){
+                  try{
+                    state.flowConfigMeta ||= {};
+                    state.flowConfigMeta[flowEdit.uid] ||= {};
+                    state.flowConfigMeta[flowEdit.uid][flowEdit.type]={mode:'manual',touchedAt:new Date().toISOString()};
+                    if(typeof save==='function')save();
+                  }catch(e){console.warn('Approval Flow metadata could not be saved',e);}
+                }
                 if(typeof window.__larsaApplyStaffControls==="function")setTimeout(window.__larsaApplyStaffControls,0);
                 return result;
               };
@@ -7442,18 +7503,20 @@ export default function Home() {
         return false;
       }
       if (!Array.isArray(store.approvals)) store.approvals = [];
-      /* Late points do NOT walk an approval chain. A points figure is a
-         records question, not a leave question: it goes straight to the
-         reviewers — anyone GRANTED approve access on Leave & Requests, at or
-         above the requester's rank — and a single decision settles it. An
-         empty flow is exactly the single-step path decideRequest enforces for
-         chainless requests: whoever may approve at that rank, may approve,
-         and the first decision is final. */
+      /* A late points entry is still a Points request. It follows the same
+         editable standing route as a normal submission: team lead first,
+         then department head. An explicit empty route remains supported as a
+         deliberate override and uses the existing rank-authorized fallback. */
       const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
-      const reviewers = (store.users as StaffUser[]).filter((entry) =>
+      ensureStoreApprovalFlows(store);
+      const configured = chainFor(store, user.id, "Points");
+      const flow = configured.length ? configured : [];
+      const eligible = (store.users as StaffUser[]).filter((entry) =>
         entry.enabled !== false && entry.id !== user.id && approvalsGate && hasItemPermission(entry, approvalsGate, "approve")
         && rankOf(entry) >= rankOf(user));
-      const flow: string[] = [];
+      const reviewers = flow.length
+        ? (store.users as StaffUser[]).filter((entry) => entry.id === flow[0])
+        : eligible;
       const bounds = weekBounds(week);
       const record: LeaveRequest = {
         id: `r${Date.now()}`,
@@ -7483,7 +7546,7 @@ export default function Home() {
         recipients: reviewers,
       });
       setStorageTick((value) => value + 1);
-      notify(`Week ${week} is closed, so this entry went for review — any authorized reviewer can approve it.`);
+      notify(`Week ${week} is closed, so this entry went through the ${flow.length ? "configured approval flow" : "rank-authorized reviewer fallback"}.`);
       return true;
     }
 
@@ -8127,11 +8190,10 @@ export default function Home() {
      raised with, which is the only honest thing to do with a decision that is
      already part-made (Corrections can reroute an individual one).
 
-     A chain is OPTIONAL. Saving an empty one deletes it rather than refusing:
-     "no chain" is a legitimate standing answer, and it means requests travel
-     to any authorized approver at or above the person's rank — approving
-     themselves automatically at the very top of the ladder, where that
-     audience is empty. */
+     The generated default is team leader → department head (or department
+     head alone). Saving here is an explicit override; an empty save is also
+     remembered as an explicit override so a later team/member edit cannot
+     silently recreate a route the administrator intentionally cleared. */
   const saveApprovalFlow = useCallback((employeeId: string, type: string, steps: string[]) => {
     const actor = sessionUserRef.current;
     const item = ITEMS.find((row) => row.id === "hr-approval-flow");
@@ -8184,13 +8246,18 @@ export default function Home() {
     if (type === "Points") delete own.Performance;
     flowConfig[employeeId] = own;
     store.flowConfig = flowConfig;
+    const flowConfigMeta = (store.flowConfigMeta || {}) as ApprovalFlowMeta;
+    const metaOwn = { ...(flowConfigMeta[employeeId] || {}) };
+    metaOwn[type] = { mode: "manual", touchedAt: serverNowIso() };
+    flowConfigMeta[employeeId] = metaOwn;
+    store.flowConfigMeta = flowConfigMeta;
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     const names = clean.map((id) => people.find((row) => row.id === id)?.name || id);
     notify(clean.length
       ? `${type} approvals for ${employee.name}: ${names.join(" → ")}${dropped.length ? ` · dropped ${dropped.join(", ")} (self, duplicate, inactive, or below their rank)` : ""}`
-      : `${employee.name} has no ${type} chain now — their requests go to approvers at or above their rank.`);
+      : `${employee.name} has no ${type} chain now — the explicit override is saved.`);
     return true;
   }, [notify, refreshStaffEngine]);
 
@@ -8612,6 +8679,9 @@ export default function Home() {
     if (!draft.from || !draft.to) { notify("Choose a start and end date."); return false; }
     if (draft.to < draft.from) { notify("The end date cannot be before the start date."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
+    /* Make sure a newly added employee or a freshly edited structure has its
+       current default route before this request is created. */
+    ensureStoreApprovalFlows(store);
     /* Route to the configured approvers, when a chain is set. A chain is
        OPTIONAL: without one the request travels chainless, open to any
        Leave & Requests approve-holder AT OR ABOVE the requester's rank — the
@@ -8628,7 +8698,7 @@ export default function Home() {
       row.enabled !== false && row.offboarded !== true && row.id !== actor.id
       && approvalsGate && hasItemPermission(row, approvalsGate, "approve")
       && rankOf(row) >= rankOf(actor));
-    const flow = configured.length ? configured : [];
+    const flow = configured;
     const autoApproved = !flow.length && !eligible.length;
     const stamp = new Date().toISOString();
     const record: LeaveRequest = {
@@ -8701,15 +8771,20 @@ export default function Home() {
     }
     if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
-    /* Attendance corrections do NOT walk an approval chain either. A wrong
-       clock-in is a records question: it goes straight to the reviewers —
-       anyone GRANTED approve access on Leave & Requests, at or above the
-       requester's rank — and one decision settles and materialises it. Same
-       single-step path as late points. */
+    ensureStoreApprovalFlows(store);
+    /* Corrections are requests too. They use the same default route as leave,
+       schedule, and points: team leader first, then department head. Existing
+       records with no route remain compatible through the rank-authorized
+       fallback below, but every new correction gets the standing route. */
     const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
-    const approvers = (store.users as StaffUser[]).filter((row) =>
+    const configured = chainFor(store, actor.id, draft.kind);
+    const eligible = (store.users as StaffUser[]).filter((row) =>
       row.enabled !== false && row.id !== actor.id && approvalsGate && hasItemPermission(row, approvalsGate, "approve")
       && rankOf(row) >= rankOf(actor));
+    const flow = configured.length ? configured : [];
+    const approvers = flow.length
+      ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
+      : eligible;
     const record: LeaveRequest = {
       id: `r${Date.now()}`,
       type: draft.kind,
@@ -8723,7 +8798,7 @@ export default function Home() {
       to: draft.to,
       reason: draft.reason.trim(),
       status: "Pending",
-      flow: [],
+      flow,
       step: 0,
       history: [],
       createdAt: new Date().toISOString(),
@@ -9412,14 +9487,11 @@ export default function Home() {
       ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"].forEach((day) => {
         store.schedule[prepared.id][day] ||= [];
       });
-      store.flowConfig ||= {};
-      /* Deliberately NO seeded chain. A chain is a routing decision somebody
-         makes, not a default: without one, this person's requests go to any
-         authorized approver at or above their rank, which is already the
-         right audience on day one. The old seed hardwired one account id as
-         everybody's approver — the exact thing an id must never be used
-         for — and made every chain look deliberately configured when it was
-         not. */
+      /* Seed every editable request type immediately.  The helper uses the
+         current org chart when the new person is already assigned, and marks
+         the result as a generated default so a later team/department edit can
+         refresh it without touching a manual Approval Flow override. */
+      ensureStoreApprovalFlows(store);
     } else if (existingIndex >= 0) {
       const existing = store.users[existingIndex] as StaffUser;
       if (existing.access === "Super Admin") {
@@ -9465,6 +9537,9 @@ export default function Home() {
       notify("That user could not be found.");
       return false;
     }
+    /* A manager/department change can alter the generated route. Recompute
+       defaults now; explicit Approval Flow edits remain protected by metadata. */
+    ensureStoreApprovalFlows(store);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     /* A role or identity change must reach the server before this tab can
        close or a stale copy can race it — same urgency as a punch. */
@@ -17125,19 +17200,12 @@ function RequestsCentre({
  * remove, and move up or down — so A → B → C becomes A → D → B in the order
  * you actually want, rather than by retyping every box.
  *
- * Three request types, and the third is POINTS, not "Performance": the chain
- * governs who accepts a person's submitted points — each entry is decided as
- * it is added, so daily, weekly, and ad-hoc submissions all travel the same
- * way. (The old "Performance" tab configured a ghost weekly request that
- * decided nothing; saved chains under that key are still read, and are
- * migrated to Points the next time they are saved.)
- *
- * Every chain is OPTIONAL. No chain means requests go to any authorized
- * approver at or above the person's rank, and approve automatically at the
- * very top of the ladder, where that audience is empty. Chain steps can only
- * be people at or above the person's rank — a chain must never route a
- * request downhill. */
-const FLOW_TYPES = ["Leave", "Schedule", "Points"] as const;
+ * Every request type is editable here. New people inherit the structure route:
+ * team leader → department head, department head alone when there is no team
+ * leader, and a named direct manager when the chart is not yet configured.
+ * Clearing and saving is an explicit override, so later structure edits never
+ * silently recreate a route an administrator intentionally cleared. */
+const FLOW_TYPES = [...APPROVAL_FLOW_TYPES] as const;
 
 function ApprovalFlowCentre({
   viewer, users, store, save,
@@ -17150,7 +17218,6 @@ function ApprovalFlowCentre({
   const item = ITEMS.find((row) => row.id === "hr-approval-flow");
   const canEdit = Boolean(viewer && item && hasItemPermission(viewer, item, "edit"));
   const scope = scopedUsers(viewer, users).filter((user) => user.enabled !== false && user.offboarded !== true);
-  const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
 
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string>("");
@@ -17212,7 +17279,7 @@ function ApprovalFlowCentre({
             <th>Employee</th><th>Department</th><th>Leave chain</th><th></th>
           </tr></thead><tbody>
             {listed.slice(0, 60).map((user) => {
-              const chain = (flowConfig[user.id]?.Leave || []).filter(Boolean);
+              const chain = chainFor(store, user.id, "Leave");
               return (
                 <tr key={user.id}>
                   <td><b>{user.name}</b><small>{user.access || ""}</small></td>
@@ -17261,7 +17328,7 @@ function ApprovalFlowCentre({
                 <span className="chain-state">approves {index === steps.length - 1 ? "last" : `step ${index + 1}`}</span>
               </div>
             ))}
-            {!steps.length && <span className="chain-none">No chain — requests go to any approver at or above their rank{person && rankOf(person) >= Math.max(...users.filter((user) => user.enabled !== false && user.offboarded !== true).map((user) => rankOf(user))) ? ", and approve automatically because nobody outranks them" : ""}.</span>}
+            {!steps.length && <span className="chain-none">No approvers are currently assigned. Add or clear this route in Approval Flow as needed.</span>}
           </div>
 
           {steps.map((id, index) => (
@@ -17298,13 +17365,12 @@ function ApprovalFlowCentre({
             </div>
           )}
           <p className="builder-note">
-            Chains are optional — save with no steps to clear one, and requests then go to any
-            authorized approver at or above the person&apos;s rank (auto-approving at the very top
-            of the ladder, where nobody outranks them). Up to three approvers, each at or above
-            the person&apos;s rank; nobody approves their own request, and the same person cannot
-            appear twice. The Points chain decides who accepts submitted points, entry by entry,
-            however often they are added. Changing this affects requests raised from now on —
-            anything already waiting keeps its own chain, which Corrections can reroute.
+            New people inherit the structure route automatically: team leader → department head,
+            or department head alone. A direct manager is used when the structure has not been
+            formed yet. Up to three approvers can be arranged here; clearing and saving is an
+            explicit override. Nobody approves their own request, and the same person cannot
+            appear twice. Changing this affects requests raised from now on — anything already
+            waiting keeps its own chain, which Corrections can reroute.
           </p>
         </section>
       )}

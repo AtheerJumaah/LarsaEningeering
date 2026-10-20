@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDialog } from "./Dialog";
 import { GripVertical, Pencil, Plus, X } from "lucide-react";
+import { pushSyncedKeyNow } from "../lib/supabase/sync";
 import {
   assignableTo,
   canCreateDepartments,
@@ -188,6 +189,11 @@ export function OrgStructure({
 
   function save(next: OrgChart, message: string) {
     if (writeOrg(next)) {
+      /* Approval defaults are written alongside the chart. Push the same
+         atomic staff blob immediately so a new team lead, department head,
+         or member is available to every device without waiting for the next
+         background sync. */
+      pushSyncedKeyNow("larsaStaffV8");
       setTick((value) => value + 1);
       setNote(message);
       if (onSaved) onSaved();

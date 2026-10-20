@@ -20,6 +20,8 @@
  * through Supabase to everyone without any new plumbing.
  */
 
+import { ensureDefaultApprovalFlows } from "./approval-flow";
+
 const STORE_KEY = "larsaStaffV8";
 
 export type Department = {
@@ -77,6 +79,19 @@ export function writeOrg(next: OrgChart): boolean {
   const blob = readBlob();
   if (!blob) return false;
   blob.org = next;
+  /* A structure edit is also an approval-routing event.  Seed or refresh the
+     default route immediately, but leave every chain explicitly edited in
+     Approval Flow untouched.  Keeping this beside the org write means new
+     departments, teams, and memberships all get the same behaviour. */
+  const users = Array.isArray(blob.users) ? blob.users as OrgUser[] : [];
+  const routing = ensureDefaultApprovalFlows(
+    users,
+    next,
+    (blob.flowConfig || null) as Record<string, Record<string, string[]>> | null,
+    (blob.flowConfigMeta || null) as Record<string, Record<string, { mode: "default" | "manual"; touchedAt?: string }>> | null,
+  );
+  blob.flowConfig = routing.flowConfig;
+  blob.flowConfigMeta = routing.flowConfigMeta;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(blob));
     return true;
