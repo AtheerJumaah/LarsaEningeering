@@ -42,11 +42,13 @@ function initials(name: string): string {
  * open state while the user is moving toward a person. */
 function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: string[]; onAdd: (id: string) => void; label: string }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const pickerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
+  const filteredOptions = options.filter((row) => String(row.name || "").toLowerCase().includes(query.trim().toLowerCase()));
 
   useEffect(() => {
     if (!open) return;
@@ -97,7 +99,10 @@ function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: st
         ref={triggerRef}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen((value) => {
+          if (!value) setQuery("");
+          return !value;
+        })}
       >
         {label}<span aria-hidden="true">⌄</span>
       </button>
@@ -110,18 +115,33 @@ function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: st
           aria-label={label}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {options.map((row) => (
+          <div className="struct-select-search-wrap">
+            <input
+              className="struct-select-search"
+              type="search"
+              value={query}
+              autoFocus
+              placeholder={`Search ${label.toLowerCase().replace(/^add /, "")}...`}
+              aria-label={`Search ${label}`}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+            />
+            <small>{filteredOptions.length} of {options.length} available</small>
+          </div>
+          {filteredOptions.length ? filteredOptions.map((row) => (
             <button
               type="button"
               role="option"
               aria-selected="false"
               className="struct-select-option"
               key={row.id}
-              onClick={() => { onAdd(row.id); setOpen(false); }}
+              onClick={() => { onAdd(row.id); setOpen(false); setQuery(""); }}
             >
               <em>{initials(String(row.name || ""))}</em>{row.name}
             </button>
-          ))}
+          )) : (
+            <p className="struct-select-empty">No matching people</p>
+          )}
         </div>,
         document.body,
       ) : null}

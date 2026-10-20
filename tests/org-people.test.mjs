@@ -76,7 +76,9 @@ test("structure dropdowns are not nested inside draggable cards", async () => {
   assert.doesNotMatch(structure, /closeWhenPointerLeaves|pointermove/);
   assert.match(structure, /document\.addEventListener\("pointerdown", closeOutside\)/);
   assert.match(structure, /role="listbox"/);
-  assert.match(structure, /onClick=\{\(\) => \{ onAdd\(row\.id\); setOpen\(false\); \}\}/);
+  assert.match(structure, /onClick=\{\(\) => \{ onAdd\(row\.id\); setOpen\(false\); setQuery\(""\); \}\}/);
+  assert.match(structure, /className="struct-select-search"/);
+  assert.match(structure, /No matching people/);
 });
 
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
