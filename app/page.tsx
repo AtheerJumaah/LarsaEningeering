@@ -15630,7 +15630,13 @@ function AccessCenter({
               >
                 <PersonAvatar person={user} />
                 <span><b>{user.name}</b><small>{user.access || user.role} · {user.department || "No department"}</small></span>
-                <i className={user.enabled === false ? "off" : ""} />
+                <span
+                  className={user.enabled === false ? "account-status off" : "account-status"}
+                  aria-label={user.enabled === false ? "Account disabled" : "Account active"}
+                  title={user.enabled === false ? "Account disabled" : "Account active — not attendance status"}
+                >
+                  <CheckCircle2 size={14} strokeWidth={2.4} aria-hidden="true" />
+                </span>
               </button>
             ))}
           </div>
@@ -16387,7 +16393,13 @@ function ViewerAccountsPanel({
             >
               <span>{initials(row.display_name || row.username)}</span>
               <span><b>{row.display_name}</b><small>@{row.username} · {row.project_access_mode === "all" ? "All projects" : row.project_access_mode === "none" ? "No projects" : `${row.allowed_project_ids.length} project(s)`}</small></span>
-              <i className={row.enabled === false ? "off" : ""} />
+              <span
+                className={row.enabled === false ? "account-status off" : "account-status"}
+                aria-label={row.enabled === false ? "Account disabled" : "Account active"}
+                title={row.enabled === false ? "Account disabled" : "Account active — not attendance status"}
+              >
+                <CheckCircle2 size={14} strokeWidth={2.4} aria-hidden="true" />
+              </span>
             </button>
           ))}
         </div>

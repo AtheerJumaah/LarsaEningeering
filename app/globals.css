@@ -694,7 +694,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .access-user {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 9px;
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
   align-items: center;
   gap: 10px;
   padding: 9px;
@@ -712,8 +712,17 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .access-user small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .access-user b { font-size: 12px; }
 .access-user small { margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 700; }
-.access-user i { width: 8px; height: 8px; border-radius: 99px; background: #22a65a; box-shadow: 0 0 0 3px rgba(34,166,90,.12); }
-.access-user i.off { background: #9ca3af; box-shadow: none; }
+.access-user .account-status {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--muted);
+}
+.access-user .account-status.off { opacity: .52; }
 .directory-link {
   min-height: 46px;
   display: flex;
