@@ -13,7 +13,7 @@
  * everyone.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDialog } from "./Dialog";
 import { GripVertical, Plus, X } from "lucide-react";
 import {
@@ -181,13 +181,53 @@ export function OrgStructure({
   }
 
   function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: string[]; onAdd: (id: string) => void; label: string }) {
+    const [open, setOpen] = useState(false);
+    const pickerRef = useRef<HTMLDivElement>(null);
     const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
+
+    useEffect(() => {
+      if (!open) return;
+      function closeOutside(event: PointerEvent) {
+        const target = event.target as Node;
+        if (!pickerRef.current?.contains(target)) setOpen(false);
+      }
+      document.addEventListener("pointerdown", closeOutside);
+      return () => document.removeEventListener("pointerdown", closeOutside);
+    }, [open]);
+
     if (!options.length) return null;
     return (
-      <select className="struct-select" value="" onChange={(event) => { if (event.target.value) onAdd(event.target.value); }}>
-        <option value="">{label}</option>
-        {options.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-      </select>
+      <div
+        ref={pickerRef}
+        className="struct-picker"
+        onPointerLeave={() => { if (open) setOpen(false); }}
+      >
+        <button
+          type="button"
+          className="struct-select-trigger"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {label}<span aria-hidden="true">⌄</span>
+        </button>
+        {open ? (
+          <div className="struct-select-menu" role="listbox" aria-label={label}>
+            {options.map((row) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected="false"
+                className="struct-select-option"
+                key={row.id}
+                onClick={() => { onAdd(row.id); setOpen(false); }}
+              >
+                <em>{initials(String(row.name || ""))}</em>{row.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
     );
   }
 
