@@ -36,6 +36,99 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/* Keep this component outside OrgStructure. The structure can repaint when
+ * the shared roster or sync stamp changes; defining the picker inside the
+ * parent would give React a new component type on every repaint and reset its
+ * open state while the user is moving toward a person. */
+function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: string[]; onAdd: (id: string) => void; label: string }) {
+  const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const positionMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.max(rect.width, 240);
+      const gap = 5;
+      const maxLeft = Math.max(8, window.innerWidth - width - 8);
+      const left = Math.min(Math.max(8, rect.left), maxLeft);
+      const maxHeight = Math.min(300, Math.max(160, window.innerHeight - 16));
+      const below = window.innerHeight - rect.bottom - gap;
+      const above = rect.top - gap;
+      const placeAbove = below < 180 && above > below;
+      setMenuStyle({
+        position: "fixed",
+        left,
+        width,
+        ...(placeAbove
+          ? { bottom: window.innerHeight - rect.top + gap, maxHeight }
+          : { top: rect.bottom + gap, maxHeight }),
+      });
+    };
+
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    function closeOutside(event: PointerEvent) {
+      const target = event.target as Node;
+      if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+      document.removeEventListener("pointerdown", closeOutside);
+    };
+  }, [open]);
+
+  if (!options.length) return null;
+  return (
+    <div ref={pickerRef} className="struct-picker">
+      <button
+        type="button"
+        className="struct-select-trigger"
+        ref={triggerRef}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {label}<span aria-hidden="true">⌄</span>
+      </button>
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          className="struct-select-menu"
+          style={menuStyle}
+          role="listbox"
+          aria-label={label}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {options.map((row) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected="false"
+              className="struct-select-option"
+              key={row.id}
+              onClick={() => { onAdd(row.id); setOpen(false); }}
+            >
+              <em>{initials(String(row.name || ""))}</em>{row.name}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
 export function OrgStructure({
   viewer,
   users,
@@ -208,98 +301,6 @@ export function OrgStructure({
           </span>
         ))}
       </span>
-    );
-  }
-
-  function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: string[]; onAdd: (id: string) => void; label: string }) {
-    const [open, setOpen] = useState(false);
-    const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
-    const pickerRef = useRef<HTMLDivElement>(null);
-    const triggerRef = useRef<HTMLButtonElement>(null);
-    const menuRef = useRef<HTMLDivElement>(null);
-    const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
-
-    useEffect(() => {
-      if (!open) return;
-
-      const positionMenu = () => {
-        const trigger = triggerRef.current;
-        if (!trigger) return;
-        const rect = trigger.getBoundingClientRect();
-        const width = Math.max(rect.width, 240);
-        const gap = 5;
-        const maxLeft = Math.max(8, window.innerWidth - width - 8);
-        const left = Math.min(Math.max(8, rect.left), maxLeft);
-        const maxHeight = Math.min(300, Math.max(160, window.innerHeight - 16));
-        const below = window.innerHeight - rect.bottom - gap;
-        const above = rect.top - gap;
-        const placeAbove = below < 180 && above > below;
-        setMenuStyle({
-          position: "fixed",
-          left,
-          width,
-          ...(placeAbove
-            ? { bottom: window.innerHeight - rect.top + gap, maxHeight }
-            : { top: rect.bottom + gap, maxHeight }),
-        });
-      };
-
-      positionMenu();
-      window.addEventListener("resize", positionMenu);
-      window.addEventListener("scroll", positionMenu, true);
-      function closeOutside(event: PointerEvent) {
-        const target = event.target as Node;
-        if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
-      }
-      document.addEventListener("pointerdown", closeOutside);
-      return () => {
-        window.removeEventListener("resize", positionMenu);
-        window.removeEventListener("scroll", positionMenu, true);
-        document.removeEventListener("pointerdown", closeOutside);
-      };
-    }, [open]);
-
-    if (!options.length) return null;
-    return (
-      <div
-        ref={pickerRef}
-        className="struct-picker"
-      >
-        <button
-          type="button"
-          className="struct-select-trigger"
-          ref={triggerRef}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {label}<span aria-hidden="true">⌄</span>
-        </button>
-        {open && typeof document !== "undefined" ? createPortal(
-          <div
-            ref={menuRef}
-            className="struct-select-menu"
-            style={menuStyle}
-            role="listbox"
-            aria-label={label}
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            {options.map((row) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected="false"
-                className="struct-select-option"
-                key={row.id}
-                onClick={() => { onAdd(row.id); setOpen(false); }}
-              >
-                <em>{initials(String(row.name || ""))}</em>{row.name}
-              </button>
-            ))}
-          </div>,
-          document.body,
-        ) : null}
-      </div>
     );
   }
 
