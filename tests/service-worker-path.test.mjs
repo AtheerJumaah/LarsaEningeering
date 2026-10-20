@@ -27,4 +27,6 @@ test("the root service worker cache is versioned and evicts what it replaces", a
   assert.match(serviceWorker, /const CACHE_NAME = "larsa-control-v\d+";/);
   assert.match(serviceWorker, /\.keys\(\)/);
   assert.match(serviceWorker, /key !== CACHE_NAME\)\.map\(\(key\) => caches\.delete\(key\)\)/);
+  assert.match(serviceWorker, /url\.pathname\.startsWith\("\/_next\/"\)/);
+  assert.match(serviceWorker, /fetch\(request\)\.catch\(\(\) => caches\.match\(request\)\)/);
 });

@@ -2,7 +2,7 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v55";
+const CACHE_NAME = "larsa-control-v56";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -48,9 +48,17 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  // Never serve React Server Component payloads or optimised images from cache:
-  // cache-first on these pins the UI to a stale build after a deploy.
-  if (url.searchParams.has("_rsc") || url.pathname.startsWith("/_vinext/")) return;
+  // Never serve app code or React Server Component payloads from cache. A
+  // cache-first chunk can combine the previous React tree with the current
+  // HTML, which is exactly the old-timesheet/old-structure flash users saw
+  // after a deployment. App code must be network-first; the service worker is
+  // still allowed to provide the document shell while genuinely offline.
+  if (url.searchParams.has("_rsc") || url.pathname.startsWith("/_vinext/") || url.pathname.startsWith("/_next/")) {
+    event.respondWith(
+      fetch(request).catch(() => caches.match(request)),
+    );
+    return;
+  }
 
   if (request.mode === "navigate") {
     event.respondWith(
