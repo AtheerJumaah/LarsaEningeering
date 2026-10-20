@@ -221,8 +221,21 @@ export function OrgStructure({
         const target = event.target as Node;
         if (!pickerRef.current?.contains(target)) setOpen(false);
       }
+      function closeWhenPointerLeaves(event: PointerEvent) {
+        const target = event.target as Node | null;
+        /* The menu is absolutely positioned, so the wrapper's CSS box ends at
+           the trigger even though the menu is still its DOM child. Checking
+           the event target keeps the menu open while the pointer travels into
+           it, and closes it only after the pointer actually leaves the whole
+           picker. */
+        if (target && !pickerRef.current?.contains(target)) setOpen(false);
+      }
       document.addEventListener("pointerdown", closeOutside);
-      return () => document.removeEventListener("pointerdown", closeOutside);
+      document.addEventListener("pointermove", closeWhenPointerLeaves);
+      return () => {
+        document.removeEventListener("pointerdown", closeOutside);
+        document.removeEventListener("pointermove", closeWhenPointerLeaves);
+      };
     }, [open]);
 
     if (!options.length) return null;
@@ -230,7 +243,6 @@ export function OrgStructure({
       <div
         ref={pickerRef}
         className="struct-picker"
-        onPointerLeave={() => { if (open) setOpen(false); }}
       >
         <button
           type="button"
@@ -305,7 +317,7 @@ export function OrgStructure({
                   <small>{teams.length} {teams.length === 1 ? "team" : "teams"} {"\u00b7"} {headcount} {headcount === 1 ? "person" : "people"}</small>
                 </span>
                 {editable ? (
-                  <button type="button" className="struct-x struct-edit" title="Rename department" aria-label={`Rename ${department.name}`} onClick={() => renameDepartment(department)}><Pencil size={13} /></button>
+                  <button type="button" className="struct-x struct-edit" title="Rename department" aria-label={`Rename ${department.name}`} onClick={() => renameDepartment(department)}><Pencil size={13} /><span className="struct-edit-label">Rename</span></button>
                 ) : null}
                 {editable && isOrgAdmin(viewer) ? (
                   <button type="button" className="struct-x" title="Remove department" onClick={() => removeDepartment(department)}><X size={14} /></button>
@@ -349,7 +361,7 @@ export function OrgStructure({
                     <b>{team.name}</b>
                     <span className="struct-count">{membersOf(team).length}</span>
                     {editable ? (
-                      <button type="button" className="struct-x struct-edit" title="Rename team" aria-label={`Rename ${team.name}`} onClick={() => renameTeam(team)}><Pencil size={12} /></button>
+                      <button type="button" className="struct-x struct-edit" title="Rename team" aria-label={`Rename ${team.name}`} onClick={() => renameTeam(team)}><Pencil size={12} /><span className="struct-edit-label">Rename</span></button>
                     ) : null}
                     {editable ? (
                       <button type="button" className="struct-x" title="Remove team" onClick={() => removeTeam(team)}><X size={13} /></button>

@@ -73,7 +73,8 @@ test("structure dropdowns are not nested inside draggable cards", async () => {
   assert.doesNotMatch(structure, /className=\{"struct-team"[\s\S]*?key=\{team\.id\}\s*draggable/);
   assert.match(structure, /className="hier-drag"[\s\S]*?role="button"[\s\S]*?draggable/);
   assert.match(structure, /className="struct-picker"/);
-  assert.match(structure, /onPointerLeave=\{\(\) => \{ if \(open\) setOpen\(false\); \}\}/);
+  assert.match(structure, /function closeWhenPointerLeaves\(event: PointerEvent\)/);
+  assert.match(structure, /document\.addEventListener\("pointermove", closeWhenPointerLeaves\)/);
   assert.match(structure, /role="listbox"/);
   assert.match(structure, /onClick=\{\(\) => \{ onAdd\(row\.id\); setOpen\(false\); \}\}/);
 });
