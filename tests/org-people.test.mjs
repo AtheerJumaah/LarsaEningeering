@@ -62,6 +62,19 @@ test("the Engineering Management dashboard applies the same rule to heads, leads
   assert.ok(!/nameOf\(id\) !== "Unknown"/.test(hier), "the old string-comparison workaround for filtering heads must be gone");
 });
 
+test("structure dropdowns are not nested inside draggable cards", async () => {
+  const structure = await read("app/OrgStructure.tsx");
+
+  // Native select menus close when a draggable ancestor captures the pointer
+  // as a drag. Reordering is deliberately initiated only from the grip handle
+  // so Add head/lead/member menus remain open and selectable.
+  assert.match(structure, /className=\{"struct-dep"[\s\S]*?onDragOver=/);
+  assert.doesNotMatch(structure, /className=\{"struct-dep"[\s\S]*?key=\{department\.id\}\s*draggable/);
+  assert.doesNotMatch(structure, /className=\{"struct-team"[\s\S]*?key=\{team\.id\}\s*draggable/);
+  assert.match(structure, /className="hier-drag"[\s\S]*?role="button"[\s\S]*?draggable/);
+  assert.match(structure, /className="struct-select"/);
+});
+
 test("Corrections and Performance History leave a missing name empty instead of inventing one", async () => {
   const page = await read("app/page.tsx");
 

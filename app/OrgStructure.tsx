@@ -217,14 +217,19 @@ export function OrgStructure({
             <section
               className={"struct-dep" + (dragDep === department.id ? " is-dragging" : "") + (overDep === department.id ? " is-over" : "")}
               key={department.id}
-              draggable
-              onDragStart={() => setDragDep(department.id)}
               onDragEnd={() => { setDragDep(""); setOverDep(""); }}
               onDragOver={(event) => { event.preventDefault(); if (overDep !== department.id) setOverDep(department.id); }}
               onDrop={(event) => { event.preventDefault(); moveDepartment(dragDep, department.id); }}
             >
               <header className="struct-dep-head">
-                <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={15} /></span>
+                <span
+                  className="hier-drag"
+                  title="Drag to reorder"
+                  aria-label={`Drag ${department.name} to reorder`}
+                  role="button"
+                  draggable
+                  onDragStart={() => setDragDep(department.id)}
+                ><GripVertical size={15} /></span>
                 <span className="struct-dep-title">
                   <b>{department.name}</b>
                   <small>{teams.length} {teams.length === 1 ? "team" : "teams"} {"\u00b7"} {headcount} {headcount === 1 ? "person" : "people"}</small>
@@ -254,14 +259,20 @@ export function OrgStructure({
                 <div
                   className={"struct-team" + (dragTeam === team.id ? " is-dragging" : "") + (overTeam === team.id ? " is-over" : "")}
                   key={team.id}
-                  draggable
                   onDragStart={(event) => { event.stopPropagation(); setDragTeam(team.id); }}
                   onDragEnd={() => { setDragTeam(""); setOverTeam(""); }}
                   onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); if (overTeam !== team.id) setOverTeam(team.id); }}
                   onDrop={(event) => { event.preventDefault(); event.stopPropagation(); moveTeam(dragTeam, team.id); }}
                 >
                   <div className="struct-team-head">
-                    <span className="hier-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={13} /></span>
+                    <span
+                      className="hier-drag"
+                      title="Drag to reorder"
+                      aria-label={`Drag ${team.name} to reorder`}
+                      role="button"
+                      draggable
+                      onDragStart={(event) => { event.stopPropagation(); setDragTeam(team.id); }}
+                    ><GripVertical size={13} /></span>
                     <b>{team.name}</b>
                     <span className="struct-count">{membersOf(team).length}</span>
                     {editable ? (
