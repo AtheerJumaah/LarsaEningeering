@@ -4495,6 +4495,11 @@ function visibleProjectIds(user: StaffUser | null, projects: AccountingProject[]
 
 export default function Home() {
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
+  // Embedded engines are intentionally lazy. Loading all three large legacy
+  // documents (and their timers) on every login was the main source of tab
+  // memory pressure, blinking, and occasional Chromium "Out of Memory"
+  // crashes. An engine is mounted only after the user actually opens it.
+  const [loadedEngines, setLoadedEngines] = useState<Set<Engine>>(() => new Set());
   const activeRef = useRef(active);
   const [sessionUser, setSessionUser] = useState<StaffUser | null>(null);
   const sessionUserRef = useRef<StaffUser | null>(null);
@@ -4673,6 +4678,7 @@ export default function Home() {
     () => ({ staff: staffRef, hr: hrRef, accounting: accountingRef }),
     [],
   );
+  const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
 
   // If NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are set, this makes the three
   // localStorage stores shared across everyone's browser instead of one
@@ -6034,6 +6040,14 @@ export default function Home() {
       : method === "pin" && pinLanding && canOpenInSession(normalizedUser, pinLanding, method)
         ? pinLanding
         : ITEMS.find((item) => item.id === "overview") || DEFAULT_ITEM;
+    if (landingItem.engine) {
+      setLoadedEngines((previous) => {
+        if (previous.has(landingItem.engine!)) return previous;
+        const next = new Set(previous);
+        next.add(landingItem.engine!);
+        return next;
+      });
+    }
     setNavChannel(channelForItem(landingItem));
     setActive(landingItem);
   }, [applySessionToFrame, refs]);
@@ -6703,6 +6717,11 @@ export default function Home() {
     (engine: Engine) => {
       const frame = refs[engine].current;
       if (!frame) return;
+      const previousTimer = frameBootTimers.current[engine];
+      if (previousTimer !== undefined) {
+        window.clearInterval(previousTimer);
+        delete frameBootTimers.current[engine];
+      }
       let tries = 0;
       const timer = window.setInterval(() => {
         tries += 1;
@@ -6713,7 +6732,10 @@ export default function Home() {
               ? doc?.getElementById("view")
               : doc?.getElementById("content");
           if (!doc?.head || !doc.body || !ready) {
-            if (tries > 160) clearInterval(timer);
+            if (tries > 160) {
+              clearInterval(timer);
+              delete frameBootTimers.current[engine];
+            }
             return;
           }
           ensureEmbeddedStyle(doc, engine);
@@ -6731,13 +6753,25 @@ export default function Home() {
           if (signedInUser && activeRef.current.engine === engine) navigateInner(activeRef.current);
           setStorageTick((value) => value + 1);
           clearInterval(timer);
+          delete frameBootTimers.current[engine];
         } catch {
-          if (tries > 160) clearInterval(timer);
+          if (tries > 160) {
+            clearInterval(timer);
+            delete frameBootTimers.current[engine];
+          }
         }
       }, 200);
+      frameBootTimers.current[engine] = timer;
     },
-    [applySessionToFrame, applyThemeToFrames, dark, navigateInner, refs],
+    [applySessionToFrame, applyThemeToFrames, dark, frameBootTimers, navigateInner, refs],
   );
+
+  useEffect(() => () => {
+    Object.values(frameBootTimers.current).forEach((timer) => {
+      if (timer !== undefined) window.clearInterval(timer);
+    });
+    frameBootTimers.current = {};
+  }, []);
 
   useEffect(() => {
     if (!menuOpen && !installHelp) return;
@@ -6787,6 +6821,14 @@ export default function Home() {
     const requestedItem = ITEMS.find((item) => item.id === requestedView);
     if (!requestedItem || requestedItem.id === activeRef.current.id) return;
     const timer = window.setTimeout(() => {
+      if (requestedItem.engine) {
+        setLoadedEngines((previous) => {
+          if (previous.has(requestedItem.engine!)) return previous;
+          const next = new Set(previous);
+          next.add(requestedItem.engine!);
+          return next;
+        });
+      }
       setNavChannel(channelForItem(requestedItem));
       setActive(requestedItem);
     }, 0);
@@ -6925,6 +6967,14 @@ export default function Home() {
         delete frame.dataset.timesheetRoute;
         frame.style.visibility = "";
       }
+    }
+    if (item.engine) {
+      setLoadedEngines((previous) => {
+        if (previous.has(item.engine!)) return previous;
+        const next = new Set(previous);
+        next.add(item.engine!);
+        return next;
+      });
     }
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
@@ -10670,7 +10720,7 @@ export default function Home() {
               notify={notify}
             />
           </div>
-          {(["staff", "hr", "accounting"] as Engine[]).map((engine) => (
+          {(["staff", "hr", "accounting"] as Engine[]).map((engine) => loadedEngines.has(engine) ? (
             <iframe
               key={engine}
               ref={refs[engine]}
@@ -10688,7 +10738,7 @@ export default function Home() {
               sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
               allow="clipboard-read; clipboard-write; notifications"
             />
-          ))}
+          ) : null)}
         </section>
       </main>
 
