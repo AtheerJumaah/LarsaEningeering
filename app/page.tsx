@@ -1321,6 +1321,61 @@ const EMBED_CSS: Record<Engine, string> = {
     .larsa-employee-table th:nth-child(7),.larsa-employee-table td:nth-child(7){min-width:300px}
     .larsa-employee-table th:nth-child(9),.larsa-employee-table td:nth-child(9){min-width:96px;white-space:nowrap}
     .larsa-employee-table td:nth-child(9) .btn{min-width:82px;white-space:nowrap}
+    /* Performance Core: the performance workspace uses the same calm Larsa
+       status language as the rest of the product.  This is injected into the
+       embedded staff document (rather than the outer shell) so it survives
+       the packed engine's document replacement. */
+    #content.larsa-performance-core{--perf-blue:#3155d8;--perf-indigo:#5b4bdb;--perf-green:#188653;--perf-amber:#c27a16;--perf-rose:#c1495b;max-width:1480px;margin:0 auto}
+    #content.larsa-performance-core>.larsa-performance-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin:0 0 18px;padding:22px 24px;border:1px solid color-mix(in srgb,var(--accent) 18%,var(--line));border-radius:24px;background:radial-gradient(circle at 100% 0,color-mix(in srgb,var(--perf-blue) 15%,transparent),transparent 34%),linear-gradient(135deg,color-mix(in srgb,var(--panel) 92%,var(--perf-blue)),var(--panel));box-shadow:0 14px 34px rgba(15,23,42,.07)}
+    #content.larsa-performance-core .larsa-performance-hero .eyebrow{display:block;margin-bottom:5px;color:var(--perf-blue);font-size:11px;font-weight:950;letter-spacing:.15em;text-transform:uppercase}
+    #content.larsa-performance-core .larsa-performance-hero h2{margin:0;color:var(--ink);font-size:clamp(24px,3vw,34px);line-height:1.05;letter-spacing:-.045em}
+    #content.larsa-performance-core .larsa-performance-hero p{max-width:700px;margin:8px 0 0;color:var(--muted);font-size:13px;font-weight:700}
+    #content.larsa-performance-core .larsa-performance-hero .meta{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+    #content.larsa-performance-core .larsa-performance-hero .meta span,#content.larsa-performance-core .larsa-performance-legend span{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--line);border-radius:999px;background:color-mix(in srgb,var(--panel) 82%,var(--soft));color:var(--muted);font-size:11px;font-weight:900;white-space:nowrap}
+    #content.larsa-performance-core .larsa-performance-hero .meta span::before,#content.larsa-performance-core .larsa-performance-legend span::before{width:7px;height:7px;border-radius:50%;background:var(--perf-blue);content:""}
+    #content.larsa-performance-core .larsa-performance-hero .meta span:nth-child(2)::before{background:var(--perf-green)}
+    #content.larsa-performance-core .larsa-performance-hero .meta span:nth-child(3)::before{background:var(--perf-amber)}
+    #content.larsa-performance-core .larsa-performance-legend{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 14px}
+    #content.larsa-performance-core .larsa-performance-legend .approved::before{background:var(--perf-green)}
+    #content.larsa-performance-core .larsa-performance-legend .review::before{background:var(--perf-amber)}
+    #content.larsa-performance-core .larsa-performance-legend .neutral::before{background:var(--muted)}
+    #content.larsa-performance-core>.v22-section{border-color:color-mix(in srgb,var(--accent) 11%,var(--line));border-radius:22px;box-shadow:0 8px 24px rgba(15,23,42,.045)}
+    #content.larsa-performance-core>.v22-section:first-of-type{padding:18px;background:linear-gradient(180deg,color-mix(in srgb,var(--perf-blue) 4%,var(--panel)),var(--panel) 42%)}
+    #content.larsa-performance-core .v22-kpi-grid,#content.larsa-performance-core .v22-chart-grid{gap:11px}
+    #content.larsa-performance-core .v22-kpi{position:relative;min-height:112px;overflow:hidden;border-radius:18px;background:color-mix(in srgb,var(--panel) 94%,var(--soft));box-shadow:0 4px 14px rgba(15,23,42,.035)}
+    #content.larsa-performance-core .v22-kpi::before{position:absolute;inset:0 auto auto 0;width:100%;height:4px;background:var(--perf-blue);content:""}
+    #content.larsa-performance-core .v22-kpi:nth-child(2)::before{background:var(--perf-green)}
+    #content.larsa-performance-core .v22-kpi:nth-child(3)::before{background:var(--perf-amber)}
+    #content.larsa-performance-core .v22-kpi:nth-child(4)::before{background:var(--perf-indigo)}
+    #content.larsa-performance-core .v22-kpi:nth-child(5)::before{background:var(--perf-rose)}
+    #content.larsa-performance-core .v22-kpi .value{margin-top:8px;font-size:31px;font-variant-numeric:tabular-nums}
+    #content.larsa-performance-core .v22-chart-card{position:relative;min-height:196px;overflow:hidden;border-radius:18px;background:color-mix(in srgb,var(--panel) 94%,var(--soft));box-shadow:none}
+    #content.larsa-performance-core .v22-chart-card::before{position:absolute;top:0;right:0;left:0;height:3px;background:var(--perf-blue);content:"";opacity:.85}
+    #content.larsa-performance-core .v22-chart-card:nth-child(2)::before{background:var(--perf-indigo)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(3)::before{background:var(--perf-green)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(4)::before{background:var(--perf-amber)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(5)::before{background:var(--perf-rose)}
+    #content.larsa-performance-core .v22-chart-card h4{margin-bottom:14px;font-size:14px;letter-spacing:-.01em}
+    #content.larsa-performance-core .v22-bar{margin:10px 0}
+    #content.larsa-performance-core .v22-bar-track{height:11px}
+    #content.larsa-performance-core .v22-bar-fill{background:var(--perf-blue)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(2) .v22-bar-fill{background:var(--perf-indigo)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(3) .v22-bar-fill{background:var(--perf-green)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(4) .v22-bar-fill{background:var(--perf-amber)}
+    #content.larsa-performance-core .v22-chart-card:nth-child(5) .v22-bar-fill{background:var(--perf-rose)}
+    #content.larsa-performance-core .v22-perf-summary{grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:11px}
+    #content.larsa-performance-core .v22-person-card{position:relative;overflow:hidden;border-radius:18px;background:color-mix(in srgb,var(--panel) 96%,var(--soft));transition:transform .18s var(--ease),box-shadow .18s var(--ease),border-color .18s var(--ease)}
+    #content.larsa-performance-core .v22-person-card::before{position:absolute;inset:0 auto 0 0;width:4px;background:var(--perf-blue);content:""}
+    #content.larsa-performance-core .v22-person-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--perf-blue) 32%,var(--line));box-shadow:0 12px 24px rgba(15,23,42,.08)}
+    #content.larsa-performance-core .v22-person-metrics div{background:color-mix(in srgb,var(--soft) 55%,var(--panel));border-radius:12px}
+    #content.larsa-performance-core .v22-person-metrics b{font-size:22px}
+    #content.larsa-performance-core .v22-filter-panel{background:linear-gradient(135deg,color-mix(in srgb,var(--soft) 72%,var(--panel)),var(--panel))}
+    #content.larsa-performance-core .v22-filter-panel .v22-filter-actions{gap:8px}
+    #content.larsa-performance-core .v22-filter-panel .btn.primary{background:var(--perf-blue);border-color:var(--perf-blue)}
+    body.dark #content.larsa-performance-core>.larsa-performance-hero{box-shadow:0 16px 36px rgba(0,0,0,.24);background:radial-gradient(circle at 100% 0,rgba(91,75,219,.25),transparent 34%),linear-gradient(135deg,#171b27,#171a21)}
+    body.dark #content.larsa-performance-core .v22-kpi,body.dark #content.larsa-performance-core .v22-chart-card,body.dark #content.larsa-performance-core .v22-person-card{background:#191e27}
+    @media(max-width:900px){#content.larsa-performance-core>.larsa-performance-hero{align-items:flex-start;flex-direction:column}#content.larsa-performance-core .larsa-performance-hero .meta{justify-content:flex-start}}
+    @media(max-width:700px){#content.larsa-performance-core>.v22-section{padding:14px;border-radius:18px}#content.larsa-performance-core .v22-kpi{min-height:102px}#content.larsa-performance-core .v22-kpi .value{font-size:27px}}
     @media(max-width:760px){.topbar{padding:10px 12px!important}.pageTitle h1{font-size:21px!important}
     .content{padding:12px!important}.v25-timebar{display:none!important}.modalLayer{padding:8px!important}
     .modal{max-height:94dvh!important;border-radius:18px!important}}
@@ -5099,6 +5154,46 @@ export default function Home() {
             var row=window.__larsaStaffAccess&&window.__larsaStaffAccess[section];
             return !!(row&&row[action||"view"]);
           };
+          /* The packed engine replaces its document after boot. Keep the
+             Performance Core decoration inside that live document and reapply
+             it after every performance render, so the page never falls back
+             to the legacy visual layer during navigation or filtering. */
+          if(!window.__larsaPerformanceCoreDesignInstalled){
+            window.__larsaPerformanceCoreDesignInstalled=true;
+            window.__larsaPerformanceCoreDesign=function(){
+              try{
+                if(typeof activePage==='undefined'||activePage!=='performance')return;
+                var content=document.getElementById('content');
+                if(!content)return;
+                content.classList.add('larsa-performance-core');
+                var first=Array.prototype.find.call(content.children,function(child){return child.classList&&child.classList.contains('v22-section')});
+                if(!first)return;
+                if(!content.querySelector('.larsa-performance-hero')){
+                  var hero=document.createElement('section');
+                  hero.className='larsa-performance-hero';
+                  hero.innerHTML='<div><span class="eyebrow">Performance Core</span><h2>Performance Command Center</h2><p>See contribution, delivery, and efficiency together — with the same clear Larsa status language used across the app.</p></div><div class="meta"><span>Scoring & delivery</span><span>Live period view</span><span>Manager ready</span></div>';
+                  content.insertBefore(hero,first);
+                }
+                if(!content.querySelector('.larsa-performance-legend')){
+                  var legend=document.createElement('div');
+                  legend.className='larsa-performance-legend';
+                  legend.innerHTML='<span class="approved">Approved / counted</span><span class="review">Needs review</span><span class="neutral">Draft / not counted</span>';
+                  var heroNode=content.querySelector('.larsa-performance-hero');
+                  if(heroNode)heroNode.insertAdjacentElement('afterend',legend);
+                }
+              }catch(e){console.warn('Performance Core decoration failed',e)}
+            };
+            ['renderPerformance','renderPerformanceV22','renderPerformanceV22b','render'].forEach(function(name){
+              var fn=window[name];
+              if(typeof fn!=='function'||fn.__larsaPerformanceCoreWrapped)return;
+              var wrapped=function(){var result=fn.apply(this,arguments);setTimeout(window.__larsaPerformanceCoreDesign,0);return result};
+              wrapped.__larsaPerformanceCoreWrapped=true;
+              window[name]=wrapped;
+              try{eval(name+'=window[name]')}catch(e){}
+            });
+            setTimeout(window.__larsaPerformanceCoreDesign,0);
+          }
+          if(typeof window.__larsaPerformanceCoreDesign==='function')setTimeout(window.__larsaPerformanceCoreDesign,0);
           if(!window.__larsaActionGuardInstalled){
             window.__larsaActionGuardInstalled=true;
             var __larsaActionGuard=function(name,sectionForArguments,actionForArguments){
