@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDialog } from "./Dialog";
-import { GripVertical, Pencil, Plus, X } from "lucide-react";
+import { GripVertical, Pencil, Plus, Save, Undo2, X } from "lucide-react";
 import { pushSyncedKeyNow } from "../lib/supabase/sync";
 import {
   assignableTo,
@@ -167,7 +167,9 @@ export function OrgStructure({
   const [dragTeam, setDragTeam] = useState(""); const [dragPerson, setDragPerson] = useState("");
   const [overTeam, setOverTeam] = useState("");
 
-  const chart = useMemo(() => effectiveOrg(users), [users, tick]);
+  const serverChart = useMemo(() => effectiveOrg(users), [users, tick]);
+  const [draft, setDraft] = useState<OrgChart | null>(null);
+  const chart = draft || serverChart;
   const active = useMemo(() => users.filter((row) => row.enabled !== false), [users]);
 
   /* Resolves an id to a real, non-empty name -- and nothing else. A team or
@@ -188,18 +190,31 @@ export function OrgStructure({
   }
 
   function save(next: OrgChart, message: string) {
-    if (writeOrg(next)) {
+    setDraft(next);
+    setNote(`${message} Review the change, then click Save changes.`);
+  }
+
+  function commitChanges() {
+    if (!draft) return;
+    if (writeOrg(draft)) {
       /* Approval defaults are written alongside the chart. Push the same
          atomic staff blob immediately so a new team lead, department head,
          or member is available to every device without waiting for the next
          background sync. */
       pushSyncedKeyNow("larsaStaffV8");
+      setDraft(null);
       setTick((value) => value + 1);
-      setNote(message);
+      setNote("Changes saved and synced.");
       if (onSaved) onSaved();
     } else {
       setNote("Could not save. Reload and try again.");
     }
+  }
+
+  function discardChanges() {
+    if (!draft) return;
+    setDraft(null);
+    setNote("Unsaved changes discarded.");
   }
 
   const visibleTeams = teamsVisibleTo(chart, viewer);
@@ -272,7 +287,7 @@ export function OrgStructure({
       title: "Rename department",
       message: "Choose the name shown to everyone in the organization.",
       defaultValue: department.name,
-      confirmLabel: "Save name",
+      confirmLabel: "Apply name",
       placeholder: "Department name",
     });
     const name = String(value || "").trim();
@@ -287,7 +302,7 @@ export function OrgStructure({
       title: "Rename team",
       message: "Choose the name shown to everyone in the organization.",
       defaultValue: team.name,
-      confirmLabel: "Save name",
+      confirmLabel: "Apply name",
       placeholder: "Team name",
     });
     const name = String(value || "").trim();
@@ -341,6 +356,13 @@ export function OrgStructure({
           <button type="button" className="org-add struct-add" onClick={addDepartment}><Plus size={15} /> Department</button>
         ) : null}
       </section>
+
+      <div className={`struct-savebar${draft ? " is-dirty" : ""}`} role="status">
+        <span className="struct-save-state"><span className="struct-save-dot" />{draft ? "Unsaved organization changes" : "All organization changes saved"}</span>
+        <span className="struct-save-help">{draft ? "Review the structure, then save when ready." : "Changes stay in place after you save them."}</span>
+        <button type="button" className="struct-discard" disabled={!draft} onClick={discardChanges}><Undo2 size={14} /> Discard</button>
+        <button type="button" className="struct-save" disabled={!draft} onClick={commitChanges}><Save size={15} /> Save changes</button>
+      </div>
 
       {note ? <p className="struct-note">{note}</p> : null}
 
