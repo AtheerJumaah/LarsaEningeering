@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useDialog } from "./Dialog";
 import { GripVertical, Pencil, Plus, X } from "lucide-react";
 import {
@@ -212,17 +213,50 @@ export function OrgStructure({
 
   function AddPerson({ pool, chosen, onAdd, label }: { pool: OrgUser[]; chosen: string[]; onAdd: (id: string) => void; label: string }) {
     const [open, setOpen] = useState(false);
+    const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
     const pickerRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const options = pool.filter((row) => chosen.indexOf(row.id) < 0);
 
     useEffect(() => {
       if (!open) return;
+
+      const positionMenu = () => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        const rect = trigger.getBoundingClientRect();
+        const width = Math.max(rect.width, 240);
+        const gap = 5;
+        const maxLeft = Math.max(8, window.innerWidth - width - 8);
+        const left = Math.min(Math.max(8, rect.left), maxLeft);
+        const maxHeight = Math.min(300, Math.max(160, window.innerHeight - 16));
+        const below = window.innerHeight - rect.bottom - gap;
+        const above = rect.top - gap;
+        const placeAbove = below < 180 && above > below;
+        setMenuStyle({
+          position: "fixed",
+          left,
+          width,
+          ...(placeAbove
+            ? { bottom: window.innerHeight - rect.top + gap, maxHeight }
+            : { top: rect.bottom + gap, maxHeight }),
+        });
+      };
+
+      positionMenu();
+      window.addEventListener("resize", positionMenu);
+      window.addEventListener("scroll", positionMenu, true);
       function closeOutside(event: PointerEvent) {
         const target = event.target as Node;
-        if (!pickerRef.current?.contains(target)) setOpen(false);
+        if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
       }
       document.addEventListener("pointerdown", closeOutside);
-      return () => document.removeEventListener("pointerdown", closeOutside);
+      return () => {
+        window.removeEventListener("resize", positionMenu);
+        window.removeEventListener("scroll", positionMenu, true);
+        document.removeEventListener("pointerdown", closeOutside);
+      };
     }, [open]);
 
     if (!options.length) return null;
@@ -234,14 +268,22 @@ export function OrgStructure({
         <button
           type="button"
           className="struct-select-trigger"
+          ref={triggerRef}
           aria-haspopup="listbox"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
           {label}<span aria-hidden="true">⌄</span>
         </button>
-        {open ? (
-          <div className="struct-select-menu" role="listbox" aria-label={label}>
+        {open && typeof document !== "undefined" ? createPortal(
+          <div
+            ref={menuRef}
+            className="struct-select-menu"
+            style={menuStyle}
+            role="listbox"
+            aria-label={label}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
             {options.map((row) => (
               <button
                 type="button"
@@ -254,7 +296,8 @@ export function OrgStructure({
                 <em>{initials(String(row.name || ""))}</em>{row.name}
               </button>
             ))}
-          </div>
+          </div>,
+          document.body,
         ) : null}
       </div>
     );
