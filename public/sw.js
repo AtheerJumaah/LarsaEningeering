@@ -2,7 +2,9 @@
 // handler deletes every cache whose name doesn't match, so changing the name is
 // what actually evicts stale copies. Forgetting to bump it is why a shipped fix
 // to /engines/timeclock.html kept serving the old broken file to everyone.
-const CACHE_NAME = "larsa-control-v57";
+// Bump whenever a calculation engine changes so an already-open browser
+// cannot keep serving an older accounting mirror from its service worker.
+const CACHE_NAME = "larsa-control-v58";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",

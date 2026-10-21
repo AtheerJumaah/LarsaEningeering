@@ -187,6 +187,32 @@ test("a fee recorded as separate Larsa revenue never reduces construction fundin
   assert.equal(s.fee_as_larsa_revenue_iqd, 48_000);        // tracked separately once
 });
 
+test("Larsa-borne costs stay out of client funding and refund calculations", () => {
+  const project = { id: "p-larsa-cost", currency: "IQD" };
+  const txns = [
+    { id: "f1", project_id: "p-larsa-cost", kind: "funding", status: "received", txn_date: "2026-01-01", amount_iqd: 10_000_000, amount_usd: 7633.59, original_currency: "IQD", exchange_rate: 1310 },
+    { id: "c1", project_id: "p-larsa-cost", kind: "expense", status: "approved", txn_date: "2026-01-02", amount_iqd: 2_000_000, amount_usd: 1526.72, original_currency: "IQD", exchange_rate: 1310, payment_source: "Larsa Operating" },
+    { id: "c2", project_id: "p-larsa-cost", kind: "material", status: "approved", txn_date: "2026-01-03", amount_iqd: 1_000_000, amount_usd: 763.36, original_currency: "IQD", exchange_rate: 1310 },
+  ];
+  const fees = [
+    { id: "ff1", project_id: "p-larsa-cost", source_txn_id: "f1", entry_type: "fee", status: "posted", calc_method: "percentage", fee_rate: 0.08, fee_iqd: 800_000, fee_usd: 610.69, basis: "funding", treatment: "deduct_from_funding" },
+  ];
+  const s = Core.projectSummary(project, txns, fees, []);
+  assert.equal(s.actual_construction_cost_iqd, 1_000_000);
+  assert.equal(s.pending_commitments_iqd, 0);
+  assert.equal(s.remaining_unused_iqd, 8_200_000);
+});
+
+test("expense-based fees refund the unearned collected portion", () => {
+  const entries = [{ amount_iqd: 10_000_000, fee_iqd: 800_000, fee_rate: 0.08, fee_method: "percentage", fee_basis: "total_expenses", fee_treatment: "deduct_from_funding", currency: "IQD", exchange_rate: 1310 }];
+  const fees = [{ id: "fee-e", source_txn_id: "fund-e", entry_type: "fee", status: "posted", fee_iqd: 800_000, fee_usd: 610.69, basis: "total_expenses", treatment: "deduct_from_funding" }];
+  const txns = [{ id: "cost-e", project_id: "p-expense-fee", kind: "material", status: "approved", amount_iqd: 2_000_000, amount_usd: 1526.72 }];
+  const refund = Core.computeRefund(entries, 2_000_000, null, 0, { fees, txns });
+  assert.equal(refund.funding_based, false);
+  assert.equal(refund.excess_fee_iqd, 800_000);
+  assert.equal(refund.total_refund_iqd, 8_576_000);
+});
+
 test("no-budget cost progress is Not Available (null), never contract value or funding", () => {
   const s = Core.projectSummary({ id: "p3", currency: "IQD", contract_value: 99 },
     [{ id: "x", project_id: "p3", kind: "expense", status: "approved", txn_date: "2026-01-01", amount_iqd: 50, amount_usd: 0.04, original_currency: "IQD", exchange_rate: 1310 }], [], []);

@@ -117,6 +117,9 @@ begin
   perform pg_temp.chk('a Larsa-paid cost never touches the client fund balance',
     (f#>>'{client_funds,approved,construction_cost_iqd}')::numeric = 7000000
     and (f#>>'{client_funds,approved,remaining_balance_iqd}')::numeric = 4040000);
+  perform pg_temp.chk('a Larsa-paid cost never reduces the client refund',
+    (f#>>'{client_funds,refundable_principal_iqd}')::numeric = 4040000
+    and (f#>>'{client_funds,total_refund_due_iqd}')::numeric = 4363200);
   perform pg_temp.chk('cost bearer defaults to the client and is explicit for Larsa',
     public.acct_cost_bearer(null, '{}'::jsonb) = 'client'
     and public.acct_cost_bearer('Larsa Operating', '{}'::jsonb) = 'larsa'

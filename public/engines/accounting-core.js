@@ -141,14 +141,16 @@
                        fee_treatment, currency, exchange_rate}] oldest first
      expensesIqd:    approved/posted project expenses (historical IQD)
      refundIqd:      partial principal to return (null = all unused)     */
-  function computeRefund(fundingEntries, expensesIqd, refundIqd, alreadyRefundedIqd) {
+  function computeRefund(fundingEntries, expensesIqd, refundIqd, alreadyRefundedIqd, context) {
     var remaining = r2(Number(expensesIqd) || 0) + r2(Number(alreadyRefundedIqd) || 0);
     var netPool = 0, grossIqd = 0, initialFee = 0;
+    var fundingBased = true;
     var slots = [];
     (fundingEntries || []).forEach(function (f) {
       var feeIqd = r2(f.fee_iqd || 0);
       grossIqd = r2(grossIqd + r2(f.amount_iqd));
       initialFee = r2(initialFee + feeIqd);
+      if ((f.fee_basis || "funding") !== "funding") fundingBased = false;
       var net = r2(f.amount_iqd - ((f.fee_treatment || "deduct_from_funding") === "deduct_from_funding" ? feeIqd : 0));
       netPool = r2(netPool + net);
       var take = Math.min(net, remaining);
@@ -171,7 +173,16 @@
       var m = Math.min(left, s.available_unused_iqd);
       if (m <= 0) return;
       left = r2(left - m);
-      var fee = r2(m * s.fee_rate);
+      /* The server converts the IQD-equivalent allocation back to the
+         funding entry's original currency, rounds there, applies the
+         historical rate, then converts it back.  Doing the same here is
+         important for USD entries at small amounts where rounding changes
+         the refundable fee by a cent (or more at large rates). */
+      var entry = s.entry || {}, entryCur = entry.currency || "IQD",
+          entryRate = Number(entry.exchange_rate) || 1,
+          unusedOriginal = entryCur === "IQD" ? r2(m) : r2(m / entryRate),
+          feeOriginal = r2(unusedOriginal * s.fee_rate),
+          fee = entryCur === "IQD" ? feeOriginal : r2(feeOriginal * entryRate);
       refundableFee = r2(refundableFee + fee);
       allocations.push({
         funding: s.entry,
@@ -180,6 +191,22 @@
         refundable_fee_iqd: fee,
       });
     });
+    var excessFee = 0;
+    /* Expense-based fee rules return any collected fee above the fee earned
+       on approved client costs.  The authoritative RPC does this inside
+       acct_compute_refund; keep the local fallback mathematically aligned. */
+    if (!fundingBased && context && context.fees) {
+      var collected = 0, earned = 0;
+      (context.fees || []).forEach(function (f) {
+        if (f.entry_type !== "fee" || f.status !== "posted" && f.status !== "settled") return;
+        var amount = Number(f.fee_iqd || 0);
+        collected = r2(collected + amount);
+        var source = (context.txns || []).filter(function (t) { return t.id === f.source_txn_id; })[0];
+        if (source && (source.kind === "material" || source.kind === "labor" || source.kind === "expense")
+          && isClientCost(source) && isActual(source.kind, source.status)) earned = r2(earned + amount);
+      });
+      excessFee = r2(Math.max(collected - earned, 0));
+    }
     return {
       gross_funding_iqd: grossIqd,
       initial_fee_iqd: initialFee,
@@ -187,9 +214,11 @@
       approved_expenses_iqd: r2(Number(expensesIqd) || 0),
       unused_net_funding_iqd: unusedTotal,
       refund_principal_iqd: r2(want),
-      refundable_fee_iqd: refundableFee,
-      total_refund_iqd: r2(want + refundableFee),
-      retained_fee_iqd: r2(initialFee - refundableFee),
+      refundable_fee_iqd: r2(refundableFee + excessFee),
+      excess_fee_iqd: excessFee,
+      total_refund_iqd: r2(want + refundableFee + excessFee),
+      retained_fee_iqd: r2(initialFee - refundableFee - excessFee),
+      funding_based: fundingBased,
       partial: want < unusedTotal,
       allocations: allocations,
     };
@@ -203,10 +232,22 @@
     return list.indexOf(status) !== -1;
   }
 
+  function isClientCost(t) {
+    if (!t || ["material", "labor", "expense"].indexOf(t.kind) === -1) return true;
+    var meta = t.meta || {};
+    var explicit = String(meta.cost_bearer || "").toLowerCase();
+    if (explicit === "larsa" || explicit === "company") return false;
+    if (explicit === "client") return true;
+    var source = String(t.payment_source || "").toLowerCase();
+    return ["larsa", "larsa operating", "larsa funds", "company", "company funds",
+      "company account", "larsa account", "operating", "overhead", "larsa overhead"].indexOf(source) === -1;
+  }
+
   function sumTxns(txns, kind, statuses) {
     var iqd = 0, usd = 0;
     (txns || []).forEach(function (t) {
       if (t.kind !== kind || t.deleted_at) return;
+      if (!isClientCost(t)) return;
       var ok = statuses ? statuses.indexOf(t.status) !== -1 : isActual(t.kind, t.status);
       if (!ok) return;
       iqd = r2(iqd + Number(t.amount_iqd || 0));
@@ -226,7 +267,7 @@
     var pending = { iqd: 0, usd: 0 };
     txns.forEach(function (t) {
       if ((t.kind === "material" || t.kind === "labor" || t.kind === "expense")
-        && (t.status === "draft" || t.status === "pending") && !t.deleted_at) {
+        && (t.status === "draft" || t.status === "pending") && !t.deleted_at && isClientCost(t)) {
         pending.iqd = r2(pending.iqd + Number(t.amount_iqd || 0));
         pending.usd = r2(pending.usd + Number(t.amount_usd || 0));
       }
@@ -258,7 +299,10 @@
 
     var fundingEntries = txns
       .filter(function (t) { return t.kind === "funding" && isActual("funding", t.status) && !t.deleted_at; })
-      .sort(function (a, b) { return String(a.txn_date).localeCompare(String(b.txn_date)); })
+      .sort(function (a, b) {
+        var byDate = String(a.txn_date).localeCompare(String(b.txn_date));
+        return byDate || String(a.created_at || "").localeCompare(String(b.created_at || ""));
+      })
       .map(function (t) {
         var fee = fees.filter(function (f) {
           return f.source_txn_id === t.id && f.entry_type === "fee" && (f.status === "posted" || f.status === "settled");
@@ -268,13 +312,14 @@
           fee_iqd: fee ? Number(fee.fee_iqd || 0) : 0,
           fee_rate: fee ? Number(fee.fee_rate || 0) : (t.fee_rule ? Number(t.fee_rule.rate || 0) : 0),
           fee_method: fee ? fee.calc_method : (t.fee_rule ? t.fee_rule.method : "percentage"),
+          fee_basis: fee ? (fee.basis || "funding") : (t.fee_rule ? (t.fee_rule.basis || "funding") : "funding"),
           fee_treatment: fee ? fee.treatment : (t.fee_rule ? t.fee_rule.treatment : "deduct_from_funding"),
           currency: t.original_currency,
           exchange_rate: Number(t.exchange_rate || 1),
         };
       });
     var expensesForRefund = r2(actualCost.iqd + feeExpense);
-    var refund = computeRefund(fundingEntries, expensesForRefund, null, refundedPrincipal);
+    var refund = computeRefund(fundingEntries, expensesForRefund, null, refundedPrincipal, { fees: fees, txns: txns });
 
     var latest = null;
     (progressUpdates || []).forEach(function (p) {
@@ -297,6 +342,8 @@
       budget_currency: budgetCur,
       gross_funding_iqd: gross.iqd, gross_funding_usd: gross.usd,
       initial_fee_iqd: feePosted,
+      initial_fee_usd: r2(fees.filter(function (f) { return f.entry_type === "fee" && (f.status === "posted" || f.status === "settled"); })
+        .reduce(function (sum, f) { return sum + Number(f.fee_usd || 0); }, 0)),
       fee_deducted_from_funding_iqd: feeDeduct,
       fee_as_project_expense_iqd: feeExpense,
       fee_as_larsa_revenue_iqd: feeRevenue,
@@ -308,6 +355,14 @@
       actual_construction_cost_iqd: actualCost.iqd,
       actual_construction_cost_usd: actualCost.usd,
       total_used_iqd: totalUsed,
+      total_used_usd: r2(actualCost.usd + fees.filter(function (f) {
+        return f.entry_type === "fee" && (f.status === "posted" || f.status === "settled")
+          && (f.treatment === "deduct_from_funding" || f.treatment === "project_expense");
+      }).reduce(function (sum, f) { return sum + Number(f.fee_usd || 0); }, 0)),
+      net_construction_funding_usd: r2(gross.usd - fees.filter(function (f) {
+        return f.entry_type === "fee" && (f.status === "posted" || f.status === "settled")
+          && f.treatment === "deduct_from_funding";
+      }).reduce(function (sum, f) { return sum + Number(f.fee_usd || 0); }, 0)),
       revenue_iqd: rev.iqd,
       pending_commitments_iqd: pending.iqd,
       refunded_principal_iqd: refundedPrincipal,

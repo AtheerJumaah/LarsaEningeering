@@ -79,8 +79,15 @@ test("the Larsa refund rule is implemented verbatim — never a proportional sub
   assert.match(migrations, /Unused Net Funding/);
   assert.match(migrations, /Refundable Consultancy\s+=|refundable_fee/i);
   assert.match(migrations, /retained_fee/);
-  assert.match(core, /retained_fee_iqd: r2\(initialFee - refundableFee\)/);
-  assert.match(core, /total_refund_iqd: r2\(want \+ refundableFee\)/);
+  assert.match(core, /retained_fee_iqd: r2\(initialFee - refundableFee(?: - excessFee)?\)/);
+  assert.match(core, /total_refund_iqd: r2\(want \+ refundableFee(?: \+ excessFee)?\)/);
+});
+
+test("authoritative USD balances include project-expense fees", () => {
+  const usdBasis = read("supabase/migrations/20261021_acct_025_financials_usd_basis.sql");
+  assert.match(usdBasis, /fee_expense_usd/);
+  assert.match(usdBasis, /a_used_usd := a_cost_usd \+ fee_deduct_usd \+ fee_expense_usd/);
+  assert.match(usdBasis, /a_remain_usd := a_net_usd - a_cost_usd - fee_expense_usd/);
 });
 
 test("protected actions demand reason + fresh emailed code + non-self platform-admin approval", () => {
