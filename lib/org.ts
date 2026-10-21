@@ -42,6 +42,9 @@ export type Team = {
 export type OrgChart = {
   departments: Department[];
   teams: Team[];
+  /** Explicit removals distinguish a real delete from a stale partial chart. */
+  removedDepartmentIds?: string[];
+  removedTeamIds?: string[];
   /**
    * Optional line-management relationships, independent of department heads
    * and team leads. A person may have more than one line manager here (for
@@ -88,6 +91,8 @@ export function readStoredOrg(): OrgChart | null {
   return {
     departments: org.departments,
     teams: Array.isArray(org.teams) ? org.teams : [],
+    removedDepartmentIds: Array.isArray(org.removedDepartmentIds) ? org.removedDepartmentIds.filter((id): id is string => typeof id === "string") : [],
+    removedTeamIds: Array.isArray(org.removedTeamIds) ? org.removedTeamIds.filter((id): id is string => typeof id === "string") : [],
     ...(reporting ? { reporting } : {}),
   };
 }
@@ -178,7 +183,10 @@ export function buildFallbackOrg(users: OrgUser[]): OrgChart {
    the one implied by the staff list. */
 export function effectiveOrg(users: OrgUser[]): OrgChart {
   const stored = readStoredOrg();
-  if (stored && stored.departments.length) return stored;
+  /* An explicitly saved empty chart is meaningful. Falling back whenever
+     its department list is empty resurrected departments from employee
+     profiles immediately after an administrator removed the last one. */
+  if (stored) return stored;
   return buildFallbackOrg(users);
 }
 

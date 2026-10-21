@@ -89,7 +89,14 @@ const TOMBSTONE_KEYS = new Set(Object.values(GUARDED_COLLECTIONS));
    editor rewrites `flowConfig[employeeId]`, so clearing one chain is a change
    to a key both sides have and merges normally. Only the disappearance of a
    whole person is refused, and no screen in the app does that. */
-export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule"]);
+export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule", "reporting"]);
+
+/* Org structure needs the same stale-copy protection as the staff directory,
+   but it has explicit delete actions. These tombstones let a deliberate
+   removal survive while an old browser that simply lacks a department or
+   team cannot erase it. */
+const ORG_DEPARTMENT_TOMBSTONES = "removedDepartmentIds";
+const ORG_TEAM_TOMBSTONES = "removedTeamIds";
 
 type MergeContext = {
   /* collection key ("users" / "logs") -> union of tombstoned ids across
@@ -248,6 +255,46 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
     const serverDoc = isPlainObject(server) ? server : {};
     const out: JsonObject = { ...anchored };
 
+    /* Org structure is nested inside the large staff document. Older tabs
+       and iframe writers can send a partial chart or omit the whole `org`
+       object; the generic top-level guard below cannot see rows lost inside
+       that object. Preserve remote rows unless the editor supplied an
+       explicit structure tombstone. */
+    const localOrg = isPlainObject(out.org) ? out.org as JsonObject : null;
+    const serverOrg = isPlainObject(serverDoc.org) ? serverDoc.org as JsonObject : null;
+    if (serverOrg) {
+        const org: JsonObject = { ...(localOrg || {}) };
+        Object.keys(serverOrg).forEach((key) => {
+            if (!Object.prototype.hasOwnProperty.call(org, key)) org[key] = serverOrg[key];
+        });
+        if (isPlainObject(org.reporting) && isPlainObject(serverOrg.reporting)) {
+            const reporting = { ...(org.reporting as JsonObject) };
+            Object.keys(serverOrg.reporting as JsonObject).forEach((personId) => {
+                if (!Object.prototype.hasOwnProperty.call(reporting, personId)) reporting[personId] = (serverOrg.reporting as JsonObject)[personId];
+            });
+            org.reporting = reporting;
+        }
+        const removedDepartments = new Set(unionIds(org[ORG_DEPARTMENT_TOMBSTONES], serverOrg[ORG_DEPARTMENT_TOMBSTONES]));
+        const removedTeams = new Set(unionIds(org[ORG_TEAM_TOMBSTONES], serverOrg[ORG_TEAM_TOMBSTONES]));
+        for (const [key, removed] of [["departments", removedDepartments], ["teams", removedTeams]] as const) {
+            const ours = Array.isArray(org[key]) ? org[key] as Json[] : [];
+            const theirs = Array.isArray(serverOrg[key]) ? serverOrg[key] as Json[] : [];
+            const seen = new Set<string>();
+            const rows: Json[] = [];
+            [...ours, ...theirs].forEach((row) => {
+                const id = idOf(row);
+                if (id === null) { if (rows.indexOf(row) < 0) rows.push(row); return; }
+                if (seen.has(id) || removed.has(id)) return;
+                seen.add(id);
+                rows.push(row);
+            });
+            org[key] = rows;
+        }
+        org[ORG_DEPARTMENT_TOMBSTONES] = [...removedDepartments];
+        org[ORG_TEAM_TOMBSTONES] = [...removedTeams];
+        out.org = org;
+    }
+
     Object.entries(GUARDED_COLLECTIONS).forEach(([collection, listKey]) => {
           const removed = new Set(unionIds(out[listKey], serverDoc[listKey]));
           const ours = Array.isArray(out[collection]) ? (out[collection] as Json[]) : [];
@@ -381,6 +428,55 @@ function mergeKeyedArrays(
    difference is treated as this device's own addition. */
 export function mergeValues(base: Json, local: Json, remote: Json, context: MergeContext | null = null, key?: string): Json {
     if (deepEqual(local, remote)) return local;
+
+    if (key === "org" && isPlainObject(local) && isPlainObject(remote)) {
+        const baseOrg = isPlainObject(base) ? base : {};
+        const removedDepartments = new Set(unionIds(
+            unionIds(baseOrg[ORG_DEPARTMENT_TOMBSTONES], local[ORG_DEPARTMENT_TOMBSTONES]),
+            remote[ORG_DEPARTMENT_TOMBSTONES],
+        ));
+        const removedTeams = new Set(unionIds(
+            unionIds(baseOrg[ORG_TEAM_TOMBSTONES], local[ORG_TEAM_TOMBSTONES]),
+            remote[ORG_TEAM_TOMBSTONES],
+        ));
+        const out: JsonObject = {};
+        const keys = [...Object.keys(remote), ...Object.keys(local).filter((child) => !(child in remote))];
+        keys.forEach((child) => {
+            if (child === ORG_DEPARTMENT_TOMBSTONES) { out[child] = [...removedDepartments]; return; }
+            if (child === ORG_TEAM_TOMBSTONES) { out[child] = [...removedTeams]; return; }
+            if (child === "departments" || child === "teams") {
+                const removed = child === "departments" ? removedDepartments : removedTeams;
+                const before = Array.isArray(baseOrg[child]) ? baseOrg[child] as JsonObject[] : [];
+                const ours = Array.isArray(local[child]) ? local[child] as JsonObject[] : [];
+                const theirs = Array.isArray(remote[child]) ? remote[child] as JsonObject[] : [];
+                const beforeById = indexById(before);
+                const oursById = indexById(ours);
+                const theirsById = indexById(theirs);
+                const rows: Json[] = [];
+                const seen = new Set<string>();
+                [...theirs, ...ours].forEach((row) => {
+                    const id = idOf(row);
+                    if (id === null || seen.has(id) || removed.has(id)) return;
+                    seen.add(id);
+                    const oursRow = oursById.get(id);
+                    const theirsRow = theirsById.get(id);
+                    rows.push(oursRow && theirsRow
+                        ? mergeValues(beforeById.get(id), oursRow, theirsRow, context)
+                        : (oursRow || theirsRow)!);
+                });
+                out[child] = rows;
+                return;
+            }
+            const inLocal = Object.prototype.hasOwnProperty.call(local, child);
+            const inRemote = Object.prototype.hasOwnProperty.call(remote, child);
+            if (!inLocal) out[child] = remote[child];
+            else if (!inRemote) out[child] = local[child];
+            else out[child] = mergeValues(baseOrg[child], local[child], remote[child], context, child);
+        });
+        out[ORG_DEPARTMENT_TOMBSTONES] = [...removedDepartments];
+        out[ORG_TEAM_TOMBSTONES] = [...removedTeams];
+        return out;
+    }
 
     /* The tombstone lists merge as an add-only union — a stale device saving
        an older, shorter list must never un-remember a removal. */

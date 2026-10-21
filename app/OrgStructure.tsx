@@ -341,11 +341,18 @@ export function OrgStructure({
   }
   async function removeTeam(team: Team) {
     if (!(await dialog.confirm("Remove " + team.name + "?"))) return;
-    save({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id) }, "Team removed.");
+    save({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id), removedTeamIds: [...new Set([...(chart.removedTeamIds || []), team.id])] }, "Team removed.");
   }
   async function removeDepartment(department: Department) {
     if (!(await dialog.confirm("Remove " + department.name + " and its teams?"))) return;
-    save({ departments: chart.departments.filter((row) => row.id !== department.id), teams: chart.teams.filter((row) => row.departmentId !== department.id) }, "Department removed.");
+    const removedTeams = chart.teams.filter((row) => row.departmentId === department.id).map((row) => row.id);
+    save({
+      ...chart,
+      departments: chart.departments.filter((row) => row.id !== department.id),
+      teams: chart.teams.filter((row) => row.departmentId !== department.id),
+      removedDepartmentIds: [...new Set([...(chart.removedDepartmentIds || []), department.id])],
+      removedTeamIds: [...new Set([...(chart.removedTeamIds || []), ...removedTeams])],
+    }, "Department removed.");
   }
 
   function moveMember(team: Team, fromId: string, toId: string) {    if (!fromId || !toId || fromId === toId) return;    const list = (team.memberIds || []).slice();    const from = list.indexOf(fromId);    const to = list.indexOf(toId);    if (from < 0 || to < 0) return;    const [moved] = list.splice(from, 1);    list.splice(to, 0, moved);    setTeamField(team, "memberIds", list);    setDragPerson("");  }

@@ -35,7 +35,7 @@ execFileSync(process.execPath, [tsc, tsPath, "--module", "es2022", "--target", "
   cwd: fileURLToPath(new URL("..", import.meta.url)),
   stdio: "pipe",
 });
-const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped } = await import(pathToFileURL(join(dir, "merge.js")).href);
+const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped, protectOutgoing } = await import(pathToFileURL(join(dir, "merge.js")).href);
 
 const user = (id, extra = {}) => ({ id, name: id.toUpperCase(), enabled: true, ...extra });
 
@@ -73,6 +73,50 @@ test("a side that changed nothing never overrides the side that did", () => {
   const base = { a: 1, b: 2 };
   assert.deepEqual(mergeValues(base, { a: 1, b: 2 }, { a: 1, b: 99 }), { a: 1, b: 99 });
   assert.deepEqual(mergeValues(base, { a: 5, b: 2 }, { a: 1, b: 2 }), { a: 5, b: 2 });
+});
+
+test("organization merge keeps departments and teams omitted by a stale chart", () => {
+  const depA = { id: "dep-a", name: "Architecture", headIds: [] };
+  const depB = { id: "dep-b", name: "Engineering", headIds: [] };
+  const teamA = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };
+  const teamB = { id: "team-b", departmentId: "dep-b", name: "Structures", leadIds: [], memberIds: [] };
+  const base = { org: { departments: [depA], teams: [teamA] } };
+  const local = { org: { departments: [], teams: [] } }; // stale tab never saw the saved chart
+  const remote = { org: { departments: [depA, depB], teams: [teamA, teamB] } };
+  const merged = mergeValues(base, local, remote);
+  assert.deepEqual(merged.org.departments.map((row) => row.id), ["dep-a", "dep-b"]);
+  assert.deepEqual(merged.org.teams.map((row) => row.id), ["team-a", "team-b"]);
+});
+
+test("organization removals require tombstones and survive merge and direct CAS protection", () => {
+  const dep = { id: "dep-a", name: "Architecture", headIds: [] };
+  const team = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };
+  const base = { org: { departments: [dep], teams: [team] } };
+  const local = { org: { departments: [], teams: [], removedDepartmentIds: ["dep-a"], removedTeamIds: ["team-a"] } };
+  const remote = { org: { departments: [dep], teams: [team] } };
+  const merged = mergeValues(base, local, remote);
+  assert.deepEqual(merged.org.departments, []);
+  assert.deepEqual(merged.org.teams, []);
+  const protectedWrite = protectOutgoing(local, remote);
+  assert.deepEqual(protectedWrite.org.departments, []);
+  assert.deepEqual(protectedWrite.org.teams, []);
+  assert.deepEqual(protectedWrite.org.removedDepartmentIds, ["dep-a"]);
+});
+
+test("direct CAS protection restores a missing org object and missing nested chart arrays", () => {
+  const dep = { id: "dep-a", name: "Architecture", headIds: [] };
+  const team = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };
+  const server = { org: { departments: [dep], teams: [team] } };
+  const expected = { ...server.org, removedDepartmentIds: [], removedTeamIds: [] };
+  assert.deepEqual(protectOutgoing({}, server).org, expected);
+  assert.deepEqual(protectOutgoing({ org: {} }, server).org, expected);
+});
+
+test("a stale structure snapshot cannot erase reporting assignments", () => {
+  const server = { org: { departments: [], teams: [], reporting: { u2: ["u1"] } } };
+  const local = { org: { departments: [], teams: [], reporting: {} } };
+  assert.deepEqual(protectOutgoing(local, server).org.reporting, { u2: ["u1"] });
+  assert.deepEqual(mergeValues(server, local, server).org.reporting, { u2: ["u1"] });
 });
 
 test("edits to different fields of the same record both survive", () => {

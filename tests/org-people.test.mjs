@@ -114,6 +114,12 @@ test("reporting lines stay independent from department heads and team leads", as
   assert.match(structure, /label="Add manager"/);
 });
 
+test("an explicitly saved empty organization chart is not rebuilt from profile departments", async () => {
+  const org = await read("lib/org.ts");
+  assert.match(org, /const stored = readStoredOrg\(\);[\s\S]*?if \(stored\) return stored;/);
+  assert.doesNotMatch(org, /if \(stored && stored\.departments\.length\) return stored;/);
+});
+
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
   const structure = await read("app/OrgStructure.tsx");
 
