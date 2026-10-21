@@ -18,6 +18,19 @@ function runtime(path, client, seed = {}) {
   const context = vm.createContext({ exports, module: { exports }, console: { log(){},warn(){},error(){} },
     require: name => name.includes('client') ? { getSupabaseClient: () => client, supabaseConfigured: () => true }
       : name.includes('merge') ? { mergeStoreText: (_base,local,remote) => ({...remote,...JSON.parse(local)}), protectOutgoing: x => x }
+      : name.includes('push-queue') ? { createPushQueue: (pushOnce, isDirty) => {
+        const active = new Map();
+        const push = async key => {
+          const existing = active.get(key);
+          if (existing) await existing;
+          else {
+            const task = pushOnce(key); active.set(key, task);
+            try { await task; } finally { if (active.get(key) === task) active.delete(key); }
+          }
+          if (isDirty(key)) return push(key);
+        };
+        return push;
+      } }
       : (() => {throw new Error(name)})(),
     localStorage, window: { localStorage, ...events }, document: { hidden: false, ...events },
     navigator: { onLine: true }, Date, Map, Set, Promise, AbortController,
@@ -72,11 +85,11 @@ test('shared-state saves serialize per key and preserve edits made during a slow
   };
   const r=runtime('lib/supabase/sync.ts',s.client);const cleanup=r.api.initLarsaSync();await settle();
   r.context.localStorage.setItem('larsaStaffV8',JSON.stringify({users:[{id:'employee'}],logs:[{id:'first'}]}));
-  r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
+  const firstPush = r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
   r.context.localStorage.setItem('larsaStaffV8',JSON.stringify({users:[{id:'employee'}],logs:[{id:'first'},{id:'second'}]}));
-  r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
+  const secondPush = r.api.pushSyncedKeyNow('larsaStaffV8');await settle();
   assert.equal(calls.length,1,'a slow shared row must not accumulate overlapping writes');
-  release();await settle();r.timers.filter(timer=>timer.ms===700).at(-1).fn();await settle();
+  release();await Promise.all([firstPush, secondPush]);await settle();
   assert.equal(calls.length,2);assert.equal(calls[1].p_data.logs.length,2);
   assert.equal(JSON.parse(r.data.get('larsaStaffV8')).logs.length,2);cleanup();
 });

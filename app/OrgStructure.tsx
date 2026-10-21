@@ -162,6 +162,7 @@ export function OrgStructure({
   const [tick, setTick] = useState(0);
   const dialog = useDialog();
   const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
   const [dragDep, setDragDep] = useState("");
   const [overDep, setOverDep] = useState("");
   const [dragTeam, setDragTeam] = useState(""); const [dragPerson, setDragPerson] = useState("");
@@ -216,18 +217,30 @@ export function OrgStructure({
     setNote(`${message} Review the change, then click Save changes.`);
   }
 
-  function commitChanges() {
-    if (!draft) return;
+  async function commitChanges() {
+    if (!draft || saving) return;
     if (writeOrg(draft)) {
-      /* Approval defaults are written alongside the chart. Push the same
-         atomic staff blob immediately so a new team lead, department head,
-         or member is available to every device without waiting for the next
-         background sync. */
-      pushSyncedKeyNow("larsaStaffV8");
-      setDraft(null);
-      setTick((value) => value + 1);
-      setNote("Changes saved and synced.");
-      if (onSaved) onSaved();
+      /* A successful localStorage write is not a successful company-wide
+         save. Wait for Supabase to acknowledge the latest blob before
+         clearing the user's draft or claiming that the change synced. */
+      setSaving(true);
+      setNote("Saving organization changes to the company server…");
+      try {
+        const synced = await pushSyncedKeyNow("larsaStaffV8");
+        if (!synced) {
+          setNote("Changes are saved on this device, but server sync is unavailable. Keep this app open and try Save changes again.");
+          return;
+        }
+        setDraft(null);
+        setTick((value) => value + 1);
+        setNote("Changes saved to the company server.");
+        if (onSaved) onSaved();
+      } catch (error) {
+        console.error("[organization] save was not confirmed by the company server:", error);
+        setNote("Changes are on this device but were not confirmed by the company server. Keep this app open and try Save changes again.");
+      } finally {
+        setSaving(false);
+      }
     } else {
       setNote("Could not save. Reload and try again.");
     }
@@ -392,10 +405,10 @@ export function OrgStructure({
       </section>
 
       <div className={`struct-savebar${draft ? " is-dirty" : ""}`} role="status">
-        <span className="struct-save-state"><span className="struct-save-dot" />{draft ? "Unsaved organization changes" : "All organization changes saved"}</span>
-        <span className="struct-save-help">{draft ? "Review the structure, then save when ready." : "Changes stay in place after you save them."}</span>
-        <button type="button" className="struct-discard" disabled={!draft} onClick={discardChanges}><Undo2 size={14} /> Discard</button>
-        <button type="button" className="struct-save" disabled={!draft} onClick={commitChanges}><Save size={15} /> Save changes</button>
+        <span className="struct-save-state"><span className="struct-save-dot" />{saving ? "Saving to company server" : draft ? "Changes need server confirmation" : "All organization changes saved"}</span>
+        <span className="struct-save-help">{draft ? "Keep this app open until the server confirms the save." : "Changes stay in place after you save them."}</span>
+        <button type="button" className="struct-discard" disabled={!draft || saving} onClick={discardChanges}><Undo2 size={14} /> Discard</button>
+        <button type="button" className="struct-save" disabled={!draft || saving} onClick={commitChanges}><Save size={15} /> {saving ? "Saving…" : "Save changes"}</button>
       </div>
 
       {note ? <p className="struct-note">{note}</p> : null}

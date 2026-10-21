@@ -120,6 +120,14 @@ test("an explicitly saved empty organization chart is not rebuilt from profile d
   assert.doesNotMatch(org, /if \(stored && stored\.departments\.length\) return stored;/);
 });
 
+test("organization save waits for server confirmation before clearing the draft", async () => {
+  const structure = await read("app/OrgStructure.tsx");
+  assert.match(structure, /const synced = await pushSyncedKeyNow\("larsaStaffV8"\);[\s\S]*?if \(!synced\)[\s\S]*?setDraft\(null\);/);
+  assert.match(structure, /Changes saved to the company server\./);
+  assert.match(structure, /were not confirmed by the company server/);
+  assert.doesNotMatch(structure, /Changes saved and synced\./);
+});
+
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
   const structure = await read("app/OrgStructure.tsx");
 

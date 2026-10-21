@@ -61,7 +61,7 @@ test("punches persist immediately — no debounce between the press and the back
   const pushes = page.match(/pushSyncedKeyNow\("larsaStaffV8"\);/g) || [];
   assert.ok(pushes.length >= 3, `punch, break, and manual-entry paths must all push now (found ${pushes.length})`);
   const sync = await read("lib/supabase/sync.ts");
-  assert.match(sync, /export function pushSyncedKeyNow\(key: SyncedKey\)/);
+  assert.match(sync, /export async function pushSyncedKeyNow\(key: SyncedKey\): Promise<boolean>/);
 });
 
 test("the app revalidates authoritative state on focus, reconnect, and realtime resubscribe", async () => {

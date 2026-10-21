@@ -87,6 +87,6 @@ test("the verbatim push path is protected too", () => {
 });
 
 test("the rule is declared where the other durability rules live", async () => {
-  assert.match(source, /export const ADD_ONLY_MAPS = new Set\(\["flowConfig", "schedule"\]\);/);
+  assert.match(source, /export const ADD_ONLY_MAPS = new Set\(\["flowConfig", "schedule", "reporting"\]\);/);
   assert.match(source, /\|\| \(key !== undefined && ADD_ONLY_MAPS\.has\(key\)\)\) out\[childKey\] = remote\[childKey\];/);
 });

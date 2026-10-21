@@ -22,6 +22,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
 import { mergeStoreText, protectOutgoing } from "./merge";
+import { createPushQueue } from "./push-queue";
 
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
    itself reads and writes (see STORE_KEY in public/engines/accounting.html).
@@ -143,8 +144,6 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   // from "the echo of our own write" without a real diff.
   const lastKnown = new Map<string, string>();  /* The updated_at this device last saw for each key. Without it, a browser     that has been open since yesterday cannot tell that the shared copy has     moved on, and its next write silently replaces work done elsewhere. That     is how a full set of hashed passwords and contact details reverted to a     morning-old copy. */  const lastSeenAt = new Map<string, string>();
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pushingKeys = new Set<SyncedKey>();
-  const pushAgain = new Set<SyncedKey>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
 
   async function ensureSession() {
@@ -180,11 +179,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      that as licence to overwrite; the RPC now refuses a null base whenever
      the row exists, so "I don't know what the server holds" can never
      again mean "so replace it". */
-  async function pushKey(key: SyncedKey) {
+  async function pushKeyOnce(key: SyncedKey) {
     if (cancelled || syncWritesPaused) return;
-    if (pushingKeys.has(key)) { pushAgain.add(key); return; }
-    pushingKeys.add(key);
-    try {
     const raw = localStorage.getItem(key);
     /* The copy this device and the server last agreed on — the base any
        merge below needs. */
@@ -311,11 +307,20 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     }
     /* Five straight refusals means genuinely live contention — the next
        write or realtime arrival picks it up from the newest stamp. */
-    } finally {
-      pushingKeys.delete(key);
-      if (pushAgain.delete(key) && !cancelled) schedulePush(key);
-    }
   }
+
+  /* A caller that requests an immediate save must wait for the exact current
+     write and any newer local edit made while that write was in flight. The
+     old implementation returned immediately when a push was already running,
+     then showed "saved and synced" even though the new value had not yet been
+     sent. */
+  const pushKey = createPushQueue(
+    async (key: SyncedKey) => {
+      if (cancelled || syncWritesPaused) throw new Error("Sync is currently unavailable.");
+      await pushKeyOnce(key);
+    },
+    (key: SyncedKey) => !cancelled && localStorage.getItem(key) !== lastKnown.get(key),
+  );
 
   function schedulePush(key: SyncedKey) {
     const existing = pushTimers.get(key);
@@ -648,10 +653,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   window.addEventListener("storage", onStorageWrite);
   /* Immediate-push hook for punch-critical writes: a clock event must not
      even wait out the write debounce. */
-  pushNowHook = (key: SyncedKey) => {
+  pushNowHook = async (key: SyncedKey) => {
     const existing = pushTimers.get(key);
     if (existing) clearTimeout(existing);
-    pushKey(key).catch(() => { /* retried by the next write or refresh */ });
+    pushTimers.delete(key);
+    await pushKey(key);
   };
   refreshNowHook = () => { void refreshFromServer("login or explicit revalidation"); };
 
@@ -675,9 +681,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
 /* Push a synced key RIGHT NOW, skipping the write debounce. Used by clock
    punches so persistence starts the instant the button is pressed; the
    localStorage write has already made the UI state correct either way. */
-let pushNowHook: ((key: SyncedKey) => void) | null = null;
+let pushNowHook: ((key: SyncedKey) => Promise<void>) | null = null;
 let refreshNowHook: (() => void) | null = null;
 export function refreshSharedStateNow() { refreshNowHook?.(); }
-export function pushSyncedKeyNow(key: SyncedKey) {
-  pushNowHook?.(key);
+export async function pushSyncedKeyNow(key: SyncedKey): Promise<boolean> {
+  if (!pushNowHook) return false;
+  await pushNowHook(key);
+  return true;
 }
