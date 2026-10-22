@@ -128,6 +128,11 @@ test("organization save waits for server confirmation before clearing the draft"
   assert.doesNotMatch(structure, /Changes saved and synced\./);
 });
 
+test("organization saves stamp a revision so reload can identify an unconfirmed chart edit", async () => {
+  const org = await readFile(new URL("../lib/org.ts", import.meta.url), "utf8");
+  assert.match(org, /blob\.orgRevision = Math\.max\(Date\.now\(\), previousRevision \+ 1\)/);
+});
+
 test("authorized structure editors can rename departments and teams without replacing the chart", async () => {
   const structure = await read("app/OrgStructure.tsx");
 

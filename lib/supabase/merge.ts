@@ -115,6 +115,18 @@ export function preserveLocalOrgOnBootstrap(remote: Json, local: Json): Json {
         || !Array.isArray(localOrg.departments)
         || !Array.isArray(localOrg.teams)) return remote;
     const remoteOrg = remote.org;
+    const localRevision = typeof local.orgRevision === "number" && Number.isFinite(local.orgRevision)
+        ? local.orgRevision
+        : null;
+    const remoteRevision = typeof remote.orgRevision === "number" && Number.isFinite(remote.orgRevision)
+        ? remote.orgRevision
+        : null;
+    /* A newer local revision wins regardless of whether the remote chart is
+       missing, empty, or simply older.  This is what lets an offline save and
+       a save made just before closing the browser survive the next startup. */
+    if (localRevision !== null && (remoteRevision === null || localRevision > remoteRevision)) {
+        return { ...remote, org: localOrg, orgRevision: localRevision };
+    }
     if (isPlainObject(remoteOrg)
         && Array.isArray(remoteOrg.departments)
         && Array.isArray(remoteOrg.teams)) return remote;

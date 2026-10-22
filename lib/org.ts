@@ -101,6 +101,15 @@ export function writeOrg(next: OrgChart): boolean {
   const blob = readBlob();
   if (!blob) return false;
   blob.org = next;
+  /* Keep a durable edit revision beside the chart.  The sync bootstrap uses
+     this to distinguish a locally saved change that is still waiting for the
+     server from an intentionally empty chart already confirmed by the server.
+     Date.now() is monotonic per browser save; the increment handles two
+     saves in the same millisecond. */
+  const previousRevision = typeof blob.orgRevision === "number" && Number.isFinite(blob.orgRevision)
+    ? blob.orgRevision
+    : 0;
+  blob.orgRevision = Math.max(Date.now(), previousRevision + 1);
   /* A structure edit is also an approval-routing event.  Seed or refresh the
      default route immediately, but leave every chain explicitly edited in
      Approval Flow untouched.  Keeping this beside the org write means new

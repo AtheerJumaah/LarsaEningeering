@@ -135,6 +135,12 @@ test("bootstrap does not replace an explicit empty server chart with an old loca
   assert.deepEqual(preserveLocalOrgOnBootstrap(remote, local), remote);
 });
 
+test("a newer local organization revision survives an explicit empty server snapshot", () => {
+  const local = { orgRevision: 12, org: { departments: [{ id: "new", name: "New", headIds: [] }], teams: [] } };
+  const remote = { orgRevision: 11, org: { departments: [], teams: [] } };
+  assert.deepEqual(preserveLocalOrgOnBootstrap(remote, local), local);
+});
+
 test("edits to different fields of the same record both survive", () => {
   const base = { users: [user("u1", { phone: "", department: "" })] };
   const local = { users: [user("u1", { phone: "0770", department: "" })] };
