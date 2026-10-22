@@ -98,6 +98,29 @@ export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule", "reporting"]);
 const ORG_DEPARTMENT_TOMBSTONES = "removedDepartmentIds";
 const ORG_TEAM_TOMBSTONES = "removedTeamIds";
 
+/* On a fresh browser load the server snapshot is normally authoritative. One
+   important exception is an organization chart that was saved locally while
+   the previous session was offline or before the sync client had finished
+   bootstrapping. The old bootstrap path replaced that local snapshot with
+   the server's older staff blob, so departments and teams appeared to vanish
+   after closing and reopening the app. Preserve only the chart in that case;
+   users, logs, approvals, and every other top-level collection remain server
+   authoritative. An explicit server chart (including an intentionally empty
+   chart) is never replaced.
+*/
+export function preserveLocalOrgOnBootstrap(remote: Json, local: Json): Json {
+    if (!isPlainObject(remote) || !isPlainObject(local)) return remote;
+    const localOrg = local.org;
+    if (!isPlainObject(localOrg)
+        || !Array.isArray(localOrg.departments)
+        || !Array.isArray(localOrg.teams)) return remote;
+    const remoteOrg = remote.org;
+    if (isPlainObject(remoteOrg)
+        && Array.isArray(remoteOrg.departments)
+        && Array.isArray(remoteOrg.teams)) return remote;
+    return { ...remote, org: localOrg };
+}
+
 type MergeContext = {
   /* collection key ("users" / "logs") -> union of tombstoned ids across
      base, local and remote. */

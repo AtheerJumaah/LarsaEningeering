@@ -35,7 +35,7 @@ execFileSync(process.execPath, [tsc, tsPath, "--module", "es2022", "--target", "
   cwd: fileURLToPath(new URL("..", import.meta.url)),
   stdio: "pipe",
 });
-const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped, protectOutgoing } = await import(pathToFileURL(join(dir, "merge.js")).href);
+const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped, protectOutgoing, preserveLocalOrgOnBootstrap } = await import(pathToFileURL(join(dir, "merge.js")).href);
 
 const user = (id, extra = {}) => ({ id, name: id.toUpperCase(), enabled: true, ...extra });
 
@@ -117,6 +117,22 @@ test("a stale structure snapshot cannot erase reporting assignments", () => {
   const local = { org: { departments: [], teams: [], reporting: {} } };
   assert.deepEqual(protectOutgoing(local, server).org.reporting, { u2: ["u1"] });
   assert.deepEqual(mergeValues(server, local, server).org.reporting, { u2: ["u1"] });
+});
+
+test("bootstrap preserves a locally saved chart when the server snapshot predates the structure edit", () => {
+  const dep = { id: "dep-a", name: "Architecture", headIds: [] };
+  const team = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };
+  const remote = { users: [{ id: "u1", name: "A" }], logs: [] };
+  const local = { ...remote, org: { departments: [dep], teams: [team] } };
+  const preserved = preserveLocalOrgOnBootstrap(remote, local);
+  assert.deepEqual(preserved.org, local.org);
+  assert.deepEqual(preserved.users, remote.users);
+});
+
+test("bootstrap does not replace an explicit empty server chart with an old local chart", () => {
+  const local = { org: { departments: [{ id: "old", name: "Old", headIds: [] }], teams: [] } };
+  const remote = { org: { departments: [], teams: [] } };
+  assert.deepEqual(preserveLocalOrgOnBootstrap(remote, local), remote);
 });
 
 test("edits to different fields of the same record both survive", () => {

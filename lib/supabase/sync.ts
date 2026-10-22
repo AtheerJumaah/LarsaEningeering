@@ -21,7 +21,7 @@
  * only, one browser at a time. Nothing about the app breaks either way. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "./client";
-import { mergeStoreText, protectOutgoing } from "./merge";
+import { mergeStoreText, preserveLocalOrgOnBootstrap, protectOutgoing } from "./merge";
 import { createPushQueue } from "./push-queue";
 
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
@@ -373,13 +373,27 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));        const remote = row?.data;
         const local = readLocal(key);
         if (hasContent(remote)) {
-          const text = JSON.stringify(remote);
+          /* Keep a locally saved organization chart when the server still has
+             the older staff blob without an org object. This is the reload
+             failure mode: the old bootstrap treated the server copy as
+             authoritative even when the only unsynced edit was the structure
+             itself, so closing the browser made departments and teams vanish.
+             The helper deliberately preserves only `org`; an explicit server
+             chart (even empty) remains authoritative. */
+          const bootstrapRemote = key === "larsaStaffV8"
+            ? preserveLocalOrgOnBootstrap(remote, local)
+            : remote;
+          const text = JSON.stringify(bootstrapRemote);
           const before = localStorage.getItem(key);
           let nextText = text;
-          if (before !== baseline && before) nextText = JSON.stringify(mergeStoreText(baseline, before, remote));
+          if (before !== baseline && before) nextText = JSON.stringify(mergeStoreText(baseline, before, bootstrapRemote));
           originalSetItem(key, nextText);
-          lastKnown.set(key, text);
-          if (nextText !== text) schedulePush(key);
+          /* lastKnown must describe the actual server response, not the
+             locally augmented bootstrap value, so the preserved chart is
+             pushed back instead of being mistaken for an already-confirmed
+             server snapshot. */
+          lastKnown.set(key, JSON.stringify(remote));
+          if (nextText !== JSON.stringify(remote)) schedulePush(key);
           if (nextText !== before) caughtUpKeys.push(key);
           console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
         } else if (hasContent(local)) {
