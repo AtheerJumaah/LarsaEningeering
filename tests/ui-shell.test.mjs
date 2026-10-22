@@ -345,11 +345,18 @@ test("administration switches mount one current panel and never expose a pre-hyd
   // The app used to keep every admin screen mounted and only hide it with CSS.
   // A hidden screen could still run effects and briefly paint during a tab
   // change. NativePanel makes the selected screen the only mounted one.
-  for (const view of ["admin", "access", "notifications", "data", "corrections", "platformSettings"]) {
+  for (const view of [
+    "overview", "admin", "access", "notifications", "data", "quickClock", "requests",
+    "approvalFlow", "corrections", "orgStructure", "platformSettings", "presence", "settings",
+    "accountingHub", "weekSchedule", "myPoints", "performance", "development", "performanceHistory",
+    "salesCommissions", "payrollPortal", "myPay", "constructionFinancials", "projects",
+  ]) {
     assert.match(page, new RegExp(`NativePanel active=\\{active\\.native\\} view=\\"${view}\\"`), `${view} must use the exclusive panel boundary`);
   }
   assert.match(page, /function NativePanel\(/);
   assert.match(page, /if \(active !== view\) return null;/);
+  assert.doesNotMatch(page, /className=\{active\.native ===/,
+    "native pages must not stay mounted behind CSS while another page is active");
   // The base stylesheet hides the server/old shell until the first client
   // layout pass marks the current tree ready.
   assert.match(globals, /html:not\(\[data-larsa-ready\]\) \.unified-app \{ visibility: hidden; \}/);

@@ -31,7 +31,7 @@ test("My Pay lives inside the existing shell, not beside it", () => {
   // Registered where every other item is registered, so navigation, deep
   // links and the permission editor all see it.
   assert.match(page, /PRESENCE_ITEM, MY_PAY_ITEM(?:, PAYROLL_PORTAL_ITEM)?\]/);
-  assert.match(page, /active\.native === "myPay" \? "native active" : "native"/);
+  assert.match(page, /<NativePanel active=\{active\.native\} view="myPay">/);
   assert.match(page, /<MyPay viewer=\{sessionUser\} active=\{active\.native === "myPay"\} \/>/);
   // It uses the shell's own header, sidebar and theme: no second shell.
   assert.ok(!/MyPay[\s\S]{0,4000}?signOut|MyPay[\s\S]{0,4000}?setDark\(/.test(page)
@@ -265,7 +265,7 @@ test("Payroll & People is one portal over the same records", () => {
   assert.match(page, /const PAYROLL_PORTAL_ITEM: Item = \{/);
   assert.match(page, /id: "payroll-portal"/);
   assert.match(page, /labelAr: "الرواتب والموظفون"/);
-  assert.match(page, /active\.native === "payrollPortal" \? "native active" : "native"/);
+  assert.match(page, /<NativePanel active=\{active\.native\} view="payrollPortal">/);
   assert.match(page, /if \(item\.id === "sales-commissions" \|\| item\.id === "payroll-portal"\) return "accounting";/);
   // It leads the Payroll & People group; the older entries stay reachable.
   assert.match(page, /items: \["payroll-portal", "my-pay", "acc-payroll", "sales-commissions", "acc-employees", "acc-refs"\]/);

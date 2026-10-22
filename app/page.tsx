@@ -10748,9 +10748,9 @@ export default function Home() {
         </header>
 
         <section className="workspace">
-          <div className={active.native === "overview" ? "native active" : "native"}>
+          <NativePanel active={active.native} view="overview">
             <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
-          </div>
+          </NativePanel>
           <NativePanel active={active.native} view="admin">
             <AdminCenter choose={choose} user={sessionUser} />
           </NativePanel>
@@ -10797,7 +10797,7 @@ export default function Home() {
               runCheck={runSystemCheck}
             />
           </NativePanel>
-          <div className={active.native === "quickClock" ? "native active" : "native"}>
+          <NativePanel active={active.native} view="quickClock">
             <QuickClock
               user={sessionUser}
               sessions={clockSessions}
@@ -10816,8 +10816,8 @@ export default function Home() {
               development={myDevelopment}
               store={staffStore}
             />
-          </div>
-          <div className={active.native === "requests" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="requests">
             <RequestsCentre
               viewer={sessionUser}
               users={accessUsers}
@@ -10825,15 +10825,15 @@ export default function Home() {
               submit={submitRequest}
               decide={decideRequest}
             />
-          </div>
-          <div className={active.native === "approvalFlow" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="approvalFlow">
             <ApprovalFlowCentre
               viewer={sessionUser}
               users={accessUsers}
               store={staffStore}
               save={saveApprovalFlow}
             />
-          </div>
+          </NativePanel>
           <NativePanel active={active.native} view="corrections">
             <CorrectionsCentre
               viewer={sessionUser}
@@ -10848,12 +10848,12 @@ export default function Home() {
               removeSession={removeClockSession}
             />
           </NativePanel>
-          <div className={active.native === "orgStructure" ? "native active" : "native"}>
+          <NativePanel active={active.native} view="orgStructure">
             <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
-          </div><NativePanel active={active.native} view="platformSettings"><PlatformSettings viewer={sessionUser} users={accessUsers} /></NativePanel><div className={active.native === "presence" ? "native active" : "native"}>
+          </NativePanel><NativePanel active={active.native} view="platformSettings"><PlatformSettings viewer={sessionUser} users={accessUsers} /></NativePanel><NativePanel active={active.native} view="presence">
             <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
-          </div>
-          <div className={active.native === "settings" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="settings">
             <MySettings
               user={sessionUser}
               unread={unreadCount}
@@ -10864,11 +10864,11 @@ export default function Home() {
               sendCode={sendVerificationCode}
               checkCode={checkEmailCode}
             />
-          </div>
-          <div className={active.native === "accountingHub" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="accountingHub">
             <AccountingHub user={sessionUser} method={sessionMethod} choose={choose} />
-          </div>
-          <div className={active.native === "weekSchedule" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="weekSchedule">
             <WeekSchedule
               viewer={sessionUser}
               users={accessUsers}
@@ -10888,11 +10888,11 @@ export default function Home() {
                 return item && hasItemPermission(sessionUser, item, "edit");
               })())}
             />
-          </div>
-          <div className={active.native === "myPoints" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="myPoints">
             <MyPoints user={sessionUser} save={saveMyPoints} store={staffStore} />
-          </div>
-          <div className={active.native === "performance" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="performance">
             <PerformanceCenter
               viewer={sessionUser}
               users={accessUsers}
@@ -10904,8 +10904,8 @@ export default function Home() {
               setLock={setWeekLock}
               openWorkboard={() => choose(ITEMS.find((item) => item.id === "staff-performance")!, "performance")}
             />
-          </div>
-          <div className={active.native === "development" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="development">
             <DevelopmentPortal
               viewer={sessionUser}
               users={accessUsers}
@@ -10915,33 +10915,33 @@ export default function Home() {
               reviewRecord={reviewDevelopment}
               deleteRecord={deleteDevelopment}
             />
-          </div>
-          <div className={active.native === "performanceHistory" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="performanceHistory">
             <PerformanceHistory
               viewer={sessionUser}
               users={accessUsers}
               records={staffFormalRecords}
               saveRecord={saveFormalRecord}
             />
-          </div>
-          <div className={active.native === "salesCommissions" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="salesCommissions">
             <SalesCommissions
               viewer={sessionUser}
               users={accessUsers}
               commissions={accountingSnapshot.commissions}
               payroll={accountingSnapshot.payroll}
             />
-          </div>
-          <div className={active.native === "payrollPortal" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="payrollPortal">
             <PayrollPortal viewer={sessionUser} active={active.native === "payrollPortal"} />
-          </div>
-          <div className={active.native === "myPay" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="myPay">
             <MyPay viewer={sessionUser} active={active.native === "myPay"} />
-          </div>
-          <div className={active.native === "constructionFinancials" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="constructionFinancials">
             <ConstructionFinancials snapshot={accountingSnapshot} viewer={sessionUser} />
-          </div>
-          <div className={active.native === "projects" ? "native active" : "native"}>
+          </NativePanel>
+          <NativePanel active={active.native} view="projects">
             <ProjectPortal
               viewer={sessionUser}
               projects={accountingSnapshot.projects}
@@ -10950,7 +10950,7 @@ export default function Home() {
               staff={accessUsers}
               notify={notify}
             />
-          </div>
+          </NativePanel>
           {(["staff", "hr", "accounting"] as Engine[]).map((engine) => loadedEngines.has(engine) ? (
             <iframe
               key={engine}
@@ -11536,11 +11536,12 @@ function Overview({
   );
 }
 
-/* Native administration screens are mutually exclusive. Keeping every one
-   mounted and relying on `display:none` made hidden screens continue to run
-   effects and compete for the first paint when a tab changed. The panel
-   boundary makes the active screen the only screen that exists in the
-   workspace, so a tab switch cannot reveal stale markup from another area. */
+/* Native screens are mutually exclusive. Keeping every one mounted and
+   relying on `display:none` made hidden screens continue to run effects and
+   retain large data-heavy trees, eventually exhausting the browser process.
+   The panel boundary makes the active screen the only screen that exists in
+   the workspace, so a tab switch cannot reveal stale markup or accumulate
+   another hidden page. */
 function NativePanel({
   active,
   view,
