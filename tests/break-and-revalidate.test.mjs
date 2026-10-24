@@ -84,6 +84,14 @@ test("a tab left open revalidates on a timer, not only on an edge", () => {
   assert.match(sync, /window\.addEventListener\("online", onOnline\);/);
 });
 
+test("a healthy attendance probe does not start another full ledger reconcile", () => {
+  /* The watchdog reports `synced` on every successful stamp check. Re-running
+     the ledger/account recovery reads from that callback made the renderer
+     fall behind after a few seconds and froze the visible shift timer. */
+  assert.match(page, /const alreadyHealthy = attendanceConnectionRef\.current === "online"\s*\n\s*&& authoritativeStateReadyRef\.current;/);
+  assert.match(page, /setAuthoritativeState\(true\);\s*\n\s*if \(alreadyHealthy\) return;/);
+});
+
 test("a refresh that finds nothing changed does not pull the 840 KB blob", () => {
   // Stamps first: a few dozen bytes, no `data` column.
   assert.match(sync, /\.select\("store_key, updated_at"\)/);

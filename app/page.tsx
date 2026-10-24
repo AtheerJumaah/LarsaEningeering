@@ -4969,8 +4969,23 @@ export default function Home() {
           return;
         }
         if (status !== "synced") return;
+        /* `refreshFromServer` reports `synced` for every successful stamp
+           probe. Attendance has a lightweight watchdog, so that callback can
+           run once a second while somebody is looking at the clock. The
+           recovery reads below are intentionally expensive (they page the
+           attendance ledger and staff-account table and parse the full staff
+           blob). Re-running them on every healthy probe was the renderer
+           freeze root cause: after a few seconds the work piled up faster
+           than the browser could paint, leaving the shift timer stuck at the
+           last rendered second. Run the recovery/auth warm-up only when the
+           connection actually transitions into a healthy state; realtime,
+           the normal store refresh, and the next reconnect still handle new
+           data without making the one-second status tick a full reconcile. */
+        const alreadyHealthy = attendanceConnectionRef.current === "online"
+          && authoritativeStateReadyRef.current;
         setAttendanceConnectionState("online");
         setAuthoritativeState(true);
+        if (alreadyHealthy) return;
         /* The sync bootstrap has just established/reused the Supabase session.
            Warm the punch module's auth cache before the employee presses
            Clock In/Out, so the first deliberate action does not pay the
