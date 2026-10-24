@@ -37,6 +37,12 @@
             .replace(/function v30OtherStatus\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OtherStatus(uid){\n")
             .replace(/function v30OnBreak\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OnBreak(uid){\n")
             .replace(/function v30ClockedIn\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30ClockedIn(uid){\n")
+            /* Clock punches are committed to the server first. The parent
+               stores only a small paint-ahead overlay locally so the visible
+               Clock page can update immediately without serializing the full
+               staff document. Merge those events after the normal store read;
+               the event id makes this idempotent when the server sync arrives. */
+            .replace(/function freshState\(\)\{var real=readStore\(\);if\(real&&Array\.isArray\(real\.users\)&&real\.users\.length\)\{state=real;try\{window\.state=real\}catch\(e\)\{\}\}return state\}/, () => `function applyAttendanceOverlay(){try{var raw=localStorage.getItem('larsaAttendanceOverlayV1'),items=raw?JSON.parse(raw):[];if(!Array.isArray(items)||!items.length||!state||!Array.isArray(state.logs))return;items.slice(-100).forEach(function(e){if(!e||!e.id||!e.uid||!e.status||!e.time)return;if(!state.logs.some(function(l){return String(l.id||'')===String(e.id)}))state.logs.push({id:e.id,uid:e.uid,type:e.type||'Office',status:e.status,time:e.time,note:e.note,clockedBy:e.clockedBy,lastSeen:e.lastSeen||e.time,active:false});});items.slice(-100).forEach(function(e){if(!e||!e.uid)return;state.logs.forEach(function(l){if(l.uid===e.uid&&(l.status==='In'||l.status==='Out'))l.active=false;});var latest=state.logs.filter(function(l){return l.uid===e.uid&&(l.status==='In'||l.status==='Out')}).sort(function(a,b){return new Date(b.time)-new Date(a.time)})[0];if(latest&&latest.status==='In')latest.active=true;});try{window.state=state}catch(e){}}catch(e){}}function freshState(){var real=readStore();if(real&&Array.isArray(real.users)&&real.users.length){state=real;try{window.state=real}catch(e){}}applyAttendanceOverlay();return state}`)
             /* These legacy timers repeatedly remove and rebuild the entire
                Clock content.  They were the source of the browser's main
                thread stalls and could cover the newly available Clock Out

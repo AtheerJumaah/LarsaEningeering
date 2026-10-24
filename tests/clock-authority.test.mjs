@@ -51,13 +51,11 @@ test("the selected punch repaints immediately while the server save is pending",
     "the durable pending queue must repaint before the network RPC completes");
 });
 
-test("the server response repairs local active flags and persists the record", () => {
+test("the server response persists a small local overlay without rewriting the full staff blob", () => {
   assert.match(punch, /const eventId = result\.eventId \|\| event\.client_event_id;/);
-  assert.match(punch, /if \(latestShift\?\.status === "In"\) latestShift\.active = true;/);
-  assert.match(punch, /setLarsaSyncWritesPaused\(true\);/);
-  assert.match(punch, /localStorage\.setItem\("larsaStaffV8", JSON\.stringify\(store\)\);/);
-  const punchLocalSave = punch.slice(punch.indexOf("setLarsaSyncWritesPaused(true)"), punch.indexOf("refreshStaffEngine();", punch.indexOf("setLarsaSyncWritesPaused(true)")));
-  assert.doesNotMatch(punchLocalSave, /pushSyncedKeyNow\("larsaStaffV8"\);/, "a punch must not upload the large compatibility blob");
+  assert.match(punch, /const overlayKey = "larsaAttendanceOverlayV1";/);
+  assert.match(punch, /localStorage\.setItem\(overlayKey, JSON\.stringify\(next\.slice\(-100\)\)\);/);
+  assert.doesNotMatch(punch, /localStorage\.setItem\("larsaStaffV8", JSON\.stringify\(store\)\);/, "a punch must not rewrite the full compatibility blob");
   assert.match(punch, /result\.workMode/);
 });
 

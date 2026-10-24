@@ -7557,7 +7557,8 @@ export default function Home() {
       if (!frame || !frame.classList.contains("active")) return;
       try {
         frame.contentWindow?.eval(`
-          state=JSON.parse(localStorage.getItem("larsaStaffV8"));
+          if(typeof freshState==="function")freshState();
+          else state=JSON.parse(localStorage.getItem("larsaStaffV8"));
           /* Clock punches only need the clock surface. Rebuilding the whole
              legacy shell (nav, actions, and every page enhancer) on every
              successful punch was the expensive part that accumulated after
@@ -7900,54 +7901,35 @@ export default function Home() {
       pending.splice(0, pending.length, ...remaining);
       if (!writeAttendanceQueue(queueKey, pending)) clearAttendanceQueue(queueKey);
 
-      /* The transaction response is the authoritative state. Add its exact
-         ledger event to the local view only once, then repair all old active
-         flags so a stale In cannot keep someone clocked in after an Out. */
+      /* The transaction response is the authoritative state. Keep the
+         immediate browser view in a tiny attendance overlay rather than
+         rewriting the full larsaStaffV8 document on every punch. The server
+         ledger is durable; the overlay is only a fast local paint-ahead layer
+         that the engine merges until the normal sync brings the full store up
+         to date. This keeps Clock In/Out responsive even with a large roster
+         and prevents a synchronous JSON stringify from blocking the browser. */
       try {
-        const store = parseStore("larsaStaffV8") as {
-          logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string }[];
-        } | null;
-        if (!store) {
-          localRefreshFailed = true;
-        } else {
-          if (!Array.isArray(store.logs)) store.logs = [];
-          const eventId = result.eventId || event.client_event_id;
-          markAttendanceEventSent(eventId);
-          let log = store.logs.find((item) => String(item.id || "") === eventId);
-          if (!log) {
-            log = {
-              id: eventId, uid: user.id, type: result.workMode || event.work_mode || "Office",
-              status: result.status, time: result.at,
-              ...(result.note || event.note ? { note: result.note || event.note || undefined } : {}),
-              ...(result.clockedBy || event.clocked_by ? { clockedBy: result.clockedBy || event.clocked_by || undefined } : {}),
-              lastSeen: result.at, touchedAt: result.at, active: false,
-            };
-            store.logs.push(log);
-          }
-          store.logs.forEach((item) => {
-            if (item.uid === user.id && (item.status === "In" || item.status === "Out")) item.active = false;
-          });
-          const latestShift = store.logs.filter(item => item.uid === user.id && (item.status === "In" || item.status === "Out"))
-            .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
-          if (latestShift?.status === "In") latestShift.active = true;
-          /* The attendance_events ledger is the authoritative, low-latency
-             cross-device path.  Do not immediately upload the ~400 KB legacy
-             staff document after every employee punch: that write takes the
-             app_state row lock, expands the correction overlay, and can delay
-             both the next punch and the realtime echo by seconds.  Keep this
-             local compatibility view in sync, but suppress only this one
-             automatic blob write; the ledger is durable and reconciliation
-             restores the view on the next refresh/open. */
-          setLarsaSyncWritesPaused(true);
-          try {
-            localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-          } finally {
-            setLarsaSyncWritesPaused(false);
-          }
-        }
+        const eventId = result.eventId || event.client_event_id;
+        markAttendanceEventSent(eventId);
+        const overlayKey = "larsaAttendanceOverlayV1";
+        const rawOverlay = localStorage.getItem(overlayKey);
+        const existingOverlay = rawOverlay ? JSON.parse(rawOverlay) : [];
+        const overlay = Array.isArray(existingOverlay) ? existingOverlay : [];
+        const next = overlay.filter((item) => String(item?.id || "") !== eventId);
+        next.push({
+          id: eventId,
+          uid: user.id,
+          type: result.workMode || event.work_mode || "Office",
+          status: result.status,
+          time: result.at,
+          note: result.note || event.note || undefined,
+          clockedBy: result.clockedBy || event.clocked_by || undefined,
+          lastSeen: result.at,
+        });
+        localStorage.setItem(overlayKey, JSON.stringify(next.slice(-100)));
       } catch {
         /* The database commit must not be reported as a failed punch because
-           this browser could not update its cache. */
+           this browser could not update its small paint-ahead overlay. */
         localRefreshFailed = true;
       }
       try { refreshStaffEngine(); }

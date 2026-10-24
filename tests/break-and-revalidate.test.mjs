@@ -79,8 +79,8 @@ test("the engine re-reads before it decides a break, and hands it over", () => {
 
 test("a tab left open revalidates on a timer, not only on an edge", () => {
   assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate", NON_ATTENDANCE_KEYS\);\s*\n\s*\}, 3_000\);/);
-  assert.match(sync, /const attendanceRevalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("attendance periodic revalidate", \["larsaStaffV8"\]\);\s*\n\s*\}, 1_000\);/);
-  assert.match(sync, /attendance-only probe runs\s+every second/);
+  assert.match(sync, /const attendanceRevalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("attendance periodic revalidate", \["larsaStaffV8"\]\);\s*\n\s*\}, 5_000\);/);
+  assert.match(sync, /attendance-only probe runs\s+every five seconds/);
   assert.match(sync, /async function refreshFromServer\(reason: string, requestedKeys: readonly SyncedKey\[\] = SYNCED_KEYS\)/);
   assert.match(sync, /\.in\("store_key", keys as readonly string\[\]\)/);
   assert.match(sync, /clearInterval\(revalidateTimer\);/);
@@ -131,6 +131,13 @@ test("legacy Clock-page decoration cannot rebuild the page every four seconds", 
   assert.match(raw, /if \(delay === 4000\)/);
   assert.match(raw, /source\.includes\("v30Inject"\) \|\| source\.includes\("v31Relabel"\)/);
   assert.match(raw, /Re-parsing the full staff blob here made each punch pay/);
+});
+
+test("the clock paints a committed punch from a bounded local overlay", () => {
+  assert.match(raw, /larsaAttendanceOverlayV1/);
+  assert.match(raw, /function applyAttendanceOverlay\(\)/);
+  assert.match(raw, /function freshState\(\).*?applyAttendanceOverlay\(\);return state/s);
+  assert.match(page, /if\(typeof freshState===\"function\"\)freshState\(\);/);
 });
 
 test("a refresh that finds nothing changed does not pull the 840 KB blob", () => {

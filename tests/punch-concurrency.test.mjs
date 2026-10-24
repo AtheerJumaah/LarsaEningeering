@@ -105,7 +105,7 @@ test("a confirmed server punch cannot be turned into a repeat press by a cache w
   const serverConfirmed = writer.indexOf("lastOutcome = result.outcome;");
   const consumeQueue = writer.indexOf("pending.splice", serverConfirmed);
   const saveQueue = writer.indexOf('writeAttendanceQueue(queueKey, pending)', consumeQueue);
-  const refreshCache = writer.indexOf('localStorage.setItem("larsaStaffV8", JSON.stringify(store))', saveQueue);
+  const refreshCache = writer.indexOf('localStorage.setItem(overlayKey, JSON.stringify(next.slice(-100)))', saveQueue);
   assert.ok(serverConfirmed >= 0 && consumeQueue > serverConfirmed && saveQueue > consumeQueue,
     "remove a server-confirmed request from the pending queue first");
   assert.ok(refreshCache > saveQueue, "the local cache is updated after the queue is consumed");

@@ -17,7 +17,7 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
     readAttendanceQueue:key=>JSON.parse(data.get(key)||'null'),
     writeAttendanceQueue:(key,pending)=>{data.set(key,JSON.stringify(pending));return true;},
     clearAttendanceQueue:key=>data.delete(key),
-    localStorage:{setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
+    localStorage:{getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
     confirmClockState:async(...args)=>{confirmCalls.push(args);return confirmation;},
     notify(){},pushSyncedKeyNow(){},setLarsaSyncWritesPaused(){},refreshStaffEngine(){},repaintAttendance(){},setStorageTick(){},markAttendanceEventSent(){},
     recordAttendancePunch:async event=>{
@@ -41,7 +41,7 @@ for(const review of [false,true])test(`a deliberate Out during an in-flight save
   assert.equal(w.events[1].client_event_id,original.client_event_id);
   assert.equal(w.events[1].occurred_at,original.occurred_at);
   assert.equal(JSON.parse(w.data.get('queue:e')).length,0);
-  assert.equal(JSON.parse(w.data.get('larsaStaffV8')).logs.at(-1).status,'Out');
+  assert.equal(JSON.parse(w.data.get('larsaAttendanceOverlayV1')).at(-1).status,'Out');
   if(review)assert.equal(JSON.parse(w.data.get('larsaAttendancePunchReviewV1:e')).length,1);
 });
 

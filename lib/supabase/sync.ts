@@ -758,14 +758,15 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      safety net for phones/browsers whose websocket is delayed or unavailable.
      The general probe only selects store_key + updated_at (never the ~840 KB
      staff blob when nothing changed), while the attendance-only probe runs
-     every second so a cross-device clock status normally converges in about a
-     second without polling every shared store at that rate. */
+     every five seconds. Realtime remains the fast path; this fallback is
+     deliberately slower so it cannot compete with a punch for the browser's
+     main thread or the database connection. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate", NON_ATTENDANCE_KEYS);
   }, 3_000);
   const attendanceRevalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
-  }, 1_000);
+  }, 5_000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
