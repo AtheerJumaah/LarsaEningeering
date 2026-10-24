@@ -4940,21 +4940,32 @@ export default function Home() {
           if (nowText === remoteRefreshLastText.current[key]) return;
           remoteRefreshLastText.current[key] = nowText;
           /* The active staff iframe already owns the clock/attendance view.
-             Do not make the parent parse the full staff blob in the middle of
-             a punch or timer tick. The next native screen consumes this
-             pending refresh before it renders. */
-          if (key === "larsaStaffV8" && activeRef.current.engine === "staff") {
+             Do not make either the parent OR the iframe parse the full staff
+             blob in the middle of a punch or watchdog tick. The next native
+             screen consumes this pending refresh before it renders. */
+          const activeStaff = key === "larsaStaffV8" && activeRef.current.engine === "staff";
+          if (activeStaff) {
             staffStoreDirtyRef.current = true;
           } else {
             queueStorageRefresh();
           }
           try {
             if (key === "larsaStaffV8") {
-              staffRef.current?.contentWindow?.eval(`
-                state=JSON.parse(localStorage.getItem("larsaStaffV8"))||state;
-                if(currentUser)currentUser=state.users.find(function(user){return user.id===currentUser.id})||currentUser;
-                if(typeof render==="function"&&currentUser)render();
-              `);
+              if (activeStaff) {
+                /* The clock screen has a tiny event overlay and a focused
+                   repaint path. Applying it avoids the ~840 KB JSON parse;
+                   other staff pages still take the full refresh path below. */
+                staffRef.current?.contentWindow?.eval(`
+                  if(typeof applyAttendanceOverlay==="function")applyAttendanceOverlay();
+                  if(typeof activePage!=="undefined"&&activePage==='clock'&&typeof renderClock==="function")renderClock();
+                `);
+              } else {
+                staffRef.current?.contentWindow?.eval(`
+                  state=JSON.parse(localStorage.getItem("larsaStaffV8"))||state;
+                  if(currentUser)currentUser=state.users.find(function(user){return user.id===currentUser.id})||currentUser;
+                  if(typeof render==="function"&&currentUser)render();
+                `);
+              }
             } else if (key === "larsa_hr_visual_counts_v5") {
               hrRef.current?.contentWindow?.eval(`
                 if(typeof loadState==="function"){state=loadState();if(typeof render==="function")render();}

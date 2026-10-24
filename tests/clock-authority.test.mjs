@@ -91,6 +91,8 @@ test("staff iframe refresh work skips hidden engines and removes legacy rebuild 
   assert.match(page, /if\(typeof applyAttendanceOverlay==="function"\)applyAttendanceOverlay\(\);[\s\S]*else if\(typeof freshState==="function"\)freshState\(\);/);
   assert.match(page, /staffStoreDirtyRef = useRef\(false\)/);
   assert.match(page, /event\.key === "larsaStaffV8" && activeRef\.current\.engine === "staff"/);
+  assert.match(page, /const activeStaff = key === "larsaStaffV8" && activeRef\.current\.engine === "staff"/);
+  assert.match(page, /if\(typeof applyAttendanceOverlay==="function"\)applyAttendanceOverlay\(\);[\s\S]*activePage==='clock'[\s\S]*renderClock/);
   assert.match(engine, /source\.includes\("v30Inject"\)/);
   assert.match(engine, /window\.__v30Poll=0/);
   assert.match(engine, /replace\(\/setInterval\\\(v31Relabel, 4000\\\);\//);
