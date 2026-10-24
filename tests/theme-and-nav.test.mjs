@@ -86,7 +86,7 @@ test("clocking yourself in and out is server-gated and deduplicated by the serve
   assert.match(page, /const punchClock = useCallback/);
   assert.match(page, /const punchBreak = useCallback/);
   const button = page.slice(page.indexOf('className={`clock-punch'), page.indexOf('</button>', page.indexOf('className={`clock-punch')));
-  assert.match(button, /disabled=\{!punchAvailable \|\| punching \|\| Boolean\(pendingStatus\)\}/);
+  assert.match(button, /disabled=\{!punchAvailable \|\| punching\}/);
   assert.doesNotMatch(button, /clockReady/);
   assert.match(page, /await recordAttendancePunch\(event\)/);
 });

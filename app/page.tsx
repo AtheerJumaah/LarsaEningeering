@@ -7541,8 +7541,14 @@ export default function Home() {
      immediately after. */
   const refreshStaffEngine = useCallback(() => {
     window.setTimeout(() => {
+      /* The legacy staff engine is mounted on demand.  Do not ask a hidden
+         iframe to parse the full staff document and render while the user is
+         on the native clock: that synchronous work can block the shell just
+         after a punch and make the visible Clock Out control appear frozen. */
+      const frame = staffRef.current;
+      if (!frame || !frame.classList.contains("active")) return;
       try {
-        staffRef.current?.contentWindow?.eval(`
+        frame.contentWindow?.eval(`
           state=JSON.parse(localStorage.getItem("larsaStaffV8"));
           if(typeof render==="function"&&currentUser)render();
         `);
@@ -19293,7 +19299,12 @@ function QuickClock({
         <button
           type="button"
           className={`clock-punch ${clockedIn ? "out" : `in tone-${modeTone(mode)}`}`}
-          disabled={!punchAvailable || punching || Boolean(pendingStatus)}
+          /* A pending Clock In/Out is already durable locally.  The opposite
+             action is intentionally allowed here: punchClock serializes it
+             behind the first event, preserving both original timestamps and
+             idempotency.  Blocking on pendingStatus stranded users on Clock
+             In whenever the server confirmation was slow or unavailable. */
+          disabled={!punchAvailable || punching}
           onClick={async () => {
             if (punching) return;
             setPunching(true);

@@ -36,7 +36,16 @@
             .replace(/function v30OtherStatus\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OtherStatus(uid){\n")
             .replace(/function v30OnBreak\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OnBreak(uid){\n")
             .replace(/function v30ClockedIn\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30ClockedIn(uid){\n")
-            .replace(/function v30Inject\(\)\{\n\s*try\{\n/, "function v30Inject(){\n  try{\n    if(typeof freshState==='function')freshState();\n");
+            .replace(/function v30Inject\(\)\{\n\s*try\{\n/, "function v30Inject(){\n  try{\n    if(typeof freshState==='function')freshState();\n")
+            /* These legacy timers repeatedly remove and rebuild the entire
+               Clock content.  They were the source of the browser's main
+               thread stalls and could cover the newly available Clock Out
+               button with a stale render.  Render wrappers and explicit
+               state changes already call v30Inject/v31Relabel, so no poll is
+               needed.  Replace the packed template source before parsing so
+               the timers never get created. */
+            .replace(/if\(!window\.__v30Poll\)\{\\n\s*window\.__v30Poll = setInterval\(\(\)=>\{ if\(currentUser && activePage==='clock'\) v30Inject\(\); \}, 4000\);\\n\}/, "window.__v30Poll=0;")
+            .replace(/setInterval\(v31Relabel, 4000\);/, "");
         }
         const doc = nativeParse.call(this, source, type, ...rest);
         if (type === "text/html" && typeof source === "string" && source.includes("v30Inject")) {

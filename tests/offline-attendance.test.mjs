@@ -18,7 +18,7 @@ test("attendance exposes an explicit connection state and browser online/offline
 test("offline or uncertain connections cannot create a new server punch", () => {
   assert.match(page, /connectionState !== "online"/);
   assert.match(page, /Attendance is view-only until the connection is restored/);
-  assert.match(page, /disabled=\{!punchAvailable \|\| punching \|\| Boolean\(pendingStatus\)\}/);
+  assert.match(page, /disabled=\{!punchAvailable \|\| punching\}/);
   assert.match(page, /disabled=\{clockedIn \|\| !punchAvailable\}/);
   assert.match(page, /disabled=\{!punchAvailable \|\| Boolean\(pendingStatus\)\}/);
 });
