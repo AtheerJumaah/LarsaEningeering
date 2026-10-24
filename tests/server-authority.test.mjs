@@ -5,14 +5,26 @@ import { readFile } from "node:fs/promises";
 const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const sync = await readFile(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
 
-test("shared company state waits for the authoritative server roster before restoring a session", () => {
+test("shared company state restores sessions only after the authoritative roster is ready", () => {
   assert.match(page, /authoritativeStateReady/);
   assert.match(page, /Do not restore an employee identity from sessionStorage while an online/);
-  assert.match(page, /Connecting securely…/);
-  assert.match(page, /The secure connection is taking longer than usual/);
-  assert.match(page, /const deadline = Date\.now\(\) \+ 12000/);
-  assert.match(page, /while \(currentConnection\(\) !== "online"/);
+  assert.match(page, /let users = readStaffUsers\(\)/);
+  assert.match(page, /const deadline = Date\.now\(\) \+ 7000/);
+  assert.match(page, /while \(!users\.length && Date\.now\(\) < deadline\)/);
+  assert.doesNotMatch(page, /Connecting securely…/);
+  assert.doesNotMatch(page, /while \(currentConnection\(\) !== "online"/);
   assert.match(page, /Syncing your workspace…/);
+});
+
+test("engine navigation tolerates slow first paints without blocking the login thread", () => {
+  assert.match(page, /maxAttempts = 100, intervalMs = 100/);
+  assert.match(page, /if \(tries >= maxAttempts\)/);
+});
+
+test("optional verification calls have a bounded timeout", async () => {
+  const verification = await readFile(new URL("../lib/verification.ts", import.meta.url), "utf8");
+  assert.match(verification, /Promise\.race\(\[/);
+  assert.match(verification, /const timeout = 4500/);
 });
 
 test("the performance store is included in shared server state", () => {

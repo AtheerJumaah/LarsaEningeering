@@ -1426,6 +1426,23 @@ function parseStore(key: string) {
     return null;
   }
 }
+/* Network-backed sign-in helpers must never leave a form in a permanent
+   "working" state. The Supabase client rejects ordinary failures, but a
+   sleeping device or a stalled edge request can leave the promise pending;
+   race those calls against a small, explicit deadline. */
+async function withRequestDeadline<T>(request: Promise<T>, timeoutMs = 8000): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 function attendancePunchQueueKey(uid: string) {
   return `larsaAttendancePunchQueueV1:${uid}`;
 }
@@ -6476,7 +6493,9 @@ export default function Home() {
   const sendVerificationCode = useCallback(async (email: string) => {
     const client = getSupabaseClient();
     if (!client) return "Verification is unavailable right now.";
-    const { data: sent } = await client.functions.invoke("auth-code", { body: { op: "send", email, purpose: "verify" } }); const error = sent && sent.ok ? null : { message: (sent && sent.error) || "Could not send a verification code." };
+    const response = await withRequestDeadline(client.functions.invoke("auth-code", { body: { op: "send", email, purpose: "verify" } }));
+    const sent = response?.data as { ok?: boolean; error?: string } | null | undefined;
+    const error = sent && sent.ok ? null : { message: sent?.error || (response === null ? "The verification service timed out." : "Could not send a verification code.") };
     if (!error) return "";
     /* The default Supabase sender allows only a couple of emails an hour and
        the ceiling cannot be raised -- it lifts once a real SMTP provider is
@@ -6494,7 +6513,9 @@ export default function Home() {
   const checkEmailCode = useCallback(async (email: string, code: string) => {
     const client = getSupabaseClient();
     if (!client) return "Verification is unavailable right now.";
-    const { data: checked } = await client.functions.invoke("auth-code", { body: { op: "verify", email, purpose: "verify", code: code.trim() } }); const error = checked && checked.ok ? null : { message: (checked && checked.error) || "That code was not accepted." };
+    const response = await withRequestDeadline(client.functions.invoke("auth-code", { body: { op: "verify", email, purpose: "verify", code: code.trim() } }));
+    const checked = response?.data as { ok?: boolean } | null | undefined;
+    const error = checked && checked.ok ? null : { message: "That code was not accepted." };
     return error ? "That code was not accepted. Check it and try again." : "";
   }, []);
 
@@ -6506,7 +6527,9 @@ export default function Home() {
     setVerifyError("");
     const client = getSupabaseClient();
     if (!client) { setVerifyBusy(false); setVerifyError("Verification is unavailable right now."); return; }
-    const { data: confirmed } = await client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code, userId: verifyStage.user.id } }); const error = confirmed && confirmed.ok ? null : { message: (confirmed && confirmed.error) || "That code was not accepted." };
+    const response = await withRequestDeadline(client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code, userId: verifyStage.user.id } }));
+    const confirmed = response?.data as { ok?: boolean } | null | undefined;
+    const error = confirmed && confirmed.ok ? null : { message: "That code was not accepted." };
     setVerifyBusy(false);
     if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
     persistEmailVerified(verifyStage.user.id, true);
@@ -6558,24 +6581,37 @@ export default function Home() {
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
-    if (supabaseConfigured()
+    /* A cached roster is enough to verify a manual sign-in. Waiting for the
+       Supabase connection first made every employee pay the full 12-second
+       network timeout even when this device already had the authoritative
+       directory and the credentials were valid. Revalidation still starts in
+       the background, and the authoritative-roster effect signs out a user
+       if that fresh pull later proves the account disabled or offboarded. */
+    let users = readStaffUsers();
+    if (!users.length
+      && supabaseConfigured()
       && typeof navigator !== "undefined"
-      && navigator.onLine
-      && attendanceConnectionRef.current !== "online") {
+      && navigator.onLine) {
       refreshSharedStateNow();
-      setLoginError("Connecting securely…");
-      const deadline = Date.now() + 12000;
-      const currentConnection = () => attendanceConnectionRef.current as AttendanceConnection;
-      while (currentConnection() !== "online" && Date.now() < deadline) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      setLoginError("Loading staff access…");
+      const deadline = Date.now() + 7000;
+      while (!users.length && Date.now() < deadline) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+        users = readStaffUsers();
       }
-      if (currentConnection() !== "online") {
-        setLoginError("The secure connection is taking longer than usual. Check your connection and try again.");
+      if (!users.length) {
+        setLoginError("Staff access is unavailable right now. Check your connection and try again.");
         return;
       }
       setLoginError("");
+    } else if (supabaseConfigured()
+      && typeof navigator !== "undefined"
+      && navigator.onLine
+      && attendanceConnectionRef.current !== "online") {
+      /* Do not hold the form hostage to a status transition. The sync layer
+         continues its authoritative pull while credential verification runs. */
+      refreshSharedStateNow();
     }
-    const users = readStaffUsers();
     if (!users.length) {
       setLoginError("Staff access is still loading. Please try again.");
       return;
@@ -6822,7 +6858,7 @@ export default function Home() {
   }, [previewOwner, sessionMethod, sessionUser, signOut]);
 
   const clickWhenReady = useCallback(
-    (find: () => HTMLButtonElement | null, missingMessage: string) => {
+    (find: () => HTMLButtonElement | null, missingMessage: string, maxAttempts = 100, intervalMs = 100) => {
       let tries = 0;
       const attempt = () => {
         const button = find();
@@ -6831,11 +6867,11 @@ export default function Home() {
           return;
         }
         tries += 1;
-        if (tries > 15) {
+        if (tries >= maxAttempts) {
           notify(missingMessage);
           return;
         }
-        window.setTimeout(attempt, 60);
+        window.setTimeout(attempt, intervalMs);
       };
       attempt();
     },

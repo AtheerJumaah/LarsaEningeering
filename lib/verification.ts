@@ -56,11 +56,27 @@ async function call(body: Record<string, unknown>): Promise<Record<string, unkno
   if (!supabaseConfigured()) return null;
   const client = getSupabaseClient();
   if (!client) return null;
+  /* Verification is an optional policy check, never the thing that should
+     freeze the sign-in form. A sleeping phone, a blocked function request, or
+     a transient Supabase edge timeout used to leave the promise pending
+     forever, which looked exactly like a broken login. Keep the existing
+     fail-open behaviour, but make it deterministic. */
+  const timeout = 4500;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { data, error } = await client.functions.invoke("auth-policy", { body });
-    if (error) return null;
-    return (data || null) as Record<string, unknown> | null;
+    const request = client.functions.invoke("auth-policy", { body })
+      .then(({ data, error }) => (error ? null : (data || null) as Record<string, unknown> | null))
+      .catch(() => null);
+    const result = await Promise.race([
+      request,
+      new Promise<Record<string, unknown> | null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeout);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return result;
   } catch {
+    if (timer) clearTimeout(timer);
     return null;
   }
 }
