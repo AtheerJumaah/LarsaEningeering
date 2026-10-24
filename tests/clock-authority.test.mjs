@@ -88,6 +88,7 @@ test("a newer queued action keeps the banner, timer, and button in one pending s
 test("staff iframe refresh work skips hidden engines and removes legacy rebuild polls", () => {
   assert.match(page, /const frame = staffRef\.current;[\s\S]*frame\.classList\.contains\("active"\)/);
   assert.match(page, /frame\.contentWindow\?\.eval/);
+  assert.match(page, /if\(typeof applyAttendanceOverlay==="function"\)applyAttendanceOverlay\(\);[\s\S]*else if\(typeof freshState==="function"\)freshState\(\);/);
   assert.match(engine, /source\.includes\("v30Inject"\)/);
   assert.match(engine, /window\.__v30Poll=0/);
   assert.match(engine, /replace\(\/setInterval\\\(v31Relabel, 4000\\\);\//);

@@ -7557,7 +7557,13 @@ export default function Home() {
       if (!frame || !frame.classList.contains("active")) return;
       try {
         frame.contentWindow?.eval(`
-          if(typeof freshState==="function")freshState();
+          /* A punch already wrote the authoritative event to the small
+             attendance overlay.  Applying that overlay keeps the iframe's
+             clock view current without reparsing the ~840 KB staff document
+             on the click path.  freshState remains the compatibility fallback
+             for older engine bundles and for non-attendance refreshes. */
+          if(typeof applyAttendanceOverlay==="function")applyAttendanceOverlay();
+          else if(typeof freshState==="function")freshState();
           else state=JSON.parse(localStorage.getItem("larsaStaffV8"));
           /* Clock punches only need the clock surface. Rebuilding the whole
              legacy shell (nav, actions, and every page enhancer) on every
