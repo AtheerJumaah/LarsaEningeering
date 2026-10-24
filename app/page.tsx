@@ -4672,6 +4672,12 @@ export default function Home() {
   const [clockConfirmed, setClockConfirmed] = useState(false);
   const clockConfirmedRef = useRef(false);
   const clockConfirmedWaiters = useRef<(() => void)[]>([]);
+  /* Reconciliation is a safety net, not part of the clock button's critical
+     path. Keep at most one recovery active and give it a short cooldown so a
+     transient offline/synced flap cannot launch overlapping full-ledger and
+     account scans that block the renderer after a punch. */
+  const durableRecoveryInFlightRef = useRef(false);
+  const lastDurableRecoveryAtRef = useRef(0);
   /* Attendance remains visible from the local cache, but new punches must be
      backed by a confirmed server connection. A deployment without Supabase
      is explicitly treated as local mode for development/legacy installs. */
@@ -5002,17 +5008,25 @@ export default function Home() {
           new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 1200)),
         ]).finally(() => markClockConfirmed());
         const reconcileDurableState = () => {
-          reconcileStoreFromLedger().then(({ restored, changed }) => {
+          const startedAt = Date.now();
+          if (durableRecoveryInFlightRef.current || startedAt - lastDurableRecoveryAtRef.current < 30_000) return;
+          durableRecoveryInFlightRef.current = true;
+          lastDurableRecoveryAtRef.current = startedAt;
+          /* Attendance and account recovery are deliberately parallel network
+             reads, but each result causes at most one shell repaint and the
+             guard above prevents another pair from piling on during a
+             reconnect flap. */
+          const attendanceRecovery = reconcileStoreFromLedger().then(({ restored, changed }) => {
             if (changed || restored > 0) {
               setStorageTick((value) => value + 1);
               if (restored > 0) notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
             }
-          }).catch(() => { /* runs again on next open */ });
+          }).catch(() => { /* runs again after the cooldown */ });
           /* And the same for accounts. An account missing from the blob is
              never read as a deletion — this is the failure this undoes — so
              anything the account ledger holds and the blob has lost comes
              back, unless it was deliberately tombstoned. */
-          reconcileAccountsFromLedger().then(({ restored, names }) => {
+          const accountRecovery = reconcileAccountsFromLedger().then(({ restored, names }) => {
             if (restored > 0) {
               setStorageTick((value) => value + 1);
               notifyRef.current(
@@ -5021,7 +5035,10 @@ export default function Home() {
                   : `${restored} accounts were restored from the durable ledger: ${names.slice(0, 3).join(", ")}${restored > 3 ? `, and ${restored - 3} more` : ""}.`,
               );
             }
-          }).catch(() => { /* runs again on next open */ });
+          }).catch(() => { /* runs again after the cooldown */ });
+          void Promise.allSettled([attendanceRecovery, accountRecovery]).finally(() => {
+            durableRecoveryInFlightRef.current = false;
+          });
         };
         /* These are recovery reads, not login prerequisites. Run them in an
            idle slot so the authenticated Home shell paints immediately; the
@@ -5029,8 +5046,18 @@ export default function Home() {
         const idle = (window as Window & {
           requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
         }).requestIdleCallback;
-        if (idle) idle(reconcileDurableState, { timeout: 1800 });
-        else window.setTimeout(reconcileDurableState, 250);
+        /* Never start a full recovery in the same turn as a clock action.
+           The punch is already durable in its local queue; recovery can wait
+           for a quiet renderer without risking attendance data. */
+        const startRecoveryWhenQuiet = () => {
+          if (punchLock.current) {
+            window.setTimeout(startRecoveryWhenQuiet, 1500);
+            return;
+          }
+          reconcileDurableState();
+        };
+        if (idle) idle(() => window.setTimeout(startRecoveryWhenQuiet, 1500), { timeout: 10_000 });
+        else window.setTimeout(startRecoveryWhenQuiet, 1500);
       },
     });
     /* Every staff-blob write also appends new clock events to the durable
@@ -19126,9 +19153,18 @@ function QuickClock({
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(todayKeyForSummary);
   useEffect(() => {
-    setNow(new Date(serverNowMs()));
-    const timer = setInterval(() => setNow(new Date(serverNowMs())), 1000);
-    return () => clearInterval(timer);
+    const update = () => setNow(new Date(serverNowMs()));
+    update();
+    const timer = window.setInterval(update, 1000);
+    /* A visible tab can be throttled while it is backgrounded. Catch up on
+       return so the clock never appears stuck at the value from before the
+       tab was covered or restored. */
+    const onVisibility = () => { if (!document.hidden) update(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   const open = summary.openClock;

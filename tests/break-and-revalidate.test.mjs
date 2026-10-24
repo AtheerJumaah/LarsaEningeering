@@ -62,9 +62,13 @@ test("the break buttons carry what they display and cannot be double-fired", () 
 });
 
 test("the engine re-reads before it decides a break, and hands it over", () => {
-  // Both helpers now re-read the store instead of trusting the panel snapshot.
+  // The packed source still re-reads before a deliberate break decision.
+  // The unpacker below transforms only the decorative injection path so it
+  // refreshes once per rebuild instead of once per employee.
   assert.match(engine, /function v30OnBreak\(uid\)\{\s*\n\s*if\(typeof freshState==='function'\)freshState\(\);/);
   assert.match(engine, /function v30ClockedIn\(uid\)\{\s*\n\s*if\(typeof freshState==='function'\)freshState\(\);/);
+  assert.match(raw, /\.replace\(\/function v30OtherStatus/);
+  assert.match(raw, /\.replace\(\/function v30Inject/);
   assert.match(engine, /var offering=.*?['"]Break End['"].*?['"]Break Start['"];/);
   assert.match(engine, /typeof p\.__larsaBreak==='function'\)\{p\.__larsaBreak\(offering,note\|\|'',currentUser\.id\);return;\}/);
   assert.match(page, /holder\.__larsaBreak = \(intent, note, uid\) => \{/);
@@ -90,6 +94,41 @@ test("a healthy attendance probe does not start another full ledger reconcile", 
      fall behind after a few seconds and froze the visible shift timer. */
   assert.match(page, /const alreadyHealthy = attendanceConnectionRef\.current === "online"\s*\n\s*&& authoritativeStateReadyRef\.current;/);
   assert.match(page, /setAuthoritativeState\(true\);\s*\n\s*if \(alreadyHealthy\) return;/);
+});
+
+test("transient attendance probe failures do not flap the shell offline", () => {
+  /* A single missed one-second probe must not launch a full recovery on the
+     next success. The sync layer waits for three consecutive watchdog misses
+     before reporting offline, then resets the run on any successful stamp. */
+  assert.match(sync, /let attendanceProbeFailures = 0;/);
+  assert.match(sync, /const attendanceProbe = reason === "attendance periodic revalidate";/);
+  assert.match(sync, /if \(!attendanceProbe \|\| attendanceProbeFailures >= 3\) reportStatus\("offline"\);/);
+  assert.match(sync, /attendanceProbeFailures = 0;\s*\n\s*reportStatus\("synced"\);/);
+});
+
+test("durable recovery is single-flight and never shares the punch critical path", () => {
+  assert.match(page, /durableRecoveryInFlightRef = useRef\(false\)/);
+  assert.match(page, /startedAt - lastDurableRecoveryAtRef\.current < 30_000/);
+  assert.match(page, /if \(punchLock\.current\) \{\s*\n\s*window\.setTimeout\(startRecoveryWhenQuiet, 1500\);/);
+  assert.match(page, /Promise\.allSettled\(\[attendanceRecovery, accountRecovery\]\)/);
+});
+
+test("the visible shift timer has a foreground heartbeat and catches up after tab throttling", () => {
+  const clock = page.slice(page.indexOf("const [now, setNow]"), page.indexOf("const open = summary.openClock"));
+  assert.match(clock, /const update = \(\) => setNow\(new Date\(serverNowMs\(\)\)\);/);
+  assert.match(clock, /const timer = window\.setInterval\(update, 1000\);/);
+  assert.match(clock, /document\.addEventListener\("visibilitychange", onVisibility\);/);
+  assert.match(clock, /window\.clearInterval\(timer\);/);
+});
+
+test("legacy Clock-page decoration cannot rebuild the page every four seconds", () => {
+  // The legacy manager-card poll was the other synchronous path that could
+  // starve the renderer after a punch. The unpacker disables only that poll;
+  // it does not remove the clock controls or the durable writer.
+  assert.match(raw, /source\.includes\("v30Inject"\)/);
+  assert.match(raw, /if \(delay === 4000\)/);
+  assert.match(raw, /source\.includes\("v30Inject"\) \|\| source\.includes\("v31Relabel"\)/);
+  assert.match(raw, /freshState\(\) parses the entire staff blob/);
 });
 
 test("a refresh that finds nothing changed does not pull the 840 KB blob", () => {

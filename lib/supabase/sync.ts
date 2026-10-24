@@ -163,6 +163,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
   let lastReportedStatus: "connecting" | "synced" | "offline" | null = null;
+  /* The one-second attendance watchdog can miss an individual REST probe on
+     a busy phone or during a token refresh. Treating that one miss as a full
+     offline edge made the shell launch its expensive ledger recovery on the
+     next success; repeated edges could starve the renderer and leave the
+     visible shift timer at its first second. */
+  let attendanceProbeFailures = 0;
   const reportStatus = (status: "connecting" | "synced" | "offline") => {
     /* The attendance stamp probe intentionally runs every second. Do not make
        each healthy probe re-run the page's expensive auth warm-up and ledger
@@ -693,7 +699,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         /* A successful stamp probe is enough to prove the server is reachable.
            Reconnection can find no changed rows, but the UI still needs to
            leave its conservative "checking" state so punches become usable. */
-        if (keys.includes("larsaStaffV8")) reportStatus("synced");
+        if (keys.includes("larsaStaffV8")) {
+          attendanceProbeFailures = 0;
+          reportStatus("synced");
+        }
         return;
       }
       const { data: rows, error } = await supabase
@@ -713,9 +722,18 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       });
       console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
       /* Reachability is independent of whether another device changed a row. */
-      if (keys.includes("larsaStaffV8")) reportStatus("synced");
+      if (keys.includes("larsaStaffV8")) {
+        attendanceProbeFailures = 0;
+        reportStatus("synced");
+      }
     } catch {
-      if (keys.includes("larsaStaffV8")) reportStatus("offline");
+      if (keys.includes("larsaStaffV8")) {
+        const attendanceProbe = reason === "attendance periodic revalidate";
+        attendanceProbeFailures = attendanceProbe ? attendanceProbeFailures + 1 : 0;
+        /* One missed one-second probe is not an offline transition. Keep the
+           last authoritative screen and let the next probe settle it. */
+        if (!attendanceProbe || attendanceProbeFailures >= 3) reportStatus("offline");
+      }
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
       keys.forEach((key) => refreshingKeys.delete(key));
