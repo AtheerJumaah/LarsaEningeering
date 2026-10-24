@@ -145,6 +145,15 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const lastKnown = new Map<string, string>();  /* The updated_at this device last saw for each key. Without it, a browser     that has been open since yesterday cannot tell that the shared copy has     moved on, and its next write silently replaces work done elsewhere. That     is how a full set of hashed passwords and contact details reverted to a     morning-old copy. */  const lastSeenAt = new Map<string, string>();
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+  let lastReportedStatus: "connecting" | "synced" | "offline" | null = null;
+  const reportStatus = (status: "connecting" | "synced" | "offline") => {
+    /* The attendance stamp probe intentionally runs every second. Do not make
+       each healthy probe re-run the page's expensive auth warm-up and ledger
+       reconciliation; only a real transition needs to notify the app. */
+    if (lastReportedStatus === status) return;
+    lastReportedStatus = status;
+    options.onStatusChange?.(status);
+  };
 
   /* The staff roster is large enough that downloading it just to discover
      that it is unchanged is visible on every cold start. Keep a tiny,
@@ -373,7 +382,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   methodOwner.setItem = patchedSetItem;
 
   async function bootstrap() {
-    options.onStatusChange?.("connecting");
+    reportStatus("connecting");
     // Every browser that opens the app after this one already made changes
     // needs to actually see them, not just have them sitting in
     // localStorage unread — the initial render already happened, from
@@ -479,7 +488,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       await pullKey("larsaStaffV8");
       if (cancelled) return;
       bootstrapped = true;
-      options.onStatusChange?.("synced");
+      reportStatus("synced");
       const criticalCaughtUp = caughtUpKeys.splice(0, caughtUpKeys.length);
       console.log("[larsa-sync] staff roster catch-up complete; login is unblocked", criticalCaughtUp);
       criticalCaughtUp.forEach((key) => options.onRemoteChange?.(key));
@@ -499,7 +508,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         });
     } catch (err) {
       console.error("[larsa-sync] bootstrap failed — retrying on focus, reconnect, or polling:", err);
-      options.onStatusChange?.("offline");
+      reportStatus("offline");
       return;
     }
 
@@ -647,7 +656,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         /* A successful stamp probe is enough to prove the server is reachable.
            Reconnection can find no changed rows, but the UI still needs to
            leave its conservative "checking" state so punches become usable. */
-        if (keys.includes("larsaStaffV8")) options.onStatusChange?.("synced");
+        if (keys.includes("larsaStaffV8")) reportStatus("synced");
         return;
       }
       const { data: rows, error } = await supabase
@@ -667,9 +676,9 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       });
       console.log(`[larsa-sync] authoritative refresh complete (${reason}), keys:`, stale.map(({ key }) => key));
       /* Reachability is independent of whether another device changed a row. */
-      if (keys.includes("larsaStaffV8")) options.onStatusChange?.("synced");
+      if (keys.includes("larsaStaffV8")) reportStatus("synced");
     } catch {
-      if (keys.includes("larsaStaffV8")) options.onStatusChange?.("offline");
+      if (keys.includes("larsaStaffV8")) reportStatus("offline");
       /* Offline or mid-reconnect: the next trigger tries again. */
     } finally {
       keys.forEach((key) => refreshingKeys.delete(key));

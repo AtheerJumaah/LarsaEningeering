@@ -44,7 +44,7 @@ test("a missing server staff roster never promotes an arbitrary browser cache", 
 });
 
 test("login is unblocked after the staff roster, without waiting for secondary stores", () => {
-  assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*options\.onStatusChange\?\.\("synced"\);[\s\S]*Promise\.all\(SYNCED_KEYS/);
+  assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*reportStatus\("synced"\);[\s\S]*Promise\.all\(SYNCED_KEYS/);
 });
 
 test("startup avoids downloading an unchanged roster blob", () => {
@@ -54,6 +54,13 @@ test("startup avoids downloading an unchanged roster blob", () => {
   assert.match(sync, /select\("updated_at"\)/);
   assert.match(sync, /stamp-only startup check/);
   assert.match(sync, /const \{ data: row, error: selectError \} = await supabase[\s\S]*select\("data, updated_at"\)/);
+});
+
+test("healthy attendance probes do not replay the expensive synced handler", () => {
+  assert.match(sync, /let lastReportedStatus:.*null = null/);
+  assert.match(sync, /if \(lastReportedStatus === status\) return/);
+  assert.match(sync, /const reportStatus = \(status/);
+  assert.doesNotMatch(sync, /keys\.includes\("larsaStaffV8"\) options\.onStatusChange\?\.\("synced"\)/);
 });
 
 test("the first punch waits for auth warm-up with a bounded fallback", () => {
