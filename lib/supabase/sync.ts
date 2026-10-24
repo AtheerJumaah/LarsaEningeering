@@ -146,6 +146,37 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
 
+  /* The staff roster is large enough that downloading it just to discover
+     that it is unchanged is visible on every cold start. Keep a tiny,
+     device-local proof of the last server-confirmed copy so startup can
+     validate only the server timestamp first. A fingerprint mismatch means
+     this browser has an unsynced edit, so it always falls back to the guarded
+     full pull/merge path instead of risking data loss. */
+  const stampKey = (key: SyncedKey) => `larsaSyncStampV1:${key}`;
+  const hashKey = (key: SyncedKey) => `larsaSyncHashV1:${key}`;
+  const fingerprint = (text: string | null) => {
+    const value = text || "";
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `${value.length}:${(hash >>> 0).toString(16)}`;
+  };
+  const rememberServerCopy = (key: SyncedKey, stamp: string | null, text: string) => {
+    if (!stamp) return;
+    try {
+      originalSetItem(stampKey(key), stamp);
+      originalSetItem(hashKey(key), fingerprint(text));
+    } catch { /* private mode / storage full */ }
+  };
+  const forgetServerCopy = (key: SyncedKey) => {
+    try {
+      window.localStorage.removeItem(stampKey(key));
+      window.localStorage.removeItem(hashKey(key));
+    } catch { /* private mode / storage full */ }
+  };
+
   async function ensureSession() {
     const { data } = await supabase.auth.getSession();
     if (data.session?.expires_at && data.session.expires_at * 1000 < Date.now() + 30_000) {
@@ -265,6 +296,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         const serverText = JSON.stringify(row.current_data ?? {});
         lastKnown.set(key, serverText);
         lastSeenAt.set(key, String(row.current_updated_at));
+        rememberServerCopy(key, String(row.current_updated_at), serverText);
         if (localStorage.getItem(key) === localBaseline && serverText !== localBaseline) {
           originalSetItem(key, serverText);
           options.onRemoteChange?.(key);
@@ -360,6 +392,31 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
          the sign-in form while a phone is on a slow connection. */
       const pullKey = async (key: SyncedKey) => {
         const baseline = localStorage.getItem(key);
+        if (key === "larsaStaffV8" && baseline && hasContent(readLocal(key))) {
+          let cachedStamp = "";
+          let cachedHash = "";
+          try {
+            cachedStamp = localStorage.getItem(stampKey(key)) || "";
+            cachedHash = localStorage.getItem(hashKey(key)) || "";
+          } catch { /* private mode / storage unavailable */ }
+          /* A local edit that has not been confirmed by the server must never
+             be skipped. Only a byte-for-byte copy of the last confirmed text
+             may take this cheap stamp-only path. */
+          if (cachedStamp && cachedHash && cachedHash === fingerprint(baseline)) {
+            const { data: stampRow, error: stampError } = await supabase
+              .from("app_state")
+              .select("updated_at")
+              .eq("store_key", key)
+              .maybeSingle();
+            const serverStamp = stampRow?.updated_at ? String(stampRow.updated_at) : "";
+            if (!stampError && serverStamp && serverStamp === cachedStamp) {
+              lastSeenAt.set(key, serverStamp);
+              lastKnown.set(key, baseline);
+              console.log(`[larsa-sync] "${key}" unchanged (stamp-only startup check)`);
+              return;
+            }
+          }
+        }
         const { data: row, error: selectError } = await supabase
           .from("app_state")
           .select("data, updated_at")
@@ -370,7 +427,8 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           throw selectError;
         }
         if (cancelled) return;
-        if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));        const remote = row?.data;
+        if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));
+        const remote = row?.data;
         const local = readLocal(key);
         if (hasContent(remote)) {
           /* Keep a locally saved organization chart when the server still has
@@ -393,6 +451,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              pushed back instead of being mistaken for an already-confirmed
              server snapshot. */
           lastKnown.set(key, JSON.stringify(remote));
+          rememberServerCopy(key, row?.updated_at ? String(row.updated_at) : null, JSON.stringify(remote));
           if (nextText !== JSON.stringify(remote)) schedulePush(key);
           if (nextText !== before) caughtUpKeys.push(key);
           console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
@@ -407,6 +466,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
             console.error("[larsa-sync] authoritative staff roster is missing on the server; refusing to promote browser cache");
             originalSetItem(key, "{}");
             lastKnown.set(key, "{}");
+            forgetServerCopy(key);
             caughtUpKeys.push(key);
           } else {
             console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
@@ -530,7 +590,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
        merged text instead would make the push below look like a no-op and
        the merge would never leave this device. */
     lastKnown.set(key, text);
-    if (remoteUpdatedAt) lastSeenAt.set(key, remoteUpdatedAt);
+    if (remoteUpdatedAt) {
+      lastSeenAt.set(key, remoteUpdatedAt);
+      rememberServerCopy(key, remoteUpdatedAt, text);
+    }
     originalSetItem(key, nextText);
     console.log(`[larsa-sync] remote state applied for "${key}"`);
     options.onRemoteChange?.(key);

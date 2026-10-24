@@ -47,6 +47,15 @@ test("login is unblocked after the staff roster, without waiting for secondary s
   assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*options\.onStatusChange\?\.\("synced"\);[\s\S]*Promise\.all\(SYNCED_KEYS/);
 });
 
+test("startup avoids downloading an unchanged roster blob", () => {
+  assert.match(sync, /larsaSyncStampV1/);
+  assert.match(sync, /larsaSyncHashV1/);
+  assert.match(sync, /cachedHash === fingerprint\(baseline\)/);
+  assert.match(sync, /select\("updated_at"\)/);
+  assert.match(sync, /stamp-only startup check/);
+  assert.match(sync, /const \{ data: row, error: selectError \} = await supabase[\s\S]*select\("data, updated_at"\)/);
+});
+
 test("the first punch waits for auth warm-up with a bounded fallback", () => {
   assert.match(page, /void warmAttendanceAuth\(\);/);
   assert.match(page, /Promise\.race\(\[[\s\S]*warmAttendanceAuth\(\),[\s\S]*1200/);
