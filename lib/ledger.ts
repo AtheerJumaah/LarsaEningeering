@@ -194,32 +194,31 @@ function eventFromLog(log: ClockLogLike, store: StaffStoreLike, source: string):
    app-state sync still follows and remains authoritative for roster edits. */
 const appliedAttendanceIds = new Set<string>();
 
-function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
-  const id = String(row.client_event_id || "");
-  const uid = String(row.uid || "");
-  const status = String(row.status || "");
-  const time = String(row.occurred_at || "");
-  if (!id || !uid || !time || !LEDGER_STATUSES.has(status)) return;
-  /* The one-second watchdog deliberately overlaps its two-second look-back
-     window so a just-committed punch cannot be missed. Keep an in-memory
-     idempotency set so that overlap does not repeatedly parse, sort, and
-     rewrite the entire staff blob. A repeated row has no new information;
-     active-flag repair still happens through the first application and the
-     authoritative reconcile path. */
-  if (appliedAttendanceIds.has(id)) return;
+/* A watchdog response can contain up to 200 rows. Replaying each row through
+   the single-row path made every row parse, sort, stringify, and write the
+   whole staff blob, creating a long main-thread task and the browser's
+   "page isn't responding" dialog. Reconcile the response as one transaction:
+   one read, one merge, one active-flag pass, one write, and one repaint hint.
+   The appliedAttendanceIds idempotency set still protects overlapping polls. */
+function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
+  if (!rows.length) return;
   const store = readJson<StaffStoreLike>("larsaStaffV8", {});
   if (!Array.isArray(store.logs)) store.logs = [];
+  const logs = store.logs;
   const removed = new Set((store.removedLogIds || []).map(String));
-  if (removed.has(id)) {
+  const present = new Set(logs.map((log) => String(log?.id || "")).filter(Boolean));
+  const changed: Array<{ id: string; uid: string; status: string; time: string }> = [];
+
+  rows.forEach((row) => {
+    const id = String(row.client_event_id || "");
+    const uid = String(row.uid || "");
+    const status = String(row.status || "");
+    const time = String(row.occurred_at || "");
+    if (!id || !uid || !time || !LEDGER_STATUSES.has(status) || appliedAttendanceIds.has(id)) return;
     appliedAttendanceIds.add(id);
-    return;
-  }
-  /* A duplicate realtime delivery still needs to repair active flags. The
-     event may already be in this tab's cache from a previous sync while its
-     denormalized `active` value is stale; returning early leaves the user
-     looking Clocked In after a confirmed Clock Out. */
-  if (!store.logs.some((log) => String(log?.id || "") === id)) {
-    store.logs.push({
+    const alreadyPresent = logs.some((log) => String(log?.id || "") === id);
+    if (removed.has(id) || alreadyPresent || present.has(id)) return;
+    logs.push({
       id,
       uid,
       type: row.work_mode ? String(row.work_mode) : "Office",
@@ -231,28 +230,26 @@ function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
       ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
       recovery: "realtime-ledger",
     });
-  } else {
-    /* It may have arrived through the local blob before the realtime/poll
-       path saw it. Mark it handled without paying the full reconciliation
-       cost on every overlapping poll. */
-    appliedAttendanceIds.add(id);
-    return;
-  }
-  appliedAttendanceIds.add(id);
-  if (appliedAttendanceIds.size > 2000) {
+    present.add(id);
+    changed.push({ id, uid, status, time });
+  });
+
+  if (!changed.length) return;
+  while (appliedAttendanceIds.size > 2000) {
     const first = appliedAttendanceIds.values().next().value;
-    if (first) appliedAttendanceIds.delete(first);
+    if (!first) break;
+    appliedAttendanceIds.delete(first);
   }
   /* Recompute only the denormalized active flags. The immutable event itself
      is never changed, and a removed id can never become active again. */
-  store.logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+  logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
   const openByUid = new Map<string, ClockLogLike | null>();
-  store.logs.forEach((log) => {
+  logs.forEach((log) => {
     if (removed.has(String(log.id || ""))) return;
     if (log.status === "In") openByUid.set(String(log.uid || ""), log);
     if (log.status === "Out") openByUid.set(String(log.uid || ""), null);
   });
-  store.logs.forEach((log) => {
+  logs.forEach((log) => {
     if (log.status === "In" || log.status === "Out") log.active = openByUid.get(String(log.uid || "")) === log;
   });
   try { localStorage.setItem("larsaStaffV8", JSON.stringify(store)); } catch { /* UI catches up on the next full sync */ }
@@ -261,9 +258,13 @@ function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
      waiting for the slower app_state sync or a manual refresh. */
   try {
     window.dispatchEvent(new CustomEvent("larsa:attendance-realtime", {
-      detail: { id, uid, status, time },
+      detail: { ids: changed.map(({ id }) => id), events: changed },
     }));
   } catch { /* non-browser test doubles and older browsers can skip the hint */ }
+}
+
+function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
+  applyRealtimeAttendanceEvents([row]);
 }
 
 /* Called on EVERY write of larsaStaffV8 (installed below): any log id we have
@@ -400,7 +401,7 @@ export function initAttendanceLedger(): () => void {
       const ordered = [...data].sort((left, right) =>
         Date.parse(String((left as { inserted_at?: string }).inserted_at || ""))
         - Date.parse(String((right as { inserted_at?: string }).inserted_at || "")));
-      ordered.forEach((row) => applyRealtimeAttendanceEvent(row as Partial<LedgerEvent>));
+      applyRealtimeAttendanceEvents(ordered as Partial<LedgerEvent>[]);
       const stamps = ordered
         .map((row) => String((row as { inserted_at?: string }).inserted_at || ""))
         .filter((stamp) => Number.isFinite(Date.parse(stamp)));

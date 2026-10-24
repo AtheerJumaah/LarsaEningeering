@@ -9,8 +9,10 @@ test("attendance realtime applies only the small append-only ledger event", () =
   assert.match(ledger, /table: "attendance_events"/);
   assert.match(ledger, /event: "INSERT"/);
   assert.match(ledger, /applyRealtimeAttendanceEvent\(row\)/);
+  assert.match(ledger, /function applyRealtimeAttendanceEvents\(rows/);
+  assert.match(ledger, /applyRealtimeAttendanceEvents\(ordered/);
   assert.match(ledger, /recovery: "realtime-ledger"/);
-  assert.match(ledger, /store\.logs\.some\(\(log\) => String\(log\?\.id \|\| ""\) === id\)/);
+  assert.match(ledger, /logs\.some\(\(log\) => String\(log\?\.id \|\| ""\) === id\)/);
   assert.match(ledger, /larsa:attendance-realtime/);
   assert.match(ledger, /appliedAttendanceIds\.has\(id\)/);
   assert.match(ledger, /idempotency set/);
