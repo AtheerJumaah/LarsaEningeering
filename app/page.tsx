@@ -4807,7 +4807,7 @@ export default function Home() {
   );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
   /* Coalesce realtime/storage notifications into one shell refresh. */
-  const storageRefreshTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const storageRefreshTimer = useRef<number | null>(null);
   const queueStorageRefresh = useCallback(() => {
     if (storageRefreshTimer.current !== null) return;
     storageRefreshTimer.current = window.setTimeout(() => {
