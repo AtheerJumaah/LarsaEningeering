@@ -71,8 +71,18 @@ let clockOffsetMs: number | null = null;
  * work while writes are paused. */
 let syncWritesPaused = false;
 
+/* The sign-in screen still needs the cached roster, but it does not need the
+   high-frequency attendance/stamp revalidation or secondary-store refreshes.
+   Keeping those loops active after logout lets a busy legacy iframe continue
+   competing with the login UI for the renderer's main thread. */
+let syncSessionActive = false;
+
 export function setLarsaSyncWritesPaused(paused: boolean) {
   syncWritesPaused = Boolean(paused);
+}
+
+export function setLarsaSyncSessionActive(active: boolean) {
+  syncSessionActive = Boolean(active);
 }
 
 function storedClockOffset(): number {
@@ -653,6 +663,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      changed — a refresh now costs one tiny query, which is what makes it
      affordable to run on a timer as well as on focus. */
   async function refreshFromServer(reason: string, requestedKeys: readonly SyncedKey[] = SYNCED_KEYS) {
+    if (!syncSessionActive && (reason === "periodic revalidate" || reason === "attendance periodic revalidate")) return;
     if (cancelled) return;
     const keys = requestedKeys.filter((key): key is SyncedKey =>
       (SYNCED_KEYS as readonly string[]).includes(key),

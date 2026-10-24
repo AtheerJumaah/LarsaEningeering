@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, setLarsaSyncSessionActive, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
@@ -6253,6 +6253,7 @@ export default function Home() {
   const completeSignIn = useCallback((user: StaffUser, method: SignInMethod = "email") => {
     setLarsaSyncWritesPaused(false);
     refreshSharedStateNow();
+    setLarsaSyncSessionActive(true);
     const normalizedUser = user.permissionProfile
       ? { ...user, permissions: staffPermissionsForUser(user) }
       : user;
@@ -6791,6 +6792,7 @@ export default function Home() {
 
   const signOut = useCallback(() => {
     setLarsaSyncWritesPaused(true);
+    setLarsaSyncSessionActive(false);
     try { authBroadcastRef.current?.postMessage({ type: "signed-out" }); } catch { /* BroadcastChannel is optional */ }
     sessionStorage.removeItem("larsa-control-session");
     // Signing out is deliberate: drop the kept session too, but leave the
@@ -6820,12 +6822,12 @@ export default function Home() {
     setLoginPass("");
     setLoginPin("");
     setMenuOpen(false);
-    try {
-      staffRef.current?.contentWindow?.eval("currentUser=null;byId('app').classList.add('hidden')");
-      accountingRef.current?.contentWindow?.eval("currentUser=null;var app=document.getElementById('app');if(app)app.style.display='none'");
-    } catch {
-      // The outer sign-in remains authoritative if an embedded view is reloading.
-    }
+    /* Do not synchronously eval into an embedded legacy engine here. A clock,
+       sync callback, or large render may have that frame's JS turn in flight;
+       cross-frame eval then blocks the parent renderer and produces the
+       browser's native "page isn't responding" dialog. Clearing
+       loadedEngines above lets React remove the iframe without running code
+       inside a busy document. */
   }, []);
 
   /* A browser can keep two tabs alive with different sessionStorage values.
