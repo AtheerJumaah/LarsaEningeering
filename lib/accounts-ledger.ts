@@ -181,6 +181,25 @@ export function accountsTapStaffWrite(rawValue: string) {
   if (fresh.length) enqueue(fresh);
 }
 
+/* Keep the account backup durable, but never make a staff save wait for a
+ * second full parse of the large roster document.  The latest write is
+ * inspected in a follow-up task and multiple same-turn writes collapse into
+ * one scan. */
+let pendingStaffAccountTap: string | null = null;
+let pendingStaffAccountTapTimer: ReturnType<typeof setTimeout> | null = null;
+function flushPendingStaffAccountTap() {
+  const raw = pendingStaffAccountTap;
+  pendingStaffAccountTap = null;
+  pendingStaffAccountTapTimer = null;
+  if (!raw) return;
+  try { accountsTapStaffWrite(raw); } catch { /* the next save retries the backup */ }
+}
+function scheduleStaffAccountTap(rawValue: string) {
+  pendingStaffAccountTap = rawValue;
+  if (pendingStaffAccountTapTimer !== null) return;
+  pendingStaffAccountTapTimer = setTimeout(flushPendingStaffAccountTap, 0);
+}
+
 let tapInstalled = false;
 
 /* Install the write tap and retry timers. Idempotent; wraps whatever setItem
@@ -193,7 +212,7 @@ export function initAccountLedger(): () => void {
   window.localStorage.setItem = function accountPatchedSetItem(key: string, value: string) {
     previousSetItem(key, value);
     if (key === "larsaStaffV8") {
-      try { accountsTapStaffWrite(value); } catch { /* never break a save */ }
+      scheduleStaffAccountTap(value);
     }
   };
   const current = localStorage.getItem("larsaStaffV8");
@@ -203,6 +222,11 @@ export function initAccountLedger(): () => void {
   window.addEventListener("online", onOnline);
   return () => {
     window.clearInterval(timer);
+    if (pendingStaffAccountTapTimer !== null) {
+      window.clearTimeout(pendingStaffAccountTapTimer);
+      pendingStaffAccountTapTimer = null;
+      flushPendingStaffAccountTap();
+    }
     window.removeEventListener("online", onOnline);
   };
 }

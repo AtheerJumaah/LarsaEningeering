@@ -53,7 +53,8 @@ test("an account missing from the blob is never treated as a deletion", () => {
 
 test("every blob write delivers its accounts to the ledger, with retry", () => {
   assert.match(ledger, /export function accountsTapStaffWrite\(rawValue: string\)/);
-  assert.match(ledger, /if \(key === "larsaStaffV8"\) \{\s*\n\s*try \{ accountsTapStaffWrite\(value\); \}/);
+  assert.match(ledger, /if \(key === "larsaStaffV8"\) \{\s*\n\s*scheduleStaffAccountTap\(value\);/);
+  assert.match(ledger, /setTimeout\(flushPendingStaffAccountTap, 0\)/);
   // Queued in localStorage first, so an account created offline still lands.
   assert.match(ledger, /const QUEUE_KEY = "larsaAccountQueueV1";/);
   assert.match(ledger, /window\.setInterval\(\(\) => \{ void flushAccountQueue\(\); \}, 60_000\)/);

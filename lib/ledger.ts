@@ -309,6 +309,27 @@ export function ledgerTapStaffWrite(rawValue: string) {
   }
 }
 
+/* A staff save is a large compatibility document.  Parsing it from inside
+ * Storage#setItem made every clock click and sign-in device update block the
+ * renderer until the attendance/account durability taps had both finished.
+ * Keep the latest text and inspect it in the next task instead.  The store
+ * write itself remains synchronous and authoritative; only the derived,
+ * append-only backup work is deferred. */
+let pendingStaffTap: string | null = null;
+let pendingStaffTapTimer: ReturnType<typeof setTimeout> | null = null;
+function flushPendingStaffTap() {
+  const raw = pendingStaffTap;
+  pendingStaffTap = null;
+  pendingStaffTapTimer = null;
+  if (!raw) return;
+  try { ledgerTapStaffWrite(raw); } catch { /* durability retries on the next write */ }
+}
+function scheduleStaffTap(rawValue: string) {
+  pendingStaffTap = rawValue;
+  if (pendingStaffTapTimer !== null) return;
+  pendingStaffTapTimer = setTimeout(flushPendingStaffTap, 0);
+}
+
 let tapInstalled = false;
 
 // Explicit approval hook. An iframe has its own Storage prototype, so its
@@ -332,15 +353,9 @@ export function initAttendanceLedger(): () => void {
   const owner = typeof Storage !== "undefined" ? Storage.prototype : window.localStorage;
   const previousSetItem = owner.setItem;
   const patchedSetItem = function(this: Storage, key: string, value: string) {
-    if (!cancelled && this === window.localStorage && key === "larsaStaffV8") {
-      const before = readJson<StaffStoreLike>(key, {});
-      const seen = new Set(readJson<string[]>(SEEN_KEY, []));
-      (before.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
-      writeJson(SEEN_KEY, Array.from(seen));
-    }
     previousSetItem.call(this, key, value);
     if (!cancelled && this === window.localStorage && key === "larsaStaffV8") {
-      try { ledgerTapStaffWrite(value); } catch { /* never break a save */ }
+      scheduleStaffTap(value);
     }
   };
   owner.setItem = patchedSetItem;
@@ -504,6 +519,11 @@ export function initAttendanceLedger(): () => void {
     tapInstalled = false;
     if (owner.setItem === patchedSetItem) owner.setItem = previousSetItem;
     window.clearInterval(timer);
+    if (pendingStaffTapTimer !== null) {
+      window.clearTimeout(pendingStaffTapTimer);
+      pendingStaffTapTimer = null;
+      flushPendingStaffTap();
+    }
     if (attendancePollTimer !== null) window.clearInterval(attendancePollTimer);
     window.removeEventListener("online", onOnline);
     window.removeEventListener("online", onAttendanceOnline);

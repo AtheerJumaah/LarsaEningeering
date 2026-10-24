@@ -96,6 +96,18 @@ test("staff iframe refresh work skips hidden engines and removes legacy rebuild 
   assert.match(engine, /replace\(\/setInterval\\\(v31Relabel, 4000\\\);\//);
 });
 
+test("durability taps do not parse the full staff store inside Storage#setItem", async () => {
+  const ledger = await read("lib/ledger.ts");
+  const accounts = await read("lib/accounts-ledger.ts");
+  assert.match(ledger, /scheduleStaffTap\(value\)/);
+  assert.match(accounts, /scheduleStaffAccountTap\(value\)/);
+  assert.doesNotMatch(ledger, /const before = readJson<StaffStoreLike>\(key, \{\}\);/);
+  assert.doesNotMatch(ledger, /ledgerTapStaffWrite\(value\)/);
+  assert.doesNotMatch(accounts, /accountsTapStaffWrite\(value\)/);
+  assert.match(ledger, /setTimeout\(flushPendingStaffTap, 0\)/);
+  assert.match(accounts, /setTimeout\(flushPendingStaffAccountTap, 0\)/);
+});
+
 
 test("recent sessions explain when suspicious or unclosed hours are excluded", () => {
   const heading = page.indexOf("<h3>Your recent sessions</h3>");
