@@ -27,6 +27,12 @@ test("optional verification calls have a bounded timeout", async () => {
   assert.match(verification, /const timeout = 4500/);
 });
 
+test("a recently verified device does not block email sign-in on a second policy request", () => {
+  assert.match(page, /const localVerificationDue = deviceNeedsVerification\(refreshed, deviceId\)/);
+  assert.match(page, /const locallyVerified = refreshed\.emailVerified === true && !localVerificationDue/);
+  assert.match(page, /!locallyVerified\s*\? await checkVerification/);
+});
+
 test("the performance store is included in shared server state", () => {
   assert.match(sync, /"larsaStaffGrowthV1"/);
 });

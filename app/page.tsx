@@ -6693,7 +6693,19 @@ export default function Home() {
     if (loginMode === "email") {
       migrateEmailVerification();
       const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      const periodic = supabaseConfigured() && refreshed.email ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role }) : null;      const periodicDue = periodic ? periodic.required : deviceNeedsVerification(refreshed, getDeviceId());
+      const deviceId = getDeviceId();
+      const localVerificationDue = deviceNeedsVerification(refreshed, deviceId);
+      /* A device that already has a current local verification stamp does not
+         need to block sign-in on a second network round trip. The session
+         watchdog still checks the server when that local window expires, and
+         first-time/expired devices continue through the authoritative check
+         below. This is the normal returning-user path and removes the several
+         seconds that the policy function used to add to every login. */
+      const locallyVerified = refreshed.emailVerified === true && !localVerificationDue;
+      const periodic = supabaseConfigured() && refreshed.email && !locallyVerified
+        ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role })
+        : null;
+      const periodicDue = locallyVerified ? false : periodic ? periodic.required : localVerificationDue;
       /* Whether this mailbox has EVER been proved is answered by the server
          first: user_verification stamps every accepted code and is keyed to
          the person's email, so it cannot be lost the way a flag inside the
