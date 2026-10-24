@@ -4806,6 +4806,19 @@ export default function Home() {
     [],
   );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
+  /* Coalesce realtime/storage notifications into one shell refresh. */
+  const storageRefreshTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const queueStorageRefresh = useCallback(() => {
+    if (storageRefreshTimer.current !== null) return;
+    storageRefreshTimer.current = window.setTimeout(() => {
+      storageRefreshTimer.current = null;
+      setStorageTick((value) => value + 1);
+    }, 16);
+  }, []);
+  useEffect(() => () => {
+    if (storageRefreshTimer.current !== null) window.clearTimeout(storageRefreshTimer.current);
+    storageRefreshTimer.current = null;
+  }, []);
 
   /* Engines are mounted exclusively on demand; no hidden prewarm frame runs
      after sign-in. */
@@ -4825,16 +4838,16 @@ export default function Home() {
     if (!hydrated) return;
     const onStorage = (event: StorageEvent) => {
       if (event.key && !event.key.toLowerCase().startsWith("larsa")) return;
-      setStorageTick((value) => value + 1);
+      queueStorageRefresh();
     };
-    const onAttendanceRealtime = () => setStorageTick((value) => value + 1);
+    const onAttendanceRealtime = () => queueStorageRefresh();
     window.addEventListener("storage", onStorage);
     window.addEventListener("larsa:attendance-realtime", onAttendanceRealtime);
     return () => {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("larsa:attendance-realtime", onAttendanceRealtime);
     };
-  }, [hydrated]);
+  }, [hydrated, queueStorageRefresh]);
 
   /* The sync effect above-any-toast problem: it runs before `notify` is
      declared, so the ledger-restore toast goes through a ref that the
@@ -4883,7 +4896,6 @@ export default function Home() {
     };
     const cleanup = initLarsaSync({
       onRemoteChange: (key) => {
-        setStorageTick((value) => value + 1);
         /* Refresh the affected engine IN PLACE instead of reloading its
            iframe. The old blanket iframe reload blanked all three
            engines every time any other device saved anything — including
@@ -4899,8 +4911,9 @@ export default function Home() {
         timers[key] = window.setTimeout(() => {
           delete timers[key];
           const nowText = (() => { try { return localStorage.getItem(key); } catch { return null; } })();
-          if (nowText !== null && nowText === remoteRefreshLastText.current[key]) return;
+          if (nowText === remoteRefreshLastText.current[key]) return;
           remoteRefreshLastText.current[key] = nowText;
+          queueStorageRefresh();
           try {
             if (key === "larsaStaffV8") {
               staffRef.current?.contentWindow?.eval(`
@@ -5033,9 +5046,11 @@ export default function Home() {
         if (pending !== undefined) window.clearTimeout(pending);
         delete timers[key];
       });
+      if (storageRefreshTimer.current !== null) window.clearTimeout(storageRefreshTimer.current);
+      storageRefreshTimer.current = null;
       delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
     };
-  }, [hydrated, refs, markClockConfirmed, setAttendanceConnectionState]);
+  }, [hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -5110,8 +5125,14 @@ export default function Home() {
     if (!hydrated || !accessUsers.length) return;
     const timer = window.setTimeout(() => {
       const normalized = normalizeGrowthStore(parseStore(GROWTH_STORE_KEY), accessUsers);
-      localStorage.setItem(GROWTH_STORE_KEY, JSON.stringify(normalized));
-      setGrowthStore(normalized);
+      const nextText = JSON.stringify(normalized);
+      /* Normalisation is idempotent. Do not write the same large document on
+         every storage tick: each redundant write used to schedule a Supabase
+         push and wake every derived report again. */
+      if (localStorage.getItem(GROWTH_STORE_KEY) !== nextText) {
+        localStorage.setItem(GROWTH_STORE_KEY, nextText);
+      }
+      setGrowthStore((previous) => JSON.stringify(previous) === nextText ? previous : normalized);
     }, 0);
     return () => clearTimeout(timer);
   }, [accessUsers, hydrated, storageTick]);

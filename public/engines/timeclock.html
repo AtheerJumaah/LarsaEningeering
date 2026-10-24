@@ -17,6 +17,33 @@
       This page requires JavaScript to display.
     </div>
   </noscript>
+  <!-- Keep the legacy enhancement timers from rebuilding the Clock page every
+       four seconds. The packed template is parsed below, so inject the guard
+       at parse time before any of its scripts execute. -->
+  <script>
+    (() => {
+      const nativeParse = DOMParser.prototype.parseFromString;
+      DOMParser.prototype.parseFromString = function (source, type, ...rest) {
+        const doc = nativeParse.call(this, source, type, ...rest);
+        if (type === "text/html" && typeof source === "string" && source.includes("v30Inject")) {
+          const guard = doc.createElement("script");
+          guard.textContent = `(() => {
+            const nativeSetInterval = window.setInterval;
+            window.setInterval = function (fn, delay, ...args) {
+              if (delay === 4000) {
+                let source = "";
+                try { source = Function.prototype.toString.call(fn); } catch {}
+                if (source.includes("v30Inject") || source.includes("v31Relabel")) return 0;
+              }
+              return nativeSetInterval.call(this, fn, delay, ...args);
+            };
+          })();`;
+          doc.head?.prepend(guard);
+        }
+        return doc;
+      };
+    })();
+  </script>
 </head>
 <body>
   <div id="__bundler_thumbnail">

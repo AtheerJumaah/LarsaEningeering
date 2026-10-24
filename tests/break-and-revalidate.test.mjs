@@ -97,9 +97,9 @@ test("a refresh that finds nothing changed does not pull the 840 KB blob", () =>
 
 test("an already-current attendance tick confirms the server without fetching the blob", () => {
   const noChange = sync.slice(sync.indexOf("if (!stale.length) {"), sync.indexOf("const { data: rows", sync.indexOf("if (!stale.length) {")));
-  assert.match(noChange, /onStatusChange\?\.\("synced"\)/);
+  assert.match(noChange, /reportStatus\("synced"\)/);
   assert.match(sync, /let appliedRows = 0;/);
-  assert.match(sync, /options\.onStatusChange\?\.\("synced"\);/);
+  assert.match(sync, /options\.onStatusChange\?\.\(status\);/);
   assert.match(sync, /const NON_ATTENDANCE_KEYS = SYNCED_KEYS\.filter/);
   assert.match(sync, /refreshFromServer\("network back", \["larsaStaffV8"\]\)/);
 });

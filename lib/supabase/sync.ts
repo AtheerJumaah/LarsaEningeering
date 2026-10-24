@@ -24,6 +24,13 @@ import { getSupabaseClient, supabaseConfigured } from "./client";
 import { mergeStoreText, preserveLocalOrgOnBootstrap, protectOutgoing } from "./merge";
 import { createPushQueue } from "./push-queue";
 
+/* Keep the sync bootstrap tolerant of a stale cached module/older test
+   harness that predates the organization-preservation helper. Production
+   always provides it; the fallback simply uses the server row unchanged. */
+const preserveOrgOnBootstrap = typeof preserveLocalOrgOnBootstrap === "function"
+  ? preserveLocalOrgOnBootstrap
+  : (remote: unknown) => remote;
+
 /* "larsa_enterprise_v3_new_account_20260630" is the key the accounting engine
    itself reads and writes (see STORE_KEY in public/engines/accounting.html).
    The "..._v34_clean" name below was never used by that engine, so until this
@@ -448,7 +455,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              The helper deliberately preserves only `org`; an explicit server
              chart (even empty) remains authoritative. */
           const bootstrapRemote = key === "larsaStaffV8"
-            ? preserveLocalOrgOnBootstrap(remote, local)
+            ? preserveOrgOnBootstrap(remote, local)
             : remote;
           const text = JSON.stringify(bootstrapRemote);
           const before = localStorage.getItem(key);
@@ -492,20 +499,39 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       const criticalCaughtUp = caughtUpKeys.splice(0, caughtUpKeys.length);
       console.log("[larsa-sync] staff roster catch-up complete; login is unblocked", criticalCaughtUp);
       criticalCaughtUp.forEach((key) => options.onRemoteChange?.(key));
-      /* The rest of the company state continues in the background. A slow or
-         temporarily unavailable secondary store is logged and retried by the
-         normal focus/reconnect polling, but cannot keep employees locked out. */
-      void Promise.all(SYNCED_KEYS
-        .filter((key) => key !== "larsaStaffV8")
-        .map((key) => pullKey(key)))
-        .then(() => {
-          if (cancelled) return;
-          console.log("[larsa-sync] secondary store catch-up complete", caughtUpKeys);
-          caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
-        })
-        .catch((err) => {
-          console.error("[larsa-sync] secondary store catch-up deferred; retrying in background:", err);
-        });
+       /* Secondary documents can be large (accounting, HR, and growth data are
+          not needed to identify a person or enable Clock In). Pulling all of
+          them concurrently during the first paint created a memory spike and
+          made Chromium report an unresponsive page. Let the shell and sign-in
+          form settle first, then pull one document at a time during idle gaps.
+          Nothing is dropped: the same guarded pull/merge path still runs, just
+          after the critical staff row has settled. */
+       const secondaryKeys = SYNCED_KEYS.filter((key) => key !== "larsaStaffV8");
+       const runSecondaryCatchup = async () => {
+         try {
+           for (const key of secondaryKeys) {
+             if (cancelled) return;
+             await pullKey(key);
+             if (cancelled) return;
+             await new Promise<void>((resolve) => {
+               const idle = (window as Window & {
+                 requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+               }).requestIdleCallback;
+               if (idle) idle(resolve, { timeout: 400 });
+               else setTimeout(resolve, 80);
+             });
+           }
+           if (cancelled) return;
+           console.log("[larsa-sync] secondary store catch-up complete", caughtUpKeys);
+           caughtUpKeys.forEach((key) => options.onRemoteChange?.(key));
+         } catch (err) {
+           console.error("[larsa-sync] secondary store catch-up deferred; retrying in background:", err);
+         }
+       };
+       /* Start only after the staff row has settled. Each network read still
+          yields before the next store, so this cannot recreate the old
+          concurrent memory spike. */
+       void runSecondaryCatchup();
     } catch (err) {
       console.error("[larsa-sync] bootstrap failed — retrying on focus, reconnect, or polling:", err);
       reportStatus("offline");
