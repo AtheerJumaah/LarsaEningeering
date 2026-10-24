@@ -63,12 +63,14 @@ test("the break buttons carry what they display and cannot be double-fired", () 
 
 test("the engine re-reads before it decides a break, and hands it over", () => {
   // The packed source still re-reads before a deliberate break decision.
-  // The unpacker below transforms only the decorative injection path so it
-  // refreshes once per rebuild instead of once per employee.
+  // The unpacker transforms only the decorative injection path; it must not
+  // add another full-store parse when the parent has already refreshed the
+  // engine state for a clock repaint.
   assert.match(engine, /function v30OnBreak\(uid\)\{\s*\n\s*if\(typeof freshState==='function'\)freshState\(\);/);
   assert.match(engine, /function v30ClockedIn\(uid\)\{\s*\n\s*if\(typeof freshState==='function'\)freshState\(\);/);
   assert.match(raw, /\.replace\(\/function v30OtherStatus/);
-  assert.match(raw, /\.replace\(\/function v30Inject/);
+  assert.doesNotMatch(raw, /\.replace\(\/function v30Inject/,
+    "v30Inject must not parse the full staff blob on every repaint");
   assert.match(engine, /var offering=.*?['"]Break End['"].*?['"]Break Start['"];/);
   assert.match(engine, /typeof p\.__larsaBreak==='function'\)\{p\.__larsaBreak\(offering,note\|\|'',currentUser\.id\);return;\}/);
   assert.match(page, /holder\.__larsaBreak = \(intent, note, uid\) => \{/);
@@ -128,7 +130,7 @@ test("legacy Clock-page decoration cannot rebuild the page every four seconds", 
   assert.match(raw, /source\.includes\("v30Inject"\)/);
   assert.match(raw, /if \(delay === 4000\)/);
   assert.match(raw, /source\.includes\("v30Inject"\) \|\| source\.includes\("v31Relabel"\)/);
-  assert.match(raw, /freshState\(\) parses the entire staff blob/);
+  assert.match(raw, /Re-parsing the full staff blob here made each punch pay/);
 });
 
 test("a refresh that finds nothing changed does not pull the 840 KB blob", () => {

@@ -24,19 +24,19 @@
     (() => {
       const nativeParse = DOMParser.prototype.parseFromString;
       DOMParser.prototype.parseFromString = function (source, type, ...rest) {
-        /* The packed Clock template contains a legacy enhancement that calls
-           freshState() once per employee while rebuilding its manager card.
-           freshState() parses the entire staff blob; on a real account that
-           turns one harmless decoration refresh into dozens of synchronous
-           JSON parses, starving the main thread and freezing Clock Out. Keep
-           the same data semantics, but refresh the shared state once per
-           injection and let the status helpers read that snapshot. */
+        /* The packed Clock template contains legacy decoration helpers. They
+           must never parse the full staff document while rebuilding a card.
+           The parent refresh bridge already refreshes the engine state before
+           renderClock(); the helpers below therefore read that in-memory
+           snapshot. Re-parsing the full staff blob here made each punch pay
+           for duplicate synchronous JSON work and eventually starved the
+           renderer, which is what produced the browser "not responding"
+           dialog after repeated Clock In/Out actions. */
         if (type === "text/html" && typeof source === "string" && source.includes("v30Inject")) {
           source = source
             .replace(/function v30OtherStatus\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OtherStatus(uid){\n")
             .replace(/function v30OnBreak\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OnBreak(uid){\n")
             .replace(/function v30ClockedIn\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30ClockedIn(uid){\n")
-            .replace(/function v30Inject\(\)\{\n\s*try\{\n/, "function v30Inject(){\n  try{\n    if(typeof freshState==='function')freshState();\n")
             /* These legacy timers repeatedly remove and rebuild the entire
                Clock content.  They were the source of the browser's main
                thread stalls and could cover the newly available Clock Out
