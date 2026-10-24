@@ -117,8 +117,21 @@ test("sign-out pauses shared-state writes without disabling refresh", () => {
   assert.match(sync, /export function setLarsaSyncWritesPaused\(paused: boolean\)/);
   assert.match(sync, /if \(cancelled \|\| syncWritesPaused\) return;/);
   assert.match(sync, /!syncWritesPaused && this === window\.localStorage/);
-  assert.match(page, /setLarsaSyncWritesPaused\(false\);\s*\n\s*refreshSharedStateNow\(\);/);
+  assert.match(page, /setLarsaSyncWritesPaused\(false\);\s*\n\s*setLarsaSyncSessionActive\(true\);\s*\n[\s\S]*?refreshSharedStateNow\(\);/);
   assert.match(page, /const signOut = useCallback\(\(\) => \{\s*\n\s*setLarsaSyncWritesPaused\(true\);/);
+});
+
+test("rapid logout and login never evaluates a stale iframe synchronously", () => {
+  const signIn = page.slice(page.indexOf("const completeSignIn = useCallback"), page.indexOf("const startAccessPreview"));
+  assert.ok(signIn.length > 500, "completeSignIn could not be isolated");
+  assert.match(signIn, /setLarsaSyncSessionActive\(true\);/);
+  assert.match(signIn, /refreshSharedStateNow\(\);/);
+  assert.doesNotMatch(signIn, /Object\.keys\(refs\).*applySessionToFrame/,
+    "sign-in must not run a large cross-frame eval into stale documents");
+  assert.match(signIn, /freshly mounted[\s\S]*prepareFrame/);
+  const signOut = page.slice(page.indexOf("const signOut = useCallback"), page.indexOf("\/\* A browser can keep two tabs"));
+  assert.match(signOut, /Object\.values\(frameBootTimers\.current\)/);
+  assert.match(signOut, /Object\.keys\(remoteRefreshTimers\.current\)/);
 });
 
 test("clocking SOMEBODY ELSE is held to the same rule", () => {

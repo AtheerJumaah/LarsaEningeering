@@ -6267,8 +6267,14 @@ export default function Home() {
 
   const completeSignIn = useCallback((user: StaffUser, method: SignInMethod = "email") => {
     setLarsaSyncWritesPaused(false);
-    refreshSharedStateNow();
     setLarsaSyncSessionActive(true);
+    /* Do not synchronously evaluate the full session bridge into every iframe
+       here. After a fast sign-out/sign-in the refs can still point at an old,
+       busy engine document while React is removing it. A large cross-frame
+       eval on that document blocks the parent renderer and produces the
+       browser's native "page isn't responding" dialog. The freshly mounted
+       engine is authenticated by prepareFrame's onLoad path instead. */
+    refreshSharedStateNow();
     const normalizedUser = user.permissionProfile
       ? { ...user, permissions: staffPermissionsForUser(user) }
       : user;
@@ -6284,7 +6290,6 @@ export default function Home() {
        that belongs to whoever used it last. Claiming it here re-points it at
        the person now signed in — silently, without asking permission again. */
     void adoptPushSubscription(normalizedUser.id, normalizedUser.name);
-    (Object.keys(refs) as Engine[]).forEach((engine) => applySessionToFrame(engine, normalizedUser, method));
     const requestedView = new URLSearchParams(window.location.search).get("view");
     const requestedItem = ITEMS.find((item) => item.id === requestedView);
     // A PIN is a shift-floor sign-in: it must land on the clock with no extra taps.
@@ -6297,7 +6302,7 @@ export default function Home() {
     setLoadedEngines(landingItem.engine ? new Set<Engine>([landingItem.engine]) : new Set<Engine>());
     setNavChannel(channelForItem(landingItem));
     setActive(landingItem);
-  }, [applySessionToFrame, refs]);
+  }, []);
 
   const startAccessPreview = (user: StaffUser) => {
     const owner = sessionUserRef.current;
@@ -6830,6 +6835,20 @@ export default function Home() {
     setSessionUser(null);
     setSessionMethod(null);
     setPreviewOwner(null);
+    /* Cancel any boot or remote-refresh work that was scheduled for the
+       previous account. These callbacks can otherwise fire while the next
+       login is mounting and evaluate into a stale iframe. */
+    Object.values(frameBootTimers.current).forEach((timer) => {
+      if (timer !== undefined) window.clearInterval(timer);
+    });
+    frameBootTimers.current = {};
+    Object.keys(remoteRefreshTimers.current).forEach((key) => {
+      const timer = remoteRefreshTimers.current[key];
+      if (timer !== undefined) window.clearTimeout(timer);
+      delete remoteRefreshTimers.current[key];
+    });
+    if (storageRefreshTimer.current !== null) window.clearTimeout(storageRefreshTimer.current);
+    storageRefreshTimer.current = null;
     setLoadedEngines(new Set<Engine>());
     setTimesheetLoading(false);
     setNavChannel("home");
