@@ -27,10 +27,13 @@ test("a retry reuses the pending event and does not lose the employee's note", (
 });
 
 test("the clock button explains a slow confirmation instead of showing a frozen Saving label", () => {
-  assert.match(page, /Confirming Clock (?:In|Out)…/);
-  assert.match(page, /Still confirming — no extra click needed\./);
-  assert.match(page, /clock-action-status/);
-  assert.doesNotMatch(page, /punching \? "Saving…"/);
+  // The durable local queue is the user-facing hand-off. The button is freed
+  // immediately; server confirmation continues in the background and never
+  // blocks the renderer behind a slow RPC/auth refresh.
+  assert.match(page, /punching \? "Saving locally…"/);
+  assert.match(page, /Clock action saved locally; confirming in the background/);
+  assert.match(page, /saved locally and will retry automatically/);
+  assert.doesNotMatch(page, /Confirming Clock (?:In|Out)…/);
 });
 
 test("the same server state refreshes the screen without another press", () => {

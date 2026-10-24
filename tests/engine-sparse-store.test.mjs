@@ -25,8 +25,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const html = await readFile(new URL("../public/engines/timeclock.html", import.meta.url), "utf8");
-const line = html.split("\n")[182];
-const app = JSON.parse(line.slice(line.indexOf('"'), line.lastIndexOf('"') + 1));
+/* The engine wrapper gains a few boot guards over time, so the bundled
+   template is not tied to a magic line number. Extract the JSON payload from
+   its named script instead; this keeps the sparse-store checks focused on the
+   actual engine code rather than the wrapper's formatting. */
+const match = html.match(/<script type="__bundler\/template">\s*([\s\S]*?)\s*<\/script>/);
+assert.ok(match, "timeclock template payload is missing");
+const app = JSON.parse(match[1]);
 
 test("v10Ensure normalises logs and approvals before walking them", () => {
   const fn = app.slice(app.indexOf("function v10Ensure(){"), app.indexOf("function v10History("));

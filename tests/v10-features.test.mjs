@@ -414,13 +414,14 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
      the account ledger and the attendance ledger both wrap
      localStorage.setItem on top of the sync layer's wrapper, so they have to
      come off before it does. */
-  assert.match(page, /window\.clearTimeout\(clockGateCeiling\);\s*\n\s*cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);[\s\S]{0,400}?\}, \[hydrated, refs, markClockConfirmed, setAttendanceConnectionState\]\);/);
+  assert.match(page, /window\.clearTimeout\(clockGateCeiling\);\s*\n\s*cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);[\s\S]{0,500}?\}, \[hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState\]\);/);
   // A remote change bumps the same storageTick the rest of the app already
   // reacts to, and refreshes the affected engine IN PLACE (state re-read +
   // render) instead of reloading its iframe — the blanket reload blanked
   // whichever engine page was on screen on every remote save ("pages keep
   // blinking"). The refresh is debounced per store key.
-  assert.match(page, /onRemoteChange: \(key\) => \{\s*\n\s*setStorageTick\(\(value\) => value \+ 1\);/);
+  assert.match(page, /onRemoteChange: \(key\) => \{/);
+  assert.match(page, /queueStorageRefresh\(\);/);
   assert.match(page, /remoteRefreshTimers\.current;/);
   const remoteHandler = page.slice(page.indexOf("onRemoteChange: (key) => {"), page.indexOf("onStatusChange: (status) => {"));
   assert.ok(!remoteHandler.includes("location.reload"), "remote changes must never reload engine iframes");

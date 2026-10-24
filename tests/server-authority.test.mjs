@@ -44,7 +44,10 @@ test("a missing server staff roster never promotes an arbitrary browser cache", 
 });
 
 test("login is unblocked after the staff roster, without waiting for secondary stores", () => {
-  assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*reportStatus\("synced"\);[\s\S]*Promise\.all\(SYNCED_KEYS/);
+  assert.match(sync, /await pullKey\("larsaStaffV8"\);[\s\S]*reportStatus\("synced"\);/);
+  assert.match(sync, /refreshNowHook = \(\) => \{ void refreshFromServer\("login or explicit revalidation", \["larsaStaffV8"\]\); \};/);
+  assert.match(sync, /const runSecondaryCatchup = async \(\) => \{/);
+  assert.match(sync, /void runSecondaryCatchup\(\);/);
 });
 
 test("startup avoids downloading an unchanged roster blob", () => {

@@ -73,7 +73,10 @@ test("attendance fallback polls the compact ledger independently of the large st
     "the bounded fallback page must prioritize the newest punch");
   assert.match(ledger, /const ordered = \[\.\.\.data\]\.sort/,
     "newest-first results must be applied back in chronological order");
-  assert.match(ledger, /setInterval\(\(\) => \{ void pollRecentAttendance\(\); \}, 1_000\)/);
+  // Realtime is the low-latency path. The bounded fallback polls every five
+  // seconds so a missed websocket event cannot consume the renderer with a
+  // REST request every second from every open tab.
+  assert.match(ledger, /setInterval\(\(\) => \{ void pollRecentAttendance\(\); \}, 5_000\)/);
   assert.match(ledger, /const attendancePollInFlight =|let attendancePollInFlight/);
 });
 

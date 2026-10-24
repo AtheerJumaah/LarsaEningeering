@@ -12,7 +12,7 @@ test("email verification follows the requested role windows and expires kept ses
   /* The device check moved behind the server policy: checkVerification asks
      Supabase first and the local device stamp is the offline fallback. Same
      behaviour, new seam. */
-  assert.match(page, /deviceNeedsVerification\(refreshed, getDeviceId\(\)\)/);
+  assert.match(page, /deviceNeedsVerification\(refreshed, deviceId\)/);
   assert.match(page, /checkVerification\(\{ id: refreshed\.id, email: refreshed\.email, access: refreshed\.access, role: refreshed\.role \}\)/);
   assert.match(page, /verificationRemainingMs\(sessionUser, getDeviceId\(\)\)/);
 });

@@ -782,7 +782,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     pushTimers.delete(key);
     await pushKey(key);
   };
-  refreshNowHook = () => { void refreshFromServer("login or explicit revalidation"); };
+  /* Login only needs the staff/identity row. Pulling every large secondary
+     document (accounting, HR, growth) in the same turn made Chromium allocate
+     several megabytes while the sign-in shell was still painting; on weaker
+     machines that produced the native "page isn't responding" dialog. The
+     normal focus/idle catch-up still refreshes the secondary stores immediately
+     after the staff row is current, so this narrows the critical path without
+     dropping any data. */
+  refreshNowHook = () => { void refreshFromServer("login or explicit revalidation", ["larsaStaffV8"]); };
 
   return () => {
     cancelled = true;

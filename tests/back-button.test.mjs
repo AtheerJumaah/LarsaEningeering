@@ -104,7 +104,9 @@ test("Approval Flow is edited in HR & Skills, over the same flowConfig", () => {
   assert.match(page, /\{ id: "hr-approval-flow", label: "Approval Flow",[^}]*native: "approvalFlow" \}/);
   assert.match(page, /if \(item\.id === "hr-approval-flow"\) return "hr";/);
   assert.match(page, /"hr-approval-flow": \["view", "add", "edit", "delete", "approve", "manage"\]/);
-  assert.match(page, /active\.native === "approvalFlow"/);
+  // Native panels are mutually exclusive; the approval-flow screen is mounted
+  // only when the active native view is approvalFlow.
+  assert.match(page, /<NativePanel active=\{active\.native\} view="approvalFlow">/);
   assert.match(page, /function ApprovalFlowCentre\(/);
   // Steps can be reordered, added and removed — the thing that was missing.
   assert.match(page, /const move = \(at: number, by: number\) => \{/);
