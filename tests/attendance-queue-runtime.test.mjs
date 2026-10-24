@@ -19,7 +19,7 @@ function writer(review=false, confirmation={reached:true,status:'Out'}){
     clearAttendanceQueue:key=>data.delete(key),
     localStorage:{setItem:(k,v)=>data.set(k,v)},serverNowIso:()=>new Date().toISOString(),serverNowMs:()=>Date.now(),
     confirmClockState:async(...args)=>{confirmCalls.push(args);return confirmation;},
-    notify(){},pushSyncedKeyNow(){},setLarsaSyncWritesPaused(){},refreshStaffEngine(){},setStorageTick(){},markAttendanceEventSent(){},
+    notify(){},pushSyncedKeyNow(){},setLarsaSyncWritesPaused(){},refreshStaffEngine(){},repaintAttendance(){},setStorageTick(){},markAttendanceEventSent(){},
     recordAttendancePunch:async event=>{
       events.push(event);
       if(events.length===1)await new Promise(resolve=>{release=resolve;});

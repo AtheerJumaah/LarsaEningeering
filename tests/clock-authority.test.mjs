@@ -41,7 +41,11 @@ test("an ambiguous timeout keeps the same event queued for retry", () => {
 
 test("the selected punch repaints immediately while the server save is pending", () => {
   const queueWrite = punch.indexOf("if (!writeAttendanceQueue(queueKey, pending))");
-  const immediatePaint = punch.indexOf("setStorageTick(value => value + 1);", queueWrite);
+  const paintCandidates = [
+    punch.indexOf("setStorageTick(value => value + 1);", queueWrite),
+    punch.indexOf("repaintAttendance();", queueWrite),
+  ].filter((position) => position >= 0);
+  const immediatePaint = Math.min(...paintCandidates);
   const serverCall = punch.indexOf("const result = await recordAttendancePunch(event);");
   assert.ok(queueWrite >= 0 && immediatePaint > queueWrite && immediatePaint < serverCall,
     "the durable pending queue must repaint before the network RPC completes");

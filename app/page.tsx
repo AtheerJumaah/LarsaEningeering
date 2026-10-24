@@ -4812,6 +4812,10 @@ export default function Home() {
     [],
   );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
+  /* A punch can settle several queued events in one pass. Keep the embedded
+     engine repaint single-flight so four quick In/Out actions cannot enqueue
+     four full iframe renders on the browser's main thread. */
+  const staffRefreshTimer = useRef<number | null>(null);
   /* Coalesce realtime/storage notifications into one shell refresh. */
   const storageRefreshTimer = useRef<number | null>(null);
   const queueStorageRefresh = useCallback(() => {
@@ -7100,6 +7104,8 @@ export default function Home() {
     Object.values(frameBootTimers.current).forEach((timer) => {
       if (timer !== undefined) window.clearInterval(timer);
     });
+    if (staffRefreshTimer.current !== null) window.clearTimeout(staffRefreshTimer.current);
+    staffRefreshTimer.current = null;
     frameBootTimers.current = {};
   }, []);
 
@@ -7540,7 +7546,9 @@ export default function Home() {
      handing it to a timeout lets the click paint first and the engine catch up
      immediately after. */
   const refreshStaffEngine = useCallback(() => {
-    window.setTimeout(() => {
+    if (staffRefreshTimer.current !== null) return;
+    staffRefreshTimer.current = window.setTimeout(() => {
+      staffRefreshTimer.current = null;
       /* The legacy staff engine is mounted on demand.  Do not ask a hidden
          iframe to parse the full staff document and render while the user is
          on the native clock: that synchronous work can block the shell just
@@ -7557,6 +7565,18 @@ export default function Home() {
       }
     }, 0);
   }, []);
+
+  /* Embedded staff pages already own their rendered state. Updating the
+     parent shell on every punch forces all large report memos to parse again;
+     send one coalesced iframe repaint instead. Native pages still need the
+     storage tick to update their React view immediately. */
+  const repaintAttendance = useCallback(() => {
+    if (activeRef.current.engine === "staff") {
+      refreshStaffEngine();
+      return;
+    }
+    setStorageTick((value) => value + 1);
+  }, [refreshStaffEngine]);
 
   const saveMyPoints = (draft: PerformanceDraft, submit: boolean) => {
     const user = sessionUserRef.current;
@@ -7812,7 +7832,7 @@ export default function Home() {
        authority, but employees should see their selected In/Out transition
        without waiting for the RPC, realtime echo, or the large staff-store
        sync. The same event id remains queued for an idempotent retry. */
-    setStorageTick(value => value + 1);
+    repaintAttendance();
     if (user.id !== actor.id) {
       try {
         const registryKey = `larsaAttendanceManagedPendingV1:${actor.id}`;
@@ -7822,7 +7842,7 @@ export default function Home() {
     }
 
     if (queueOnly) {
-      setStorageTick(value => value + 1);
+      repaintAttendance();
       notify("Your attendance action is queued behind the current save. Its original time is saved; no extra click is needed.");
       return false;
     }
@@ -7856,7 +7876,7 @@ export default function Home() {
         continue;
       }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
-        setStorageTick(value => value + 1);
+        repaintAttendance();
         if (!quiet) notify("Clock action recorded; confirming with the server. No extra click is needed.");
         return false;
       }
@@ -7925,12 +7945,12 @@ export default function Home() {
       }
       try { refreshStaffEngine(); }
       catch { localRefreshFailed = true; }
-      setStorageTick((value) => value + 1);
+      repaintAttendance();
     }
 
     if (reviewCount > 0) {
       notify(`${reviewCount} delayed attendance action${reviewCount === 1 ? " needs" : "s need"} a correction. Original times were retained for review.`);
-      setStorageTick(value => value + 1);
+      repaintAttendance();
       return false;
     }
     if (lastOutcome === "already") {
@@ -7942,7 +7962,7 @@ export default function Home() {
     if (localRefreshFailed) notify(`Your clock action was saved on the server, but this device could not refresh. Reload the page.`);
     else if (!quiet) notify(lastStatus === "In" ? `Clocked in — ${mode}` : lastStatus === "Out" ? `Clocked out — ${mode}` : lastStatus === "Break Start" ? "Break started." : "Break ended.");
     return true;
-  }, [notify, refreshStaffEngine, accessUsers]);
+  }, [notify, refreshStaffEngine, repaintAttendance, accessUsers]);
   const punchClockGuarded = useCallback(async (mode: string, note = "", intent?: AttendancePunchInput["status"], quiet = false, targetUid?: string) => {
     if (punchLock.current) {
       if (quiet) return false;
