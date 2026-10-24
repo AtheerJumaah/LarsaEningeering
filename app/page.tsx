@@ -4818,6 +4818,12 @@ export default function Home() {
   const staffRefreshTimer = useRef<number | null>(null);
   /* Coalesce realtime/storage notifications into one shell refresh. */
   const storageRefreshTimer = useRef<number | null>(null);
+  /* The embedded staff engine owns its own attendance screen. Re-parsing the
+     large staff document in the parent for every clock event only competes
+     with the visible iframe for the main thread. Remember that the parent
+     has work waiting, then pick it up when navigation returns to a native
+     screen. */
+  const staffStoreDirtyRef = useRef(false);
   const queueStorageRefresh = useCallback(() => {
     if (storageRefreshTimer.current !== null) return;
     storageRefreshTimer.current = window.setTimeout(() => {
@@ -4848,9 +4854,19 @@ export default function Home() {
     if (!hydrated) return;
     const onStorage = (event: StorageEvent) => {
       if (event.key && !event.key.toLowerCase().startsWith("larsa")) return;
+      if (event.key === "larsaStaffV8" && activeRef.current.engine === "staff") {
+        staffStoreDirtyRef.current = true;
+        return;
+      }
       queueStorageRefresh();
     };
-    const onAttendanceRealtime = () => queueStorageRefresh();
+    const onAttendanceRealtime = () => {
+      if (activeRef.current.engine === "staff") {
+        staffStoreDirtyRef.current = true;
+        return;
+      }
+      queueStorageRefresh();
+    };
     window.addEventListener("storage", onStorage);
     window.addEventListener("larsa:attendance-realtime", onAttendanceRealtime);
     return () => {
@@ -4923,7 +4939,15 @@ export default function Home() {
           const nowText = (() => { try { return localStorage.getItem(key); } catch { return null; } })();
           if (nowText === remoteRefreshLastText.current[key]) return;
           remoteRefreshLastText.current[key] = nowText;
-          queueStorageRefresh();
+          /* The active staff iframe already owns the clock/attendance view.
+             Do not make the parent parse the full staff blob in the middle of
+             a punch or timer tick. The next native screen consumes this
+             pending refresh before it renders. */
+          if (key === "larsaStaffV8" && activeRef.current.engine === "staff") {
+            staffStoreDirtyRef.current = true;
+          } else {
+            queueStorageRefresh();
+          }
           try {
             if (key === "larsaStaffV8") {
               staffRef.current?.contentWindow?.eval(`
@@ -7304,6 +7328,10 @@ export default function Home() {
         delete frame.dataset.timesheetRoute;
         frame.style.visibility = "";
       }
+    }
+    if (item.engine !== "staff" && staffStoreDirtyRef.current) {
+      staffStoreDirtyRef.current = false;
+      setStorageTick((value) => value + 1);
     }
     setLoadedEngines(item.engine ? new Set<Engine>([item.engine]) : new Set<Engine>());
     setActive(item);
