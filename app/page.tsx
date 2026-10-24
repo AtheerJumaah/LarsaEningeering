@@ -18946,8 +18946,6 @@ function QuickClock({
   const [mode, setMode] = useState("Office");
   const [note, setNote] = useState("");
   const [punching, setPunching] = useState(false);
-  const [punchStartedAt, setPunchStartedAt] = useState<number | null>(null);
-  const [punchWaitSeconds, setPunchWaitSeconds] = useState(0);
   const [breaking, setBreaking] = useState(false);
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({
@@ -19099,20 +19097,6 @@ function QuickClock({
     return () => clearInterval(timer);
   }, []);
 
-  /* A punch can legitimately take a moment while the authoritative server
-     confirms the idempotent event. Show a deliberate progress state instead
-     of leaving the employee with a static "Saving…" label that looks frozen. */
-  useEffect(() => {
-    if (!punching || punchStartedAt === null) {
-      setPunchWaitSeconds(0);
-      return;
-    }
-    const update = () => setPunchWaitSeconds(Math.max(0, Math.floor((Date.now() - punchStartedAt) / 1000)));
-    update();
-    const timer = window.setInterval(update, 250);
-    return () => window.clearInterval(timer);
-  }, [punching, punchStartedAt]);
-
   const open = summary.openClock;
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
@@ -19234,12 +19218,7 @@ function QuickClock({
             punch is enabled only after the server connection is confirmed. */}
         {punching && <p className="clock-action-status" role="status" aria-live="polite">
           <span className="clock-action-orb" aria-hidden="true" />
-          {punchWaitSeconds >= 8
-            ? "Still confirming — no extra click needed."
-            : punchWaitSeconds >= 2
-              ? "Confirming securely…"
-              : "Confirming…"}
-          {punchWaitSeconds >= 2 ? <small>{punchWaitSeconds}s</small> : null}
+          Saving the clock action locally…
         </p>}
         <button
           type="button"
@@ -19247,33 +19226,27 @@ function QuickClock({
           disabled={!punchAvailable || punching || Boolean(pendingStatus)}
           onClick={async () => {
             if (punching) return;
-            setPunchStartedAt(Date.now());
             setPunching(true);
-            try {
-              /* The durable queue is written before the authoritative RPC.
-                 Do not hold the clock button hostage to a slow network,
-                 database lock, or a sleeping realtime connection: after this
-                 short hand-off the event is protected locally and the retry
-                 worker can finish it with the same idempotency key. */
-              let handedOff = false;
-              const operation = punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In");
-              const handoff = new Promise<boolean>((resolve) => {
-                window.setTimeout(() => {
-                  handedOff = true;
-                  resolve(false);
-                }, 1200);
-              });
-              const result = await Promise.race([operation, handoff]);
-              if (result) setNote("");
-              if (handedOff) notify("Clock action saved locally; confirming in the background. No extra click is needed.");
-            } finally {
-              setPunching(false);
-              setPunchStartedAt(null);
+            /* Queue the event and release the control immediately. `punch`
+               writes the durable local event before its first network await;
+               the same promise then continues in the background with the
+               server RPC and idempotent retry. The UI must never wait on that
+               promise, because a slow database or auth refresh should not
+               make a clock action look frozen. */
+            const operation = punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In");
+            setPunching(false);
+            if (pendingStatus === undefined) {
+              notify("Clock action saved locally; confirming in the background. No extra click is needed.");
             }
+            void operation.then((result) => {
+              if (result) setNote("");
+            }).catch(() => {
+              notify("Clock action is saved locally and will retry automatically. No extra click is needed.");
+            });
           }}
         >
           <Timer size={22} />
-          {punching ? (clockedIn ? "Confirming Clock Out…" : "Confirming Clock In…") : clockedIn ? "Clock Out" : "Clock In"}
+          {punching ? "Saving locally…" : clockedIn ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
