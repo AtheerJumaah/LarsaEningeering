@@ -125,7 +125,9 @@ export async function flushLedgerQueue(): Promise<void> {
        where the RPC committed before the browser lost its response. */
     const sent = new Set<string>();
     for (const event of queue) {
-      const { data, error } = await client.rpc("record_attendance_action", {
+      const controller = new AbortController();
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const request = client.rpc("record_attendance_action", {
         p_client_event_id: event.client_event_id,
         p_occurred_at: event.occurred_at,
         p_uid: event.uid,
@@ -139,7 +141,17 @@ export async function flushLedgerQueue(): Promise<void> {
         p_removed_ids: [],
         p_actor_employee_id: event.clocked_by ? event.clocked_by : event.uid,
         p_device_info: null,
-      });
+      }).abortSignal(controller.signal);
+      const { data, error } = await Promise.race([
+        request,
+        new Promise<{ data: null; error: Error }>((resolve) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            resolve({ data: null, error: new Error("attendance queue write timed out") });
+          }, 5000);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
       if (error) continue;
       const row = Array.isArray(data) ? data[0] : data;
       if (row && (row.outcome === "recorded" || row.outcome === "already")) {
@@ -382,11 +394,13 @@ export function initAttendanceLedger(): () => void {
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     if (!attendanceClient) return;
     attendancePollInFlight = true;
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const since = lastAttendancePollStamp
         ? new Date(Math.max(0, Date.parse(lastAttendancePollStamp) - 2_000)).toISOString()
         : new Date(Date.now() - 120_000).toISOString();
-      const { data, error } = await attendanceClient
+      const request = attendanceClient
         .from("attendance_events")
         .select("client_event_id, occurred_at, uid, status, work_mode, note, clocked_by, inserted_at")
         .gte("inserted_at", since)
@@ -396,7 +410,17 @@ export function initAttendanceLedger(): () => void {
            the next stamp window.  We apply the bounded page oldest-first
            below so active flags still settle in event order. */
         .order("inserted_at", { ascending: false })
-        .limit(200);
+        .limit(200)
+        .abortSignal(controller.signal);
+      const { data, error } = await Promise.race([
+        request,
+        new Promise<{ data: null; error: Error }>((resolve) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            resolve({ data: null, error: new Error("attendance watchdog timed out") });
+          }, 2500);
+        }),
+      ]);
       if (error || !Array.isArray(data)) return;
       const ordered = [...data].sort((left, right) =>
         Date.parse(String((left as { inserted_at?: string }).inserted_at || ""))
@@ -409,6 +433,7 @@ export function initAttendanceLedger(): () => void {
     } catch {
       /* Realtime and the normal sync/reconnect paths remain available. */
     } finally {
+      if (timeout) clearTimeout(timeout);
       attendancePollInFlight = false;
     }
   };
@@ -463,7 +488,10 @@ export function initAttendanceLedger(): () => void {
     } catch { /* older test doubles / clients without auth events */ }
     void ensureRealtime();
     void pollRecentAttendance();
-    attendancePollTimer = window.setInterval(() => { void pollRecentAttendance(); }, 1_000);
+    /* Realtime is the normal low-latency path. Five seconds is enough to
+       recover a missed websocket event without issuing a full REST query
+       every second from every open tab. */
+    attendancePollTimer = window.setInterval(() => { void pollRecentAttendance(); }, 5_000);
   }
   const onAttendanceOnline = () => { void pollRecentAttendance(); };
   const onAttendanceVisible = () => {

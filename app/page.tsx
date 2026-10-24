@@ -10863,6 +10863,7 @@ export default function Home() {
               week={myWeek}
               development={myDevelopment}
               store={staffStore}
+              notify={notify}
             />
           </NativePanel>
           <NativePanel active={active.native} view="requests">
@@ -18914,7 +18915,7 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady, connection,
+  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady, connection, notify,
 }: {
   clockReady: boolean;
   connection: AttendanceConnection;
@@ -18935,6 +18936,7 @@ function QuickClock({
   week: { day: string; codes: string[]; entries: { start?: string; end?: string; code?: string; name?: string }[] }[];
   development: DevelopmentRecord[];
   store: Record<string, unknown> | null;
+  notify: (message: string) => void;
 }) {
   const dialog = useDialog();
   // Shares the schedule's catalogue so an edited shift reads the same here.
@@ -19244,7 +19246,22 @@ function QuickClock({
             setPunchStartedAt(Date.now());
             setPunching(true);
             try {
-              if (await punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In")) setNote("");
+              /* The durable queue is written before the authoritative RPC.
+                 Do not hold the clock button hostage to a slow network,
+                 database lock, or a sleeping realtime connection: after this
+                 short hand-off the event is protected locally and the retry
+                 worker can finish it with the same idempotency key. */
+              let handedOff = false;
+              const operation = punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In");
+              const handoff = new Promise<boolean>((resolve) => {
+                window.setTimeout(() => {
+                  handedOff = true;
+                  resolve(false);
+                }, 1200);
+              });
+              const result = await Promise.race([operation, handoff]);
+              if (result) setNote("");
+              if (handedOff) notify("Clock action saved locally; confirming in the background. No extra click is needed.");
             } finally {
               setPunching(false);
               setPunchStartedAt(null);
