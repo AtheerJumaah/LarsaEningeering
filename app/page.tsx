@@ -19122,6 +19122,10 @@ function QuickClock({
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
+  const pendingAgeSeconds = pendingPunch?.occurred_at
+    ? Math.max(0, Math.floor((Date.now() - Date.parse(pendingPunch.occurred_at)) / 1000))
+    : 0;
+  const pendingNeedsRetry = pendingAgeSeconds >= 8;
   const punchAvailable = connection === "online" || connection === "local";
   const connectionLabel = connection === "online"
     ? "Online · Server synced"
@@ -19187,7 +19191,7 @@ function QuickClock({
         </div>
         <span className={pendingStatus ? "access-pill" : open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
           <Radio size={16} /> {pendingStatus
-            ? `Pending · Clock ${pendingStatus === "In" ? "in" : "out"}`
+            ? `${pendingNeedsRetry ? "Saved locally · retrying" : "Pending"} · Clock ${pendingStatus === "In" ? "in" : "out"}`
             : open ? `On the clock · ${open.mode}` : "Off the clock"}
         </span>
       </section>
@@ -19198,7 +19202,7 @@ function QuickClock({
           <span>{connectionLabel}</span>
           <small>{punchAvailable ? "Clock actions enabled" : "Your saved attendance is still visible"}</small>
         </div>
-        {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action recorded" : `${pending.length} actions recorded`}</b> · confirming with the server. Your original time is protected; no extra click is needed.</p>}
+        {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action recorded" : `${pending.length} actions recorded`}</b> · {pendingNeedsRetry ? "saved locally; retrying automatically. Your original time is protected." : "confirming with the server. Your original time is protected; no extra click is needed."}</p>}
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
