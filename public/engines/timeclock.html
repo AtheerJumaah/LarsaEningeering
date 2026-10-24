@@ -43,6 +43,18 @@
                staff document. Merge those events after the normal store read;
                the event id makes this idempotent when the server sync arrives. */
             .replace(/function freshState\(\)\{var real=readStore\(\);if\(real&&Array\.isArray\(real\.users\)&&real\.users\.length\)\{state=real;try\{window\.state=real\}catch\(e\)\{\}\}return state\}/, () => `function applyAttendanceOverlay(){try{var raw=localStorage.getItem('larsaAttendanceOverlayV1'),items=raw?JSON.parse(raw):[];if(!Array.isArray(items)||!items.length||!state||!Array.isArray(state.logs))return;items.slice(-100).forEach(function(e){if(!e||!e.id||!e.uid||!e.status||!e.time)return;if(!state.logs.some(function(l){return String(l.id||'')===String(e.id)}))state.logs.push({id:e.id,uid:e.uid,type:e.type||'Office',status:e.status,time:e.time,note:e.note,clockedBy:e.clockedBy,lastSeen:e.lastSeen||e.time,active:false});});items.slice(-100).forEach(function(e){if(!e||!e.uid)return;state.logs.forEach(function(l){if(l.uid===e.uid&&(l.status==='In'||l.status==='Out'))l.active=false;});var latest=state.logs.filter(function(l){return l.uid===e.uid&&(l.status==='In'||l.status==='Out')}).sort(function(a,b){return new Date(b.time)-new Date(a.time)})[0];if(latest&&latest.status==='In')latest.active=true;});try{window.state=state}catch(e){}}catch(e){}}function freshState(){var real=readStore();if(real&&Array.isArray(real.users)&&real.users.length){state=real;try{window.state=real}catch(e){}}applyAttendanceOverlay();return state}`)
+            /* The current Clock renderer is refreshed by the parent bridge,
+               which already applies the small attendance overlay. Re-reading
+               and JSON-parsing the complete staff store here made every
+               punch synchronous work proportional to the whole database.
+               That was the main-thread stall seen after a few clock in/out
+               cycles. Keep freshState() for non-clock pages, but make the
+               active Clock renderer overlay-only. */
+            .replace(/function renderClockV22b\(\)\{if\(!currentUser\)return;freshState\(\);/, "function renderClockV22b(){if(!currentUser)return;if(typeof applyAttendanceOverlay==='function')applyAttendanceOverlay();")
+            /* v30Inject is installed by several render wrappers. Make it
+               idempotent across those wrappers so an unchanged clock state
+               does not repeatedly remove and rebuild the same DOM controls. */
+            .replace(/\/\/ Wrapped defensively: if anything earlier in the render chain throws/, () => `const v30OriginalInject = v30Inject;let v30InjectSignature='';let v30InjectBusy=false;v30Inject=function(){if(v30InjectBusy)return;if(typeof activePage!=='undefined'&&activePage!=='clock')return;if(!currentUser||!byId('content'))return;var own=(state.logs||[]).filter(function(l){return l.uid===currentUser.id&&(l.status==='In'||l.status==='Out'||l.status==='Break Start'||l.status==='Break End')});var latest=own.slice().sort(function(a,b){return new Date(b.time)-new Date(a.time)})[0];var sig=[currentUser.id,state.logs?state.logs.length:0,state.users?state.users.length:0,latest&&latest.id||'',latest&&latest.status||'',latest&&latest.time||'',canManageAttendance()?'manager':'staff'].join('|');if(sig===v30InjectSignature&&byId('v30MissedClockWrap'))return;v30InjectSignature=sig;v30InjectBusy=true;try{v30OriginalInject()}finally{v30InjectBusy=false}};\\/\\/ Wrapped defensively: if anything earlier in the render chain throws`)
             /* These legacy timers repeatedly remove and rebuild the entire
                Clock content.  They were the source of the browser's main
                thread stalls and could cover the newly available Clock Out
@@ -50,8 +62,18 @@
                state changes already call v30Inject/v31Relabel, so no poll is
                needed.  Replace the packed template source before parsing so
                the timers never get created. */
-            .replace(/if\(!window\.__v30Poll\)\{\\n\s*window\.__v30Poll = setInterval\(\(\)=>\{ if\(currentUser && activePage==='clock'\) v30Inject\(\); \}, 4000\);\\n\}/, "window.__v30Poll=0;")
-            .replace(/setInterval\(v31Relabel, 4000\);/, "");
+            /* Match the decoded template's real newlines and whitespace. The
+               previous replacement expected literal `\\n` characters, so
+               it silently missed the packed v30 poll. */
+            .replace(/if\(!window\.__v30Poll\)\{\s*window\.__v30Poll\s*=\s*setInterval\(\(\)=>\{\s*if\(currentUser && activePage==='clock'\) v30Inject\(\);\s*\},\s*4000\);\s*\}/g, "window.__v30Poll=0;")
+            .replace(/setInterval\(v31Relabel, 4000\);/, "")
+            .replace(/setInterval\(v31Relabel,\s*4000\);/g, "")
+            /* These helpers are legacy visual overlays. Their own one-second
+               loops repeatedly query and rebuild the topbar while the app is
+               handling attendance. The render-time path is authoritative. */
+            .replace(/setInterval\(updateTopClocks,\s*1000\);/g, "")
+            .replace(/setInterval\(\(\)=>\{removeLocalClock\(\);updateClocks26\(\)\},\s*1000\);/g, "")
+            .replace(/setInterval\(\(\)=>\{ensureTwoClocks\(\);alignButtonRows\(\);\},\s*1000\);/g, "");
         }
         const doc = nativeParse.call(this, source, type, ...rest);
         if (type === "text/html" && typeof source === "string" && source.includes("v30Inject")) {
