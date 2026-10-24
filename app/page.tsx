@@ -4647,6 +4647,11 @@ export default function Home() {
   const [verifyError, setVerifyError] = useState("");
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [verifyInfo, setVerifyInfo] = useState("");
+  /* A verification request can be triggered by the restored-session check or
+     by the expiry watchdog. Keep one request per account in flight and use a
+     token so a deliberate sign-out cannot be followed by a late async
+     callback that resurrects the verification screen. */
+  const verificationFlowRef = useRef<string | null>(null);
   // "Keep me signed in" survives a browser restart; without it the session ends
   // with the tab, which is what made sign-in feel like it "stopped working".
   const [rememberMe, setRememberMe] = useState(false);
@@ -6530,7 +6535,14 @@ export default function Home() {
             sessionStorage.removeItem("larsa-control-session");
             try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
           } else {
-            completeSignIn(currentUser, method || "email"); if (method === "email" && supabaseConfigured() && currentUser.email) { checkVerification({ id: currentUser.id, email: currentUser.email, access: currentUser.access, role: currentUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) { sessionStorage.removeItem("larsa-control-session"); try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ } sessionUserRef.current = null; setSessionUser(null); setLoginError("For security, please sign in and verify your email again."); } }); }
+            completeSignIn(currentUser, method || "email");
+            if (method === "email" && supabaseConfigured() && currentUser.email) {
+              checkVerification({ id: currentUser.id, email: currentUser.email, access: currentUser.access, role: currentUser.role }).then((verdict) => {
+                if (verdict && verdict.required && verdict.policy.force_relogin) {
+                  void requestEmailVerification(currentUser, method);
+                }
+              });
+            }
           }
         }
       } catch {
@@ -6604,6 +6616,37 @@ export default function Home() {
     return `Could not send a verification code: ${error.message}`;
   }, []);
 
+  /* Re-verification is an in-session step-up, not a destructive logout. The
+     old code cleared the session as soon as the server said the interval had
+     expired, which is exactly what produced the red "sign in again" message
+     and made people think the app had kicked them out. Keep the identity in a
+     pending stage, send the code once, and restore the same session after the
+     code is accepted. */
+  const requestEmailVerification = useCallback(async (user: StaffUser, method: SignInMethod = "email") => {
+    if (!user.email || verificationFlowRef.current) return;
+    const token = `${user.id}:${Date.now()}`;
+    verificationFlowRef.current = token;
+    setVerifyError("");
+    setLoginError("");
+    setVerifyInfo("Sending your verification code…");
+    setVerifyBusy(true);
+    const problem = await sendVerificationCode(user.email);
+    if (verificationFlowRef.current !== token) return;
+    setVerifyBusy(false);
+    if (problem) {
+      verificationFlowRef.current = null;
+      setVerifyInfo("");
+      setLoginError(problem);
+      return;
+    }
+    sessionUserRef.current = user;
+    sessionMethodRef.current = method;
+    setSessionUser(null);
+    setSessionMethod(null);
+    setVerifyStage({ user, email: user.email, method });
+    setVerifyInfo(`We sent a 6-digit code to ${user.email}. Enter it below to continue.`);
+  }, [sendVerificationCode]);
+
   /* Checks a code without touching the sign-in flow's state, so the same
      Supabase OTP can also guard sensitive changes made while already
      signed in -- a new password, a new PIN, or a new email address. */
@@ -6650,6 +6693,7 @@ export default function Home() {
     setVerifyStage(null);
     setVerifyCode("");
     setVerifyInfo("");
+    verificationFlowRef.current = null;
     try {
       if (rememberMe && rememberedMethod === "email") localStorage.setItem(REMEMBER_EMAIL_KEY, rememberedEmail);
       else if (rememberedMethod === "email") localStorage.removeItem(REMEMBER_EMAIL_KEY);
@@ -6815,7 +6859,15 @@ export default function Home() {
       const initialRequired = periodic
         ? periodic.policy.enabled !== false && periodic.policy.initial_verification_required !== false
         : true;
-      const initialProven = refreshed.emailVerified === true || Boolean(periodic?.lastVerifiedAt);
+      /* When the policy service answers, its mailbox stamp is authoritative.
+         The old local emailVerified flag was a migration convenience and
+         allowed some legacy employees to bypass the initial challenge while
+         others were asked for it. Use the server stamp for online sign-in;
+         only fall back to the local flag when the policy service is
+         unreachable. */
+      const initialProven = periodic
+        ? Boolean(periodic.lastVerifiedAt)
+        : refreshed.emailVerified === true;
       if (periodic?.lastVerifiedAt && refreshed.emailVerified !== true) {
         persistEmailVerified(refreshed.id, true);
       }
@@ -6898,6 +6950,11 @@ export default function Home() {
     setAppBadge(0);
     sessionUserRef.current = null;
     sessionMethodRef.current = null;
+    verificationFlowRef.current = null;
+    setVerifyStage(null);
+    setVerifyCode("");
+    setVerifyBusy(false);
+    setVerifyInfo("");
     setSessionUser(null);
     setSessionMethod(null);
     setPreviewOwner(null);
@@ -6978,8 +7035,27 @@ export default function Home() {
   useEffect(() => {
     if (previewOwner) return;
     if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
-    const remaining = verificationRemainingMs(sessionUser, getDeviceId()); if (remaining <= 0) { checkVerification({ id: sessionUser.id, email: sessionUser.email, access: sessionUser.access, role: sessionUser.role }).then((verdict) => { if (verdict && verdict.required && verdict.policy.force_relogin) signOut(); }); return; }
-    const timer = window.setTimeout(signOut, Math.max(0, Math.min(remaining, 2147483647)));
+    const verifyCurrentSession = (current: StaffUser) => {
+      if (!current.email) return;
+      checkVerification({ id: current.id, email: current.email, access: current.access, role: current.role }).then((verdict) => {
+        if (verdict && verdict.required && verdict.policy.force_relogin) {
+          void requestEmailVerification(current, "email");
+        }
+      });
+    };
+    const remaining = verificationRemainingMs(sessionUser, getDeviceId());
+    if (remaining <= 0) {
+      /* A transient policy timeout is fail-open: never sign someone out just
+         because the check could not be reached. If it is due, use the same
+         in-session verification flow as a fresh sign-in. */
+      verifyCurrentSession(sessionUser);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const current = sessionUserRef.current;
+      if (!current?.email || sessionMethodRef.current !== "email") return;
+      verifyCurrentSession(current);
+    }, Math.max(0, Math.min(remaining, 2147483647)));
     return () => window.clearTimeout(timer);
   }, [previewOwner, sessionMethod, sessionUser, signOut]);
 
