@@ -363,11 +363,16 @@ test("administration switches mount one current panel and never expose a pre-hyd
   assert.match(page, /useLayoutEffect\(\(\) => \{\s*document\.documentElement\.setAttribute\("data-larsa-ready", "true"\)/);
 });
 
-test("the staff engine is warmed before Timesheet is opened", () => {
-  // Timesheet lives in the staff engine. Loading that iframe only after the
-  // click made the redesigned board wait behind the legacy document boot.
-  assert.match(page, /Prewarm the staff engine after the signed-in workspace has painted/);
-  assert.match(page, /setLoadedEngines\(\(previous\) => \{[\s\S]*?previous\.has\("staff"\)[\s\S]*?next\.add\("staff"\)/);
+test("legacy engines are mounted exclusively for the active route", () => {
+  // The packed staff, HR, and accounting documents contain their own clocks,
+  // polling loops, and render hooks. Keeping a hidden prewarmed frame alive
+  // made every visited page consume more renderer memory until Chromium could
+  // show a native page-unresponsive dialog. Navigation now selects one engine
+  // and unmounts the others; their saved data remains in localStorage.
+  assert.match(page, /Legacy engines are exclusive: only the engine for the current route is mounted/);
+  assert.match(page, /setLoadedEngines\(landingItem\.engine \? new Set<Engine>\(\[landingItem\.engine\]\) : new Set<Engine>\(\)\)/);
+  assert.match(page, /setLoadedEngines\(item\.engine \? new Set<Engine>\(\[item\.engine\]\) : new Set<Engine>\(\)\)/);
+  assert.doesNotMatch(page, /Prewarm the staff engine after the signed-in workspace has painted/);
 });
 
 test("Timesheet keeps the legacy iframe hidden and shows only a compact wait cue", () => {

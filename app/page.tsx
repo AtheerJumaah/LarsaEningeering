@@ -4616,11 +4616,12 @@ export default function Home() {
   }, []);
 
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
-  // Keep the two less-common legacy engines lazy. The staff engine is
-  // different: Clock In / Out and Timesheet are the primary daily workflow,
-  // and waiting for its large document to download after the click made the
-  // Timesheet tab look frozen. It is warmed in the background after sign-in,
-  // while HR and Accounting remain on-demand to avoid the old memory spike.
+  // Legacy engines are exclusive: only the engine for the current route is mounted.
+  // Each document contains its own clocks, refresh loops, and render
+  // hooks; keeping previously visited iframes hidden still consumes renderer
+  // memory and CPU and eventually makes Chromium show a native
+  // "page isn't responding" dialog. The engines persist their data in
+  // localStorage, so unmounting an inactive frame does not lose saved work.
   const [loadedEngines, setLoadedEngines] = useState<Set<Engine>>(() => new Set());
   /* The Timesheet iframe is intentionally kept invisible until its new v33
      shell is ready. This state gives the user a small, honest wait cue while
@@ -4806,39 +4807,8 @@ export default function Home() {
   );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
 
-  /* Prewarm the staff engine after the signed-in workspace has painted. This
-     keeps the first Timesheet click inside an already-loaded frame without
-     mounting the much larger HR and Accounting documents for everybody. The
-     functional state update is intentional: a fast click may load staff at
-     the same time, and this must never create a second iframe. */
-  useEffect(() => {
-    if (!sessionUser?.id) return;
-    const warmStaffEngine = () => {
-      setLoadedEngines((previous) => {
-        if (previous.has("staff")) return previous;
-        const next = new Set(previous);
-        next.add("staff");
-        return next;
-      });
-    };
-    /* The staff frame is still warmed before a Timesheet click, but never in
-       the same task as Home's first authenticated paint. Parsing the large
-       legacy document while the shell is mounting is what made Chromium show
-       its native "page isn't responding" dialog. Idle work keeps the fast
-       path warm without monopolising the renderer; the timeout guarantees it
-       still happens on browsers with no idle periods. */
-    const idle = (window as Window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    }).requestIdleCallback;
-    const cancelIdle = (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback;
-    if (idle) {
-      const handle = idle(warmStaffEngine, { timeout: 1200 });
-      return () => cancelIdle?.(handle);
-    }
-    const timer = window.setTimeout(warmStaffEngine, 450);
-    return () => window.clearTimeout(timer);
-  }, [sessionUser?.id]);
+  /* Engines are mounted exclusively on demand; no hidden prewarm frame runs
+     after sign-in. */
 
   // If NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are set, this makes the three
   // localStorage stores shared across everyone's browser instead of one
@@ -6287,14 +6257,7 @@ export default function Home() {
       : method === "pin" && pinLanding && canOpenInSession(normalizedUser, pinLanding, method)
         ? pinLanding
         : ITEMS.find((item) => item.id === "overview") || DEFAULT_ITEM;
-    if (landingItem.engine) {
-      setLoadedEngines((previous) => {
-        if (previous.has(landingItem.engine!)) return previous;
-        const next = new Set(previous);
-        next.add(landingItem.engine!);
-        return next;
-      });
-    }
+    setLoadedEngines(landingItem.engine ? new Set<Engine>([landingItem.engine]) : new Set<Engine>());
     setNavChannel(channelForItem(landingItem));
     setActive(landingItem);
   }, [applySessionToFrame, refs]);
@@ -6829,6 +6792,8 @@ export default function Home() {
     setSessionUser(null);
     setSessionMethod(null);
     setPreviewOwner(null);
+    setLoadedEngines(new Set<Engine>());
+    setTimesheetLoading(false);
     setNavChannel("home");
     setLoginEmail("");
     setLoginPass("");
@@ -7103,14 +7068,7 @@ export default function Home() {
     const requestedItem = ITEMS.find((item) => item.id === requestedView);
     if (!requestedItem || requestedItem.id === activeRef.current.id) return;
     const timer = window.setTimeout(() => {
-      if (requestedItem.engine) {
-        setLoadedEngines((previous) => {
-          if (previous.has(requestedItem.engine!)) return previous;
-          const next = new Set(previous);
-          next.add(requestedItem.engine!);
-          return next;
-        });
-      }
+      setLoadedEngines(requestedItem.engine ? new Set<Engine>([requestedItem.engine]) : new Set<Engine>());
       setNavChannel(channelForItem(requestedItem));
       setActive(requestedItem);
     }, 0);
@@ -7257,14 +7215,7 @@ export default function Home() {
         frame.style.visibility = "";
       }
     }
-    if (item.engine) {
-      setLoadedEngines((previous) => {
-        if (previous.has(item.engine!)) return previous;
-        const next = new Set(previous);
-        next.add(item.engine!);
-        return next;
-      });
-    }
+    setLoadedEngines(item.engine ? new Set<Engine>([item.engine]) : new Set<Engine>());
     setActive(item);
     if (!["overview", "admin"].includes(item.id)) {
       localStorage.setItem("larsa-control-recent", item.id);
