@@ -4813,14 +4813,30 @@ export default function Home() {
      the same time, and this must never create a second iframe. */
   useEffect(() => {
     if (!sessionUser?.id) return;
-    const timer = window.setTimeout(() => {
+    const warmStaffEngine = () => {
       setLoadedEngines((previous) => {
         if (previous.has("staff")) return previous;
         const next = new Set(previous);
         next.add("staff");
         return next;
       });
-    }, 0);
+    };
+    /* The staff frame is still warmed before a Timesheet click, but never in
+       the same task as Home's first authenticated paint. Parsing the large
+       legacy document while the shell is mounting is what made Chromium show
+       its native "page isn't responding" dialog. Idle work keeps the fast
+       path warm without monopolising the renderer; the timeout guarantees it
+       still happens on browsers with no idle periods. */
+    const idle = (window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    }).requestIdleCallback;
+    const cancelIdle = (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback;
+    if (idle) {
+      const handle = idle(warmStaffEngine, { timeout: 1200 });
+      return () => cancelIdle?.(handle);
+    }
+    const timer = window.setTimeout(warmStaffEngine, 450);
     return () => window.clearTimeout(timer);
   }, [sessionUser?.id]);
 
@@ -4987,26 +5003,36 @@ export default function Home() {
           warmAttendanceAuth(),
           new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 1200)),
         ]).finally(() => markClockConfirmed());
-        reconcileStoreFromLedger().then(({ restored, changed }) => {
-          if (changed || restored > 0) {
-            setStorageTick((value) => value + 1);
-            if (restored > 0) notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
-          }
-        }).catch(() => { /* runs again on next open */ });
-        /* And the same for accounts. An account missing from the blob is
-           never read as a deletion — that is the failure this undoes — so
-           anything the account ledger holds and the blob has lost comes
-           back, unless it was deliberately tombstoned. */
-        reconcileAccountsFromLedger().then(({ restored, names }) => {
-          if (restored > 0) {
-            setStorageTick((value) => value + 1);
-            notifyRef.current(
-              restored === 1
-                ? `${names[0]}'s account was restored from the durable ledger.`
-                : `${restored} accounts were restored from the durable ledger: ${names.slice(0, 3).join(", ")}${restored > 3 ? `, and ${restored - 3} more` : ""}.`,
-            );
-          }
-        }).catch(() => { /* runs again on next open */ });
+        const reconcileDurableState = () => {
+          reconcileStoreFromLedger().then(({ restored, changed }) => {
+            if (changed || restored > 0) {
+              setStorageTick((value) => value + 1);
+              if (restored > 0) notifyRef.current(`${restored} attendance record${restored === 1 ? "" : "s"} restored from the durable ledger.`);
+            }
+          }).catch(() => { /* runs again on next open */ });
+          /* And the same for accounts. An account missing from the blob is
+             never read as a deletion — this is the failure this undoes — so
+             anything the account ledger holds and the blob has lost comes
+             back, unless it was deliberately tombstoned. */
+          reconcileAccountsFromLedger().then(({ restored, names }) => {
+            if (restored > 0) {
+              setStorageTick((value) => value + 1);
+              notifyRef.current(
+                restored === 1
+                  ? `${names[0]}'s account was restored from the durable ledger.`
+                  : `${restored} accounts were restored from the durable ledger: ${names.slice(0, 3).join(", ")}${restored > 3 ? `, and ${restored - 3} more` : ""}.`,
+              );
+            }
+          }).catch(() => { /* runs again on next open */ });
+        };
+        /* These are recovery reads, not login prerequisites. Run them in an
+           idle slot so the authenticated Home shell paints immediately; the
+           timeout guarantees recovery still runs on a busy device. */
+        const idle = (window as Window & {
+          requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+        }).requestIdleCallback;
+        if (idle) idle(reconcileDurableState, { timeout: 1800 });
+        else window.setTimeout(reconcileDurableState, 250);
       },
     });
     /* Every staff-blob write also appends new clock events to the durable

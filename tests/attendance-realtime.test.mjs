@@ -12,7 +12,8 @@ test("attendance realtime applies only the small append-only ledger event", () =
   assert.match(ledger, /recovery: "realtime-ledger"/);
   assert.match(ledger, /store\.logs\.some\(\(log\) => String\(log\?\.id \|\| ""\) === id\)/);
   assert.match(ledger, /larsa:attendance-realtime/);
-  assert.match(ledger, /duplicate realtime delivery still needs to repair active flags/);
+  assert.match(ledger, /appliedAttendanceIds\.has\(id\)/);
+  assert.match(ledger, /idempotency set/);
   assert.match(ledger, /await client\.auth\.getSession\(\)/);
   assert.match(ledger, /client\.auth\.onAuthStateChange/);
   assert.match(ledger, /if \(data\.session && !cancelled\) subscribe\(\)/);

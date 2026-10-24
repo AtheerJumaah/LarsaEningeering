@@ -192,16 +192,28 @@ function eventFromLog(log: ClockLogLike, store: StaffStoreLike, source: string):
    staff document. Apply that row to this browser immediately so a second
    device can repaint its clock within the websocket round trip. The normal
    app-state sync still follows and remains authoritative for roster edits. */
+const appliedAttendanceIds = new Set<string>();
+
 function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
   const id = String(row.client_event_id || "");
   const uid = String(row.uid || "");
   const status = String(row.status || "");
   const time = String(row.occurred_at || "");
   if (!id || !uid || !time || !LEDGER_STATUSES.has(status)) return;
+  /* The one-second watchdog deliberately overlaps its two-second look-back
+     window so a just-committed punch cannot be missed. Keep an in-memory
+     idempotency set so that overlap does not repeatedly parse, sort, and
+     rewrite the entire staff blob. A repeated row has no new information;
+     active-flag repair still happens through the first application and the
+     authoritative reconcile path. */
+  if (appliedAttendanceIds.has(id)) return;
   const store = readJson<StaffStoreLike>("larsaStaffV8", {});
   if (!Array.isArray(store.logs)) store.logs = [];
   const removed = new Set((store.removedLogIds || []).map(String));
-  if (removed.has(id)) return;
+  if (removed.has(id)) {
+    appliedAttendanceIds.add(id);
+    return;
+  }
   /* A duplicate realtime delivery still needs to repair active flags. The
      event may already be in this tab's cache from a previous sync while its
      denormalized `active` value is stale; returning early leaves the user
@@ -219,6 +231,17 @@ function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
       ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
       recovery: "realtime-ledger",
     });
+  } else {
+    /* It may have arrived through the local blob before the realtime/poll
+       path saw it. Mark it handled without paying the full reconciliation
+       cost on every overlapping poll. */
+    appliedAttendanceIds.add(id);
+    return;
+  }
+  appliedAttendanceIds.add(id);
+  if (appliedAttendanceIds.size > 2000) {
+    const first = appliedAttendanceIds.values().next().value;
+    if (first) appliedAttendanceIds.delete(first);
   }
   /* Recompute only the denormalized active flags. The immutable event itself
      is never changed, and a removed id can never become active again. */
@@ -313,6 +336,9 @@ export function initAttendanceLedger(): () => void {
   const current = localStorage.getItem("larsaStaffV8");
   if (current) {
     const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+    (store.logs || []).slice(-2000).forEach((log) => {
+      if (log?.id) appliedAttendanceIds.add(String(log.id));
+    });
     const seen = new Set(readJson<string[]>(SEEN_KEY, []));
     (store.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
     writeJson(SEEN_KEY, Array.from(seen));
