@@ -128,8 +128,12 @@ test("legacy Clock-page decoration cannot rebuild the page every four seconds", 
   // starve the renderer after a punch. The unpacker disables only that poll;
   // it does not remove the clock controls or the durable writer.
   assert.match(raw, /source\.includes\("v30Inject"\)/);
-  assert.match(raw, /if \(delay === 4000\)/);
+  assert.match(raw, /delay === 4000/);
   assert.match(raw, /source\.includes\("v30Inject"\) \|\| source\.includes\("v31Relabel"\)/);
+  assert.match(raw, /delay === 1000/);
+  assert.match(raw, /source\.includes\("updateTopClocks"\)/);
+  assert.match(raw, /source\.includes\("ensureTwoClocks"\)/);
+  assert.match(raw, /source\.includes\("updateClocks26"\)/);
   assert.match(raw, /Re-parsing the full staff blob here made each punch pay/);
 });
 

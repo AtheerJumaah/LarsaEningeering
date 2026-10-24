@@ -59,11 +59,23 @@
           guard.textContent = `(() => {
             const nativeSetInterval = window.setInterval;
             window.setInterval = function (fn, delay, ...args) {
-              if (delay === 4000) {
-                let source = "";
-                try { source = Function.prototype.toString.call(fn); } catch {}
-                if (source.includes("v30Inject") || source.includes("v31Relabel")) return 0;
-              }
+              let source = "";
+              try { source = Function.prototype.toString.call(fn); } catch {}
+              /* The packed engine contains several generations of the same
+                 clock-bar enhancement. Their one-second callbacks repeatedly
+                 remove/rebuild DOM and allocate Intl formatters, which can
+                 monopolise the renderer while a punch or navigation is being
+                 handled. Keep the actual shift timer and local clock alive,
+                 but allow only the render-time wrappers to maintain the bar. */
+              if (delay === 4000 && (source.includes("v30Inject") || source.includes("v31Relabel"))) return 0;
+              if (delay === 1000 && (
+                source.includes("updateTopClocks") ||
+                source.includes("removeLocalClock") ||
+                source.includes("updateClocks26") ||
+                source.includes("ensureTwoClocks") ||
+                source.includes("ensureClocks26") ||
+                source.includes("alignButtonRows")
+              )) return 0;
               return nativeSetInterval.call(this, fn, delay, ...args);
             };
           })();`;
