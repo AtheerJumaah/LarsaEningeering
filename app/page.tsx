@@ -7558,7 +7558,14 @@ export default function Home() {
       try {
         frame.contentWindow?.eval(`
           state=JSON.parse(localStorage.getItem("larsaStaffV8"));
-          if(typeof render==="function"&&currentUser)render();
+          /* Clock punches only need the clock surface. Rebuilding the whole
+             legacy shell (nav, actions, and every page enhancer) on every
+             successful punch was the expensive part that accumulated after
+             repeated In/Out cycles. Keep the same state and DOM result while
+             avoiding unrelated page work; other staff pages retain the full
+             render path. */
+          if(currentUser && activePage==='clock' && typeof renderClock==="function")renderClock();
+          else if(typeof render==="function"&&currentUser)render();
         `);
       } catch {
         // The engine picks the saved log up on its next render.
