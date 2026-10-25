@@ -209,19 +209,28 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     } catch { /* private mode / storage full */ }
   };
 
-  async function ensureSession() {
+  let ensureSessionInFlight: Promise<void> | null = null;
+  async function ensureSessionOnce() {
     const { data } = await supabase.auth.getSession();
     if (data.session?.expires_at && data.session.expires_at * 1000 < Date.now() + 30_000) {
       const { error } = await supabase.auth.refreshSession();
       if (error) throw error;
     } else if (!data.session) {
-      console.log("[larsa-sync] no local session — calling signInAnonymously()");
       const { error } = await supabase.auth.signInAnonymously();
       if (error) throw error;
-      console.log("[larsa-sync] signInAnonymously() succeeded");
-    } else {
-      console.log("[larsa-sync] reusing existing local session, user id:", data.session.user?.id);
     }
+  }
+
+  /* Both the shared-state and attendance revalidators can wake together.
+     Keep session refresh / anonymous sign-in single-flight so concurrent
+     callers cannot rotate the same refresh token or spam auth endpoints. */
+  function ensureSession() {
+    if (!ensureSessionInFlight) {
+      ensureSessionInFlight = ensureSessionOnce().finally(() => {
+        ensureSessionInFlight = null;
+      });
+    }
+    return ensureSessionInFlight;
   }
 
   /* Publish one key through the app_state_put compare-and-swap RPC. The
@@ -763,7 +772,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      main thread or the database connection. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate", NON_ATTENDANCE_KEYS);
-  }, 3_000);
+  }, 15_000);
   const attendanceRevalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
   }, 5_000);

@@ -5357,11 +5357,6 @@ export default function Home() {
               try{eval(name+'=window[name]')}catch(e){}
             });
             setTimeout(window.__larsaPerformanceCoreDesign,0);
-            if(!window.__larsaPerformanceCoreTicker){
-              window.__larsaPerformanceCoreTicker=setInterval(function(){
-                if(typeof window.__larsaPerformanceCoreDesign==='function')window.__larsaPerformanceCoreDesign();
-              },400);
-            }
           }
           if(typeof window.__larsaPerformanceCoreDesign==='function')setTimeout(window.__larsaPerformanceCoreDesign,0);
           if(!window.__larsaActionGuardInstalled){

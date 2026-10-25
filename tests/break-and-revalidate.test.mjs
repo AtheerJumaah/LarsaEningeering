@@ -78,7 +78,7 @@ test("the engine re-reads before it decides a break, and hands it over", () => {
 });
 
 test("a tab left open revalidates on a timer, not only on an edge", () => {
-  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate", NON_ATTENDANCE_KEYS\);\s*\n\s*\}, 3_000\);/);
+  assert.match(sync, /const revalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("periodic revalidate", NON_ATTENDANCE_KEYS\);\s*\n\s*\}, 15_000\);/);
   assert.match(sync, /const attendanceRevalidateTimer = setInterval\(\(\) => \{\s*\n\s*if \(!document\.hidden\) refreshFromServer\("attendance periodic revalidate", \["larsaStaffV8"\]\);\s*\n\s*\}, 5_000\);/);
   assert.match(sync, /attendance-only probe runs\s+every five seconds/);
   assert.match(sync, /async function refreshFromServer\(reason: string, requestedKeys: readonly SyncedKey\[\] = SYNCED_KEYS\)/);
@@ -88,6 +88,11 @@ test("a tab left open revalidates on a timer, not only on an edge", () => {
   // The existing edges stay — the timer is an addition, not a replacement.
   assert.match(sync, /document\.addEventListener\("visibilitychange", onVisible\);/);
   assert.match(sync, /window\.addEventListener\("online", onOnline\);/);
+});
+
+test("performance decoration runs on render events instead of a 400ms DOM ticker", () => {
+  assert.match(page, /__larsaPerformanceCoreDesign/);
+  assert.doesNotMatch(page, /__larsaPerformanceCoreTicker/);
 });
 
 test("a healthy attendance probe does not start another full ledger reconcile", () => {
