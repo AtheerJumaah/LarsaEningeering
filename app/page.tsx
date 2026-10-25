@@ -3656,7 +3656,14 @@ function readAccountingSnapshot(): AccountingSnapshot {
   };
   if (typeof window === "undefined") return empty;
   const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-    .filter((key): key is string => Boolean(key?.toLowerCase().startsWith("larsa")));
+    .filter((key): key is string => {
+      if (!key) return false;
+      const normalizedKey = key.toLowerCase();
+      return normalizedKey.startsWith("larsa")
+        && (normalizedKey.includes("accounting")
+          || normalizedKey.includes("enterprise")
+          || normalizedKey.endsWith("_v34_clean"));
+    });
   const preferred = keys.find((key) => key.endsWith("_v34_clean"))
     || keys.find((key) => key.toLowerCase().includes("accounting"))
     || keys.find((key) => key.toLowerCase().includes("enterprise"))
@@ -3672,15 +3679,12 @@ function readAccountingSnapshot(): AccountingSnapshot {
      if the company had no projects at all. Stores that actually hold projects
      are tried first now, and the empty ones only as a last resort so a
      genuinely fresh install still reports "no projects" rather than nothing. */
-  const candidates = [
-    ...ordered.filter((key) => {
-      const store = parseStore(key);
-      return Array.isArray(store?.projects) && store.projects.length > 0;
-    }),
-    ...ordered,
-  ];
-  for (const key of candidates) {
-    const store = parseStore(key);
+  const candidates = ordered
+    .map((key) => ({ key, store: parseStore(key) }))
+    .filter(({ store }) => Array.isArray(store?.projects))
+    .sort((left, right) =>
+      Number(right.store.projects.length > 0) - Number(left.store.projects.length > 0));
+  for (const { key, store } of candidates) {
     if (!Array.isArray(store?.projects)) continue;
     const projects = store.projects.map((row: Record<string, unknown>) => ({
       id: String(row.id || ""),
@@ -4816,6 +4820,12 @@ export default function Home() {
     () => ({ staff: staffRef, hr: hrRef, accounting: accountingRef }),
     [],
   );
+  /* Parse the large staff document once per refresh and share that snapshot
+     with native reports and the access-directory refresh. */
+  const staffStore = useMemo(
+    () => (hydrated ? parseStore("larsaStaffV8") as Record<string, unknown> | null : null),
+    [hydrated, storageTick],
+  );
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
   /* A punch can settle several queued events in one pass. Keep the embedded
      engine repaint single-flight so four quick In/Out actions cannot enqueue
@@ -5187,9 +5197,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const timer = window.setTimeout(() => setAccessUsers(readStaffUsers()), 0);
+    const timer = window.setTimeout(() => {
+      const users = Array.isArray(staffStore?.users)
+        ? staffStore.users as StaffUser[]
+        : readStaffUsers();
+      setAccessUsers(users);
+    }, 0);
     return () => clearTimeout(timer);
-  }, [hydrated, readStaffUsers, storageTick]);
+  }, [hydrated, readStaffUsers, staffStore]);
 
   /* Migrate existing employees to the structure-based default as soon as the
      authoritative directory is available. This is idempotent and only writes
@@ -7699,8 +7714,8 @@ export default function Home() {
       refreshStaffEngine();
       return;
     }
-    setStorageTick((value) => value + 1);
-  }, [refreshStaffEngine]);
+    queueStorageRefresh();
+  }, [refreshStaffEngine, queueStorageRefresh]);
 
   const saveMyPoints = (draft: PerformanceDraft, submit: boolean) => {
     const user = sessionUserRef.current;
@@ -10325,7 +10340,7 @@ export default function Home() {
   // kilobytes. Without memoisation they ran on every keystroke, toast, and clock
   // tick, which is the main source of input lag on phones.
   const storage = useMemo(() => {
-    if (!hydrated || typeof window === "undefined") return [] as { key: string; size: string }[];
+    if (!hydrated || active.native !== "data" || typeof window === "undefined") return [] as { key: string; size: string }[];
     const rows: { key: string; size: string }[] = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
@@ -10334,11 +10349,7 @@ export default function Home() {
       rows.push({ key, size: bytes > 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B` });
     }
     return rows.sort((a, b) => a.key.localeCompare(b.key));
-  }, [hydrated, storageTick]);
-  const staffStore = useMemo(
-    () => (hydrated ? parseStore("larsaStaffV8") as Record<string, unknown> | null : null),
-    [hydrated, storageTick],
-  );
+  }, [hydrated, storageTick, active.native]);
   const pointsRows = useMemo(() => performanceRows(staffStore), [staffStore]);
   const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
   const attendanceMinute = Math.floor(serverNowMs() / 60_000);
