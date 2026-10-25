@@ -57,3 +57,24 @@ exercise challenge issuance, code acceptance, and persistence using fixtures;
 production policy and deployed handlers are also checked directly. This retains
 the application's existing client-side staff-login architecture rather than
 claiming a new server-session security model.
+
+## Publication
+
+Published application commit: `9b4903e0d410ea09b17dfe521ca5eb481f9d67a7`.
+Vercel deployment: `dpl_CwnzxNcwm9CrAQVnwBbp5z8jwaRp`, assigned to
+`https://larsaeng.app/`. Supabase `auth-policy` version 9 and `auth-code`
+version 7 are active with JWT verification enabled; deployed sources match
+the reviewed sources. Live status requests for the owner's account returned
+the configured 48-hour email and 168-hour PIN intervals. A synthetic unknown
+mailbox correctly required initial verification, without sending email.
+
+All eight browser scenarios were also exercised against published assets.
+Repeated cold downloads sometimes delayed startup before any policy request
+or application rendering; the test host also reported `ERR_NETWORK_CHANGED`
+during navigation. The browser fixture retries only those transport failures,
+caches immutable published
+assets across its isolated contexts (Playwright routing otherwise disables
+HTTP caching) and waits for application initialization before measuring auth
+behavior. These checks validate authentication behavior separately from cold
+asset-download performance; they do not establish a universal startup-time
+guarantee.

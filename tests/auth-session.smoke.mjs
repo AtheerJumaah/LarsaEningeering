@@ -7,12 +7,27 @@ const {chromium}=require('C:/Users/LENOVO/.cache/codex-runtimes/codex-primary-ru
 const url=process.env.SMOKE_URL||'https://larsaeng.app/';
 const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
 const errors=[];let passed=0;
+// Playwright routing disables HTTP caching. Preserve published immutable
+// bundles across fixture contexts so each auth case is not another complete
+// cold asset download. Backend policy and code responses are never cached.
+const assets=new Map();
 const timeout=setTimeout(()=>{console.error('Auth browser test exceeded 150 seconds');process.exit(1)},150000);timeout.unref();
+async function navigate(page,reload=false){
+  for(let attempt=0;;attempt++){
+    try{return await (reload?page.reload({waitUntil:'domcontentloaded'}):page.goto(url,{waitUntil:'domcontentloaded'}))}
+    catch(error){if(attempt>=2||!/ERR_NETWORK_CHANGED|ECONNRESET/.test(String(error)))throw error;await page.waitForTimeout(500)}
+  }
+}
 async function fixture({restored,required=false,force=true,sendFails=false,lookupFails=false}={}){
   const proof=new Date(Date.now()-3_600_000).toISOString();
   const user={id:'auth-fixture',name:'Auth Fixture',email:'auth@example.invalid',password:'FixturePass42!',pin:'246810',enabled:true,active:true,access:'Super Admin',role:'Engineer',emailVerified:true,devices:[{id:'fixture-device',label:'Fixture',firstSeen:proof,lastSeen:proof,lastVerified:proof}]};
   const state={required,force,sendFails,lookupFails,sends:0,checks:[],verifyHold:null,statusHold:null};let staff={users:[user],logs:[]};
   const context=await browser.newContext({serviceWorkers:'block'});
+  await context.route('**/_next/static/**',async route=>{
+    const key=route.request().url();
+    if(!assets.has(key))assets.set(key,(async()=>{const response=await route.fetch();return {status:response.status(),headers:response.headers(),body:await response.body()}})());
+    await route.fulfill(await assets.get(key));
+  });
   await context.routeWebSocket('**/realtime/**',socket=>socket.close());
   await context.route('**/*.supabase.co/**',async route=>{
     const req=route.request(),u=new URL(req.url());let data=[];
@@ -46,7 +61,8 @@ async function fixture({restored,required=false,force=true,sendFails=false,looku
     if(restored){const saved=JSON.stringify({user,method:restored});sessionStorage.setItem('larsa-control-session',saved);localStorage.setItem('larsa-control-session-keep',saved);}
   },{user,restored});
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(url,{waitUntil:'domcontentloaded'});
+  await navigate(page);
+  await page.waitForFunction(()=>document.querySelector('#auth-panel, #verify-title, .top-signout'),null,{timeout:45000});
   const login=async(method='email')=>{
     await page.locator('#auth-tab-'+method).click();
     if(method==='email'){await page.locator('input[name=email]').fill(user.email);await page.locator('input[name=password]').fill('FixturePass42!')}
@@ -59,22 +75,22 @@ async function fixture({restored,required=false,force=true,sendFails=false,looku
   const verify=async()=>{await page.getByLabel('Verification Code').fill('123456');await page.getByRole('button',{name:'Verify & Sign In',exact:true}).click();await active()};
   return {page,state,proof,user,context,login,active,logout,gate,verify};
 }
-async function run(name,fn,options){const f=await fixture(options);try{await fn(f);passed++;console.log('PASS',name)}finally{await f.context.close()}}
+async function run(name,fn,options){if(process.env.AUTH_CASE_FILTER&&!new RegExp(process.env.AUTH_CASE_FILTER).test(name))return;const started=Date.now();const f=await fixture(options);try{await fn(f);passed++;console.log('PASS',name,`${Date.now()-started}ms`)}catch(error){console.error('AUTH DIAGNOSTIC',JSON.stringify({name,checks:f.state.checks,sends:f.state.sends,body:(await f.page.locator('body').innerText()).slice(-1800),session:await f.page.evaluate(()=>sessionStorage.getItem('larsa-control-session')),errors}));throw error}finally{await f.context.close()}}
 try{
   await run('repeated email/PIN sign-in, immediate logout, no renewed email timestamp',async f=>{
     for(const method of ['email','email','email','pin','pin','email']){await f.login(method);await f.active();await f.logout()}
     assert.equal(f.state.sends,0);assert.ok(f.state.checks.includes('pin'));
     const stamp=await f.page.evaluate(()=>JSON.parse(localStorage.getItem('larsaStaffV8')).users[0].devices[0].lastVerified);
     assert.equal(stamp,f.proof,'password logins must not extend verified time');
-    await f.page.reload();await f.page.locator('#auth-panel button[type=submit]').waitFor();await f.page.waitForTimeout(500);assert.equal(await f.page.locator('.top-signout').count(),0);
+    await navigate(f.page,true);await f.page.locator('#auth-panel button[type=submit]').waitFor();await f.page.waitForTimeout(500);assert.equal(await f.page.locator('.top-signout').count(),0);
   });
   await run('expired email ignores local fresh flag; send failure stays gated and can retry',async f=>{
     await f.login();await f.gate();await f.page.getByText(/Could not send a verification code:/).waitFor();
     assert.equal(await f.page.locator('.top-signout').count(),0);
     f.state.sendFails=false;await f.page.getByRole('button',{name:'Resend Code'}).click();await f.verify();await f.logout();await f.login();await f.active();assert.equal(f.state.sends,2);
   },{required:true,sendFails:true});
-  for(const method of ['email','pin'])await run(`remembered ${method} session checks expiry and cancel prevents resurrection`,async f=>{
-    await f.gate();assert.ok(f.state.checks.includes(method));await f.page.getByRole('button',{name:'Cancel',exact:true}).click();await f.page.reload();await f.page.locator('#auth-panel button[type=submit]').waitFor();await f.page.waitForTimeout(500);assert.equal(await f.page.locator('.top-signout').count(),0);
+  for(const method of Array.from({length:Number(process.env.RESTORE_REPEATS)||1},()=>['email','pin']).flat())await run(`remembered ${method} session checks expiry and cancel prevents resurrection`,async f=>{
+    await f.gate();assert.ok(f.state.checks.includes(method));await f.page.getByRole('button',{name:'Cancel',exact:true}).click();await navigate(f.page,true);await f.page.locator('#auth-panel button[type=submit]').waitFor();await f.page.waitForTimeout(500);assert.equal(await f.page.locator('.top-signout').count(),0);
   },{restored:method,required:true});
   await run('active session respects force-relogin switch and notices policy edits on focus',async f=>{
     await f.login();await f.active();f.state.required=true;f.state.force=false;
