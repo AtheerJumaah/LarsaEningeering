@@ -15,12 +15,13 @@ test("expired email verification stays in-session and cannot silently kick the u
     page.indexOf("const clickWhenReady", page.indexOf("A kept browser session ends with the same verification window")),
   );
   assert.doesNotMatch(watchdog, /window\.setTimeout\(signOut/);
-  assert.match(watchdog, /requestEmailVerification\(current, "email"\)/);
+  assert.match(watchdog, /requestEmailVerification\(current, method\)/);
 });
 
 test("online sign-in uses the server verification stamp instead of a stale local flag", async () => {
   const page = await readPage();
   const signIn = page.slice(page.indexOf("const signIn = async"), page.indexOf("const signOut = useCallback"));
-  assert.match(signIn, /const initialProven = periodic\s*\?\s*Boolean\(periodic\.lastVerifiedAt\)/);
-  assert.match(signIn, /: refreshed\.emailVerified === true;/);
+  assert.match(signIn, /await checkVerification\(user, loginMode\)/);
+  assert.doesNotMatch(signIn, /locallyVerified|deviceNeedsVerification|verified: true/);
+  assert.match(signIn, /if \(verdict.required\)/);
 });

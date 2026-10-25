@@ -101,13 +101,13 @@ test("PIN sign-in proves its inbox like email sign-in: first time, then per the 
   const migration = await read("supabase/migrations/20260805_auth_026_pin_verification_policy.sql");
   // The gate in signIn: governed by the policy, weekly by default, and a
   // username-only account with no mailbox is never asked.
-  assert.match(page, /loginMode === "pin" && supabaseConfigured\(\) && user\.email/);
-  assert.match(page, /pinPolicy\.pin_verification_required !== false/);
-  assert.match(page, /Number\(pinPolicy\.pin_hours\) \|\| 168/);
+  assert.match(page, /checkVerification\(user, loginMode\)/);
+  assert.match(page, /requestEmailVerification\(user, loginMode\)/);
+  assert.match(policyFn, /Number\(policy\.pin_hours\) \|\| 168/);
   // Finishing through the code screen keeps the PIN session's reduced surface.
   assert.match(page, /method\?: SignInMethod/);
   assert.match(page, /completeSignIn\(verifiedUser, rememberedMethod\)/);
-  assert.match(page, /setVerifyStage\(\{ user, email: user\.email as string, method: "pin" \}\)/);
+  assert.match(page, /setVerifyStage\(\{ user, email: user\.email, method \}\)/);
   // The knob and the switch, managed in Platform Settings like the email ones.
   assert.match(verification, /pin_verification_required: true, pin_hours: 168/);
   assert.match(platform, /PIN sign-in asks for an email code/);
@@ -250,7 +250,7 @@ test("Viewer sign-in is tried only after the employee lookup has already failed,
   const page = await read("app/page.tsx");
   const block = page.slice(page.indexOf("const credentialOk = user"), page.indexOf("const credentialOk = user") + 900);
   assert.match(block, /if \(!user \|\| !credentialOk\) \{/);
-  assert.match(block, /const viewerResult = await tryViewerSignIn\(enteredLocal, enteredPass\);/);
+  assert.match(block, /const viewerResult = await tryViewerSignIn\(enteredLocal, enteredPass, generation\);/);
   assert.match(block, /if \(viewerResult === "signed-in"\) return;/);
 });
 

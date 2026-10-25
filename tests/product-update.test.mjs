@@ -9,12 +9,9 @@ test("email verification follows the requested role windows and expires kept ses
   assert.match(devices, /SENSITIVE_ACCESS_HOURS = 48/);
   assert.match(devices, /STANDARD_ACCESS_HOURS = 72/);
   assert.match(devices, /access\.includes\("admin"\).*access\.includes\("account"\).*access\.includes\("finance"\)/s);
-  /* The device check moved behind the server policy: checkVerification asks
-     Supabase first and the local device stamp is the offline fallback. Same
-     behaviour, new seam. */
-  assert.match(page, /deviceNeedsVerification\(refreshed, deviceId\)/);
-  assert.match(page, /checkVerification\(\{ id: refreshed\.id, email: refreshed\.email, access: refreshed\.access, role: refreshed\.role \}\)/);
-  assert.match(page, /verificationRemainingMs\(sessionUser, getDeviceId\(\)\)/);
+  assert.match(page, /checkVerification\(user, loginMode\)/);
+  assert.match(page, /checkVerification\(current, method\)/);
+  assert.doesNotMatch(page, /verificationRemainingMs\(sessionUser/);
 });
 
 test("home, clocks, presence, and notifications keep the simplified contracts", async () => {

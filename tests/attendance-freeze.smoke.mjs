@@ -22,7 +22,8 @@ await context.route('**/*.supabase.co/**',async route=>{
   if(url.pathname.includes('/auth/')){
     const payload=Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+3600,sub:'00000000-0000-4000-8000-000000000001',role:'authenticated'})).toString('base64url');
     body={access_token:`eyJhbGciOiJIUzI1NiJ9.${payload}.test`,refresh_token:'test',token_type:'bearer',expires_in:3600,user:{id:'00000000-0000-4000-8000-000000000001',aud:'authenticated',role:'authenticated',is_anonymous:true}};
-  }else if(url.pathname.endsWith('/rpc/server_now'))body=new Date().toISOString();
+  }else if(url.pathname.endsWith('/functions/v1/auth-policy'))body={ok:true,required:false,policy:{enabled:false},lastVerifiedAt:new Date().toISOString(),expiresInHours:168};
+  else if(url.pathname.endsWith('/rpc/server_now'))body=new Date().toISOString();
   else if(url.pathname.endsWith('/rpc/record_attendance_action')){
     const p=req.postDataJSON();let e=events.find(e=>e.client_event_id===p.p_client_event_id);
     if(!e){e={client_event_id:p.p_client_event_id,occurred_at:p.p_occurred_at,uid:p.p_uid,status:p.p_status,work_mode:p.p_work_mode,inserted_at:new Date().toISOString()};events.push(e);}
@@ -80,10 +81,14 @@ try{
   // to REST, and Clock Out must still accept the following deliberate action.
   await button().click();
   await page.waitForFunction(()=>document.querySelector('.clock-punch')?.textContent.includes('Clock Out'));
+  // Pending confirmation intentionally shows wall time, rather than an elapsed
+  // timer. Wait for acknowledgment before comparing the shift readout.
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('larsaAttendancePunchQueueV1:freeze-test')||'[]').length===0,null,{timeout:20000});
   await page.waitForTimeout(5500);
   const timerBefore=await page.locator('[data-attendance-readout]').innerText();
   await page.waitForTimeout(1200);
   const timerAfter=await page.locator('[data-attendance-readout]').innerText();
+  if(timerBefore===timerAfter)console.log('TIMER DIAGNOSTIC',JSON.stringify({lastEvents:events.slice(-3),ui:await page.locator('.native.active').innerText(),storage:await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>/Attendance|Clock/.test(k)).map(k=>[k,localStorage.getItem(k)])))}));
   assert.notEqual(timerBefore,timerAfter,'shift timer must continue after reconnect/reopen');
   await button().click();
   await page.waitForFunction(()=>document.querySelector('.clock-punch')?.textContent.includes('Clock In'));

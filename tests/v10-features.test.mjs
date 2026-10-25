@@ -374,7 +374,7 @@ test("nothing blocks a type-checked production build", () => {
   assert.match(page, /const stillOpen = open as ClockLog \| null;/);
   assert.match(page, /interface Window \{\s*\n\s*eval\(code: string\): unknown;/);
   assert.match(page, /typeof raw === "string" \? JSON\.parse\(raw\) : \[\]/);
-  assert.match(page, /const envelope = parsed && "user" in parsed/);
+  assert.match(page, /const user: StaffUser \| null = parsed\?\.user \|\| parsed;/);
 });
 
 test("the per-employee chart cannot outgrow its card", () => {

@@ -60,11 +60,12 @@ const FALLBACK: Policy = {
 };
 
 async function readPolicy(): Promise<Policy> {
-  const { data } = await db
+  const { data, error } = await db
     .from("auth_policy")
     .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit")
     .eq("id", 1)
     .maybeSingle();
+  if (error) throw new Error("Could not read verification settings.");
   const policy = (data as Policy) || FALLBACK;
   if (policy.interval_unit !== "days" && policy.interval_unit !== "business_days") policy.interval_unit = "hours";
   return policy;
@@ -118,6 +119,29 @@ async function isPlatformAdmin(email: string): Promise<boolean> {
   if (!email) return false;
   const { data } = await db.from("platform_admins").select("email").eq("email", email).maybeSingle();
   return Boolean(data);
+}
+
+/* Is this email an ACTIVE Super Admin staff account? Read from the staff
+   directory the same way auth-code already does when binding a verification
+   stamp to an account. Used for exactly one narrowly-scoped permission: a
+   Super Admin who is not a platform owner may switch "Require Email
+   Verification for Employee PIN Login" on or off — nothing else. A disabled,
+   offboarded, or still-pending account does not count. */
+async function isActiveSuperAdmin(email: string): Promise<boolean> {
+  if (!email) return false;
+  try {
+    const { data } = await db.from("app_state").select("data").eq("store_key", "larsaStaffV8").maybeSingle();
+    const users = (data?.data as { users?: { email?: string; access?: string; enabled?: boolean; offboarded?: boolean; pendingApproval?: boolean }[] } | null)?.users;
+    if (!Array.isArray(users)) return false;
+    return users.some((u) =>
+      normEmail(String(u?.email || "")) === email &&
+      String(u?.access || "") === "Super Admin" &&
+      u?.enabled !== false &&
+      u?.offboarded !== true &&
+      u?.pendingApproval !== true);
+  } catch {
+    return false;
+  }
 }
 
 /* Accountant, operational admin and platform owner are held to the shorter
@@ -190,6 +214,7 @@ Deno.serve(async (req: Request) => {
     const email = normEmail(payload.email);
     const access = String(payload.access || "");
     const role = String(payload.role || "");
+    const method = payload.method === "pin" ? "pin" : "email";
     if (!userId && !email) return json({ ok: false, error: "Unknown account." });
 
     const policy = await readPolicy();
@@ -200,17 +225,19 @@ Deno.serve(async (req: Request) => {
        so recreating an account never restarts anyone's verification clock. */
     let rows: { last_periodic_email_verified_at: string | null; verification_exempt: boolean | null }[] = [];
     if (email) {
-      const { data } = await db
+      const { data, error } = await db
         .from("user_verification")
         .select("last_periodic_email_verified_at, verification_exempt")
         .eq("normalized_email", email);
+      if (error) return json({ ok: false, error: "Could not check verification." });
       rows = rows.concat((data as typeof rows) || []);
     }
     if (userId) {
-      const { data } = await db
+      const { data, error } = await db
         .from("user_verification")
         .select("last_periodic_email_verified_at, verification_exempt")
         .eq("user_id", userId);
+      if (error) return json({ ok: false, error: "Could not check verification." });
       rows = rows.concat((data as typeof rows) || []);
     }
 
@@ -218,8 +245,11 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, required: false, exempt: true, policy, hours: null });
     }
 
-    const value = !policy.enabled ? null : (isPrivileged(access, role) ? policy.privileged_hours : policy.engineer_hours);
-    if (!value) return json({ ok: true, required: false, policy, hours: null });
+    // PIN has its own interval in HOURS, independent of the email interval unit.
+    const value = !policy.enabled ? null : method === "pin"
+      ? (policy.pin_verification_required ? Math.max(1, Number(policy.pin_hours) || 168) : null)
+      : (isPrivileged(access, role) ? policy.privileged_hours : policy.engineer_hours);
+    const unit = method === "pin" ? "hours" : policy.interval_unit;
 
     const stamp = rows.reduce((max, row) => {
       const ms = row.last_periodic_email_verified_at ? new Date(row.last_periodic_email_verified_at).getTime() : 0;
@@ -227,7 +257,8 @@ Deno.serve(async (req: Request) => {
     }, 0);
 
     const now = Date.now();
-    const required = verificationDue(stamp, value, policy.interval_unit, now);
+    const initialRequired = method === "email" && policy.enabled && policy.initial_verification_required && !stamp;
+    const required = Boolean(initialRequired || (value && verificationDue(stamp, value, unit, now)));
 
     return json({
       ok: true,
@@ -235,7 +266,7 @@ Deno.serve(async (req: Request) => {
       exempt: false,
       policy,
       hours: value,
-      expiresInHours: required ? 0 : hoursRemaining(stamp, value, policy.interval_unit, now),
+      expiresInHours: required || !value ? 0 : hoursRemaining(stamp, value, unit, now),
       lastVerifiedAt: stamp ? new Date(stamp).toISOString() : null,
     });
   }
@@ -266,7 +297,68 @@ Deno.serve(async (req: Request) => {
 
   if (op === "save") {
     const actor = await platformStepUp(payload);
-    if (!actor) return json({ ok: false, error: "That code was not accepted. The policy has not been changed." });
+
+    /* Not a platform owner. One narrowly-scoped exception, and only one:
+       an active Super Admin may switch Email Verification for Employee PIN
+       Login on or off. Same emailed-code step-up as every platform change —
+       platformStepUp above only consumes the code AFTER the platform_admins
+       check passes, so for a non-owner the code is still fresh here. Every
+       other field is compared against the stored policy and the save is
+       refused outright if anything else was touched: this path can never be
+       used to edit intervals, signup rules, or the global verification
+       switch. It changes WHO may flip one existing switch, not what the
+       switch does — verification history, stamps, clock sessions and every
+       other table are not read or written here. */
+    if (!actor) {
+      const claimant = normEmail(payload.actorEmail);
+      const policy = (payload.policy || {}) as Partial<Policy>;
+      if (typeof policy.pin_verification_required !== "boolean") {
+        return json({ ok: false, error: "That code was not accepted. The policy has not been changed." });
+      }
+      /* A platform owner already had their step-up checked above and failed
+         it; re-running the code here would only burn a second attempt on the
+         same wrong code. This path is strictly for non-owners. */
+      if (await isPlatformAdmin(claimant)) {
+        return json({ ok: false, error: "That code was not accepted. The policy has not been changed." });
+      }
+      if (!(await isActiveSuperAdmin(claimant))) {
+        return json({ ok: false, error: "That code was not accepted. The policy has not been changed." });
+      }
+      if (!(await provedByEmail(claimant, String(payload.code || "")))) {
+        return json({ ok: false, error: "That code was not accepted. The policy has not been changed." });
+      }
+
+      const before = await readPolicy();
+      const touched: string[] = [];
+      if (typeof policy.enabled === "boolean" && policy.enabled !== before.enabled) touched.push("enabled");
+      if (typeof policy.force_relogin === "boolean" && policy.force_relogin !== before.force_relogin) touched.push("force_relogin");
+      if (typeof policy.self_signup_enabled === "boolean" && policy.self_signup_enabled !== before.self_signup_enabled) touched.push("self_signup_enabled");
+      if (typeof policy.signup_requires_approval === "boolean" && policy.signup_requires_approval !== before.signup_requires_approval) touched.push("signup_requires_approval");
+      if (typeof policy.initial_verification_required === "boolean" && policy.initial_verification_required !== before.initial_verification_required) touched.push("initial_verification_required");
+      if (policy.engineer_hours !== undefined
+        && (policy.engineer_hours === null ? before.engineer_hours !== null : Number(policy.engineer_hours) !== before.engineer_hours)) touched.push("engineer_hours");
+      if (policy.privileged_hours !== undefined
+        && (policy.privileged_hours === null ? before.privileged_hours !== null : Number(policy.privileged_hours) !== before.privileged_hours)) touched.push("privileged_hours");
+      if (policy.pin_hours !== undefined && Math.max(1, Number(policy.pin_hours) || 168) !== before.pin_hours) touched.push("pin_hours");
+      if (policy.interval_unit !== undefined && policy.interval_unit !== before.interval_unit) touched.push("interval_unit");
+      if (touched.length) {
+        return json({ ok: false, error: "A Super Admin can only switch Email Verification for PIN Login on or off. Other platform settings need a platform owner. Nothing has been changed." });
+      }
+
+      const { error } = await db.from("auth_policy").upsert(
+        { id: 1, pin_verification_required: policy.pin_verification_required, updated_at: new Date().toISOString(), updated_by: claimant },
+        { onConflict: "id" },
+      );
+      if (error) return json({ ok: false, error: "Could not save the policy." });
+
+      const after = await readPolicy();
+      await audit(claimant, "policy.update", "pin_verification_required", {
+        via: "super_admin",
+        before: { pin_verification_required: before.pin_verification_required },
+        after: { pin_verification_required: after.pin_verification_required },
+      });
+      return json({ ok: true, policy: after });
+    }
 
     const before = await readPolicy();
     const policy = (payload.policy || {}) as Partial<Policy>;

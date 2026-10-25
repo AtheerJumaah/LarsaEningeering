@@ -162,7 +162,7 @@ test("clients, trainees, and interns are username-and-password accounts — no e
   // The sign-in field accepts a bare username (no native email constraint):
   assert.match(page, /Email or Username<input type="text"/);
   // The verification gate only ever applies to accounts WITH an email:
-  assert.match(page, /supabaseConfigured\(\) && refreshed\.email &&/);
+  assert.match(page, /supabaseConfigured\(\) && user\.email/);
 });
 
 test("trainee and intern presets: engineer-style basics, zero accounting access", () => {

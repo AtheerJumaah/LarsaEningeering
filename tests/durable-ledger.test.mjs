@@ -80,8 +80,8 @@ test("verification is keyed to the permanent identity (normalized email), with c
   const client = await read("lib/verification.ts");
   assert.match(client, /email: String\(user\.email \|\| ""\)\.trim\(\)\.toLowerCase\(\)/);
   const page = await read("app/page.tsx");
-  const passes = page.match(/checkVerification\(\{ id: [A-Za-z]+\.id, email: [A-Za-z]+\.email/g) || [];
-  assert.equal(passes.length, 4, "all four verification checks must carry the email");
+  assert.match(page, /checkVerification\(user, loginMode\)/);
+  assert.match(page, /checkVerification\(current, method\)/);
 });
 
 test("business-day arithmetic: Sun–Thu count, Friday and Saturday never do", async () => {

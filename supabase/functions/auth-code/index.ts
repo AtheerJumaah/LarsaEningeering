@@ -88,25 +88,20 @@ async function sendCodeEmail(email: string, purpose: string, code: string, name?
 /* Records that this person has just proved their mailbox. Done here rather
  * than in the browser on purpose: this is the only place that knows a code was
  * genuinely accepted, so it is the only place entitled to move the clock that
- * decides access. A client that could call it directly could grant itself
+ * decides access. A client that could write it directly could grant itself
  * another 72 hours without ever opening an email.
  */
 async function stampPeriodicVerification(userId: string, email: string) {
-  if (!userId) return;
-  try {
-    await fetch(`${SUPABASE_URL}/functions/v1/auth-policy`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${SERVICE_ROLE_KEY}`, "Content-Type": "application/json" },
-      /* The stamp carries the normalized email as well as the uid: the email
-         is the permanent business identity, so a verification survives the
-         account being recreated under a new uid — the exact failure that had
-         people re-verifying on every sign-in during the incident. */
-      body: JSON.stringify({ op: "stamp", userId, email, secret: SERVICE_ROLE_KEY }),
-    });
-  } catch {
-    // The code was still valid, so let the sign-in through. The worst case is
-    // being asked again sooner than necessary, which is the safe direction.
-  }
+  const now = new Date().toISOString();
+  // Persist directly with the service-role client. An ignored HTTP failure in
+  // the former second edge-function call reported success without renewing
+  // the authoritative clock, which immediately challenged the person again.
+  const { error } = await db.from("user_verification").upsert({
+    user_id: userId, normalized_email: email,
+    last_periodic_email_verified_at: now, updated_at: now,
+    initial_verification_skipped: false, approved_by: null,
+  }, { onConflict: "user_id" });
+  return !error;
 }
 
 Deno.serve(async (req: Request) => {
@@ -182,8 +177,6 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "That code was not accepted. Check it and try again." });
     }
 
-    await db.from("auth_codes").update({ consumed_at: new Date().toISOString() }).eq("id", row.id as string);
-
     /* Only a verify-purpose code renews the periodic clock. A password reset
        proves the mailbox too, but treating it as a security check would let
        somebody stretch their interval by resetting their password instead of
@@ -194,15 +187,19 @@ Deno.serve(async (req: Request) => {
          could verify their OWN mailbox could renew the periodic clock of ANY
          user id they named. Bind them: the stamp only lands if the staff
          record for that id actually carries this email. The email
-         verification itself still succeeds either way -- the mailbox really
-         was proved; it is only the side-effect that must not cross accounts. */
-      const { data: staffRow } = await db.from("app_state").select("data").eq("store_key", "larsaStaffV8").maybeSingle();
+         verification must not report success for another account. */
+      const { data: staffRow, error: staffError } = await db.from("app_state").select("data").eq("store_key", "larsaStaffV8").maybeSingle();
+      if (staffError) return json({ ok: false, error: "Could not check the account. Please retry this code." });
       const users = (staffRow?.data as { users?: { id?: string; email?: string }[] } | null)?.users;
       const owner = Array.isArray(users) ? users.find((u) => String(u?.id || "") === String(payload.userId)) : null;
-      if (owner && normEmail(String(owner.email || "")) === email) {
-        await stampPeriodicVerification(String(payload.userId), email);
+      if (!owner || normEmail(String(owner.email || "")) !== email) return json({ ok: false, error: "This code does not belong to that account." });
+      if (!(await stampPeriodicVerification(String(payload.userId), email))) {
+        return json({ ok: false, error: "Could not save verification. Please retry this code." });
       }
     }
+
+    const { error: consumeError } = await db.from("auth_codes").update({ consumed_at: new Date().toISOString() }).eq("id", row.id as string);
+    if (consumeError) return json({ ok: false, error: "Could not finish verification. Please retry this code." });
 
     return json({ ok: true });
   }

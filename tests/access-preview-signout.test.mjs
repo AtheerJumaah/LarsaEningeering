@@ -24,11 +24,11 @@ test("the verification watchdog stands down during an access preview instead of 
   const effect = page.slice(start, page.indexOf("}, [", start) + 200);
   // The preview guard must come BEFORE any verification computation.
   const guardAt = effect.indexOf("if (previewOwner) return;");
-  const computeAt = effect.indexOf("verificationRemainingMs(sessionUser");
+  const computeAt = effect.indexOf("checkVerification(current, method");
   assert.ok(guardAt > -1, "the effect must bail out while a preview is running");
   assert.ok(computeAt > guardAt, "the preview guard must run before the expiry computation");
   // And the effect must re-arm when the preview ends.
-  assert.match(effect, /\}, \[previewOwner, sessionMethod, sessionUser, signOut\]\);/);
+  assert.match(effect, /\}, \[previewOwner, sessionMethod, sessionUser, requestEmailVerification\]\);/);
 });
 
 test("startAccessPreview still never persists the previewed identity as a real session", async () => {

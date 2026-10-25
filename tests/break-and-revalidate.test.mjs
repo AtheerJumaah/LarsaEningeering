@@ -176,7 +176,7 @@ test("sign-out pauses shared-state writes without disabling refresh", () => {
   assert.match(sync, /if \(cancelled \|\| syncWritesPaused\) return;/);
   assert.match(sync, /!syncWritesPaused && this === window\.localStorage/);
   assert.match(page, /setLarsaSyncWritesPaused\(false\);\s*\n\s*setLarsaSyncSessionActive\(true\);\s*\n[\s\S]*?refreshSharedStateNow\(\);/);
-  assert.match(page, /const signOut = useCallback\(\(\) => \{\s*\n\s*setLarsaSyncWritesPaused\(true\);/);
+  assert.match(page, /const signOut = useCallback\(\(\) => \{[\s\S]*?setLarsaSyncWritesPaused\(true\);/);
 });
 
 test("rapid logout and login never evaluates a stale iframe synchronously", () => {

@@ -38,6 +38,7 @@ export type VerificationPolicy = {
 
 export type VerificationStatus = {
   required: boolean;
+  exempt: boolean;
   hours: number | null;
   expiresInHours: number;
   lastVerifiedAt: string | null;
@@ -56,11 +57,9 @@ async function call(body: Record<string, unknown>): Promise<Record<string, unkno
   if (!supabaseConfigured()) return null;
   const client = getSupabaseClient();
   if (!client) return null;
-  /* Verification is an optional policy check, never the thing that should
-     freeze the sign-in form. A sleeping phone, a blocked function request, or
-     a transient Supabase edge timeout used to leave the promise pending
-     forever, which looked exactly like a broken login. Keep the existing
-     fail-open behaviour, but make it deterministic. */
+  /* Bound network waits. A failed lookup is unavailable, never evidence that
+     the account has verified. Sign-in offers retry; an existing session keeps
+     working while its background check retries. */
   const timeout = 4500;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -92,27 +91,22 @@ export async function savePolicy(policy: VerificationPolicy, updatedBy: string):
   return Boolean(data && data.ok);
 }
 
-/* Whether this person has to prove their mailbox again before going further.
- *
- * If the service cannot be reached the answer is "no". Refusing entry because
- * a network call failed would lock the company out of its own timeclock over a
- * dropped connection, which is a worse outcome than a delayed check -- and the
- * check will run again on the next load.
- */
+/* One authoritative decision for manual, restored, and active sessions. */
 export async function checkVerification(user: {
   id: string;
   email?: string;
   access?: string;
   role?: string;
-}): Promise<VerificationStatus | null> {
+}, method: "email" | "pin" = "email"): Promise<VerificationStatus | null> {
   /* The email travels with the check: verification stamps are keyed to the
      normalized email (the permanent business identity), so an account that
      was recreated under a new uid keeps its verification clock instead of
      being challenged on every sign-in — the incident's most-reported bug. */
-  const data = await call({ op: "status", userId: user.id, email: String(user.email || "").trim().toLowerCase(), access: user.access || "", role: user.role || "" });
+  const data = await call({ op: "status", method, userId: user.id, email: String(user.email || "").trim().toLowerCase(), access: user.access || "", role: user.role || "" });
   if (!data || !data.ok) return null;
   return {
     required: Boolean(data.required),
+    exempt: Boolean(data.exempt),
     hours: (data.hours as number | null) ?? null,
     expiresInHours: Number(data.expiresInHours || 0),
     lastVerifiedAt: (data.lastVerifiedAt as string | null) ?? null,

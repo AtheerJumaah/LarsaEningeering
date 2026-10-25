@@ -23,5 +23,5 @@ test("restored sessions are invalidated after the authoritative roster disables 
 test("account changes in another tab cannot leave a second tab signed in", () => {
   assert.match(page, /new BroadcastChannel\("larsa-control-auth-v1"\)/);
   assert.match(page, /message\?\.type === "signed-out"/);
-  assert.match(page, /message\.userId !== current\.id/);
+  assert.match(page, /message\.userId !== current\?\.id/);
 });

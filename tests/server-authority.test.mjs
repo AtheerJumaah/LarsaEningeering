@@ -7,7 +7,7 @@ const sync = await readFile(new URL("../lib/supabase/sync.ts", import.meta.url),
 
 test("shared company state restores sessions only after the authoritative roster is ready", () => {
   assert.match(page, /authoritativeStateReady/);
-  assert.match(page, /Do not restore an employee identity from sessionStorage while an online/);
+  assert.match(page, /attendanceConnectionRef.current === "connecting"/);
   assert.match(page, /let users = readStaffUsers\(\)/);
   assert.match(page, /const deadline = Date\.now\(\) \+ 7000/);
   assert.match(page, /while \(!users\.length && Date\.now\(\) < deadline\)/);
@@ -27,10 +27,10 @@ test("optional verification calls have a bounded timeout", async () => {
   assert.match(verification, /const timeout = 4500/);
 });
 
-test("a recently verified device does not block email sign-in on a second policy request", () => {
-  assert.match(page, /const localVerificationDue = deviceNeedsVerification\(refreshed, deviceId\)/);
-  assert.match(page, /const locallyVerified = refreshed\.emailVerified === true && !localVerificationDue/);
-  assert.match(page, /!locallyVerified\s*\? await checkVerification/);
+test("every sign-in checks current policy without renewing local proof", () => {
+  const signIn = page.slice(page.indexOf("const signIn = async"), page.indexOf("const signOut = useCallback"));
+  assert.match(signIn, /await checkVerification\(user, loginMode\)/);
+  assert.doesNotMatch(signIn, /locallyVerified|verified: true/);
 });
 
 test("the performance store is included in shared server state", () => {

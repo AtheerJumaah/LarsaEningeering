@@ -22,7 +22,7 @@ import {
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, deviceNeedsVerification, accountingNeedsVerification, verificationRemainingMs, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen, findDevice } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
 import { APPROVAL_FLOW_TYPES, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
@@ -4666,6 +4666,10 @@ export default function Home() {
      token so a deliberate sign-out cannot be followed by a late async
      callback that resurrects the verification screen. */
   const verificationFlowRef = useRef<string | null>(null);
+  const authGenerationRef = useRef(0);
+  const loginInFlightRef = useRef(false);
+  const restorationAttemptedRef = useRef(false);
+  const [loginBusy, setLoginBusy] = useState(false);
   // "Keep me signed in" survives a browser restart; without it the session ends
   // with the tab, which is what made sign-in feel like it "stopped working".
   const [rememberMe, setRememberMe] = useState(false);
@@ -6523,24 +6527,27 @@ export default function Home() {
   // Tried only after the employee lookup below has already failed: Viewer
   // usernames live in their own table, never in larsaStaffV8, so this never
   // changes which employee a matching email+password signs in as.
-  const tryViewerSignIn = async (candidateUsername: string, candidatePassword: string): Promise<"signed-in" | "disabled" | "no-match"> => {
+  const tryViewerSignIn = async (candidateUsername: string, candidatePassword: string, generation: number): Promise<"signed-in" | "disabled" | "no-match"> => {
     const uname = candidateUsername.trim().toLowerCase();
     if (!uname || !supabaseConfigured()) return "no-match";
     const client = getSupabaseClient();
     if (!client) return "no-match";
-    const { data, error } = await client.auth.signInWithPassword({
+    const response = await withRequestDeadline(client.auth.signInWithPassword({
       email: `${uname}@${VIEWER_EMAIL_DOMAIN}`,
       password: candidatePassword,
-    });
-    if (error || !data.session) return "no-match";
-    const { data: row } = await client
+    }));
+    if (authGenerationRef.current !== generation || !response || response.error || !response.data.session) return "no-match";
+    const viewerResponse = await withRequestDeadline(Promise.resolve(client
       .from("viewer_accounts")
       .select("id, username, display_name, project_access_mode, allowed_project_ids, enabled, expires_at")
-      .eq("auth_user_id", data.session.user.id)
-      .maybeSingle();
+      .eq("auth_user_id", response.data.session.user.id)
+      .maybeSingle()));
+    if (authGenerationRef.current !== generation) return "no-match";
+    const row = viewerResponse?.data;
     if (!row) { await client.auth.signOut(); return "no-match"; }
     const expired = Boolean(row.expires_at) && new Date(row.expires_at as string).getTime() < Date.now();
     if (row.enabled === false || expired) { await client.auth.signOut(); return "disabled"; }
+    if (authGenerationRef.current !== generation) return "no-match";
     completeViewerSignIn({
       id: row.id, username: row.username, displayName: row.display_name,
       projectAccessMode: ((row.project_access_mode as string) || "assigned") as "all" | "assigned" | "none",
@@ -6548,79 +6555,6 @@ export default function Home() {
     });
     return "signed-in";
   };
-
-  useEffect(() => {
-    /* Do not restore an employee identity from sessionStorage while an online
-       browser is still waiting for the shared roster. The cached user can be
-       from another organisation snapshot, or can have been disabled since
-       this device last opened the app. Offline remains read-only and may show
-       the last safe session, but it cannot create attendance events. */
-    if (supabaseConfigured() && attendanceConnectionRef.current === "connecting") return;
-    const timer = window.setTimeout(() => {
-      try {
-        const saved = sessionStorage.getItem("larsa-control-session")
-          || localStorage.getItem(KEEP_SESSION_KEY);
-        /* Two shapes have been written over time: the bare user record, and
-           the { user, method } envelope used since v9. Both must still load. */
-        const parsed = saved
-          ? JSON.parse(saved) as { user?: StaffUser; method?: SignInMethod } | StaffUser
-          : null;
-        const envelope = parsed && "user" in parsed
-          ? parsed as { user?: StaffUser; method?: SignInMethod }
-          : null;
-        const user: StaffUser | null = envelope ? envelope.user ?? null : parsed as StaffUser | null;
-        const method: SignInMethod = envelope?.method || "email";
-        const currentUser = user?.id
-          ? readStaffUsers().find((row) => row.id === user.id) || user
-          : null;
-        if (currentUser?.id && currentUser.enabled !== false) {
-          const expiredEmailSession = method === "email"
-            && supabaseConfigured()
-            && Boolean(currentUser.email)
-            && false; /* the server check added below decides; the local device list is wiped whenever the blob is overwritten, so judging by it signed everyone out */
-          if (expiredEmailSession) {
-            sessionStorage.removeItem("larsa-control-session");
-            try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
-          } else {
-            completeSignIn(currentUser, method || "email");
-            if (method === "email" && supabaseConfigured() && currentUser.email) {
-              checkVerification({ id: currentUser.id, email: currentUser.email, access: currentUser.access, role: currentUser.role }).then((verdict) => {
-                if (verdict && verdict.required && verdict.policy.force_relogin) {
-                  void requestEmailVerification(currentUser, method);
-                }
-              });
-            }
-          }
-        }
-      } catch {
-        sessionStorage.removeItem("larsa-control-session");
-        try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* nothing to clear */ }
-      }
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [completeSignIn, readStaffUsers, attendanceConnection]);
-
-  // Every account that already had a working email + password before this
-  // feature shipped is grandfathered in as verified the first time anyone
-  // signs in after the update — otherwise the whole staff list would be
-  // locked out at once over an address nobody was ever asked to confirm.
-  // Runs once; a flag on the store itself (not per-user) prevents repeats.
-  const migrateEmailVerification = useCallback(() => {
-    try {
-      const store = parseStore("larsaStaffV8") as { users?: StaffUser[]; emailVerifyMigratedV1?: boolean } | null;
-      if (!store || !Array.isArray(store.users) || store.emailVerifyMigratedV1) return;
-      store.users = store.users.map((row) => (
-        row.email && row.password && row.emailVerified === undefined
-          ? { ...row, emailVerified: true }
-          : row
-      ));
-      store.emailVerifyMigratedV1 = true;
-      localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-    } catch {
-      // Nothing to migrate yet if the store isn't there — a brand-new
-      // account will simply verify normally on its first sign-in.
-    }
-  }, []);
 
   const persistEmailVerified = useCallback((userId: string, verified: boolean) => {
     try {
@@ -6671,8 +6605,22 @@ export default function Home() {
      code is accepted. */
   const requestEmailVerification = useCallback(async (user: StaffUser, method: SignInMethod = "email") => {
     if (!user.email || verificationFlowRef.current) return;
-    const token = `${user.id}:${Date.now()}`;
+    const token = `${user.id}:${++authGenerationRef.current}`;
+    loginInFlightRef.current = false;
+    setLoginBusy(false);
     verificationFlowRef.current = token;
+    // Enter the gate before sending. A mail outage must leave a retryable
+    // challenge, not keep an expired session active or restore it on reload.
+    sessionStorage.removeItem("larsa-control-session");
+    try { localStorage.removeItem(KEEP_SESSION_KEY); } catch { /* storage optional */ }
+    setLarsaSyncSessionActive(false);
+    sessionUserRef.current = null;
+    sessionMethodRef.current = null;
+    setSessionUser(null);
+    setSessionMethod(null);
+    setLoadedEngines(new Set<Engine>());
+    setVerifyStage({ user, email: user.email, method });
+    setVerifyCode("");
     setVerifyError("");
     setLoginError("");
     setVerifyInfo("Sending your verification code…");
@@ -6681,16 +6629,10 @@ export default function Home() {
     if (verificationFlowRef.current !== token) return;
     setVerifyBusy(false);
     if (problem) {
-      verificationFlowRef.current = null;
       setVerifyInfo("");
-      setLoginError(problem);
+      setVerifyError(problem);
       return;
     }
-    sessionUserRef.current = user;
-    sessionMethodRef.current = method;
-    setSessionUser(null);
-    setSessionMethod(null);
-    setVerifyStage({ user, email: user.email, method });
     setVerifyInfo(`We sent a 6-digit code to ${user.email}. Enter it below to continue.`);
   }, [sendVerificationCode]);
 
@@ -6707,7 +6649,8 @@ export default function Home() {
   }, []);
 
   const confirmVerifyCode = async () => {
-    if (!verifyStage) return;
+    if (!verifyStage || verifyBusy) return;
+    const flow = verificationFlowRef.current;
     const code = verifyCode.trim();
     if (!code) { setVerifyError("Enter the 6-digit code from your email."); return; }
     setVerifyBusy(true);
@@ -6715,10 +6658,11 @@ export default function Home() {
     const client = getSupabaseClient();
     if (!client) { setVerifyBusy(false); setVerifyError("Verification is unavailable right now."); return; }
     const response = await withRequestDeadline(client.functions.invoke("auth-code", { body: { op: "verify", email: verifyStage.email, purpose: "verify", code, userId: verifyStage.user.id } }));
-    const confirmed = response?.data as { ok?: boolean } | null | undefined;
+    if (verificationFlowRef.current !== flow) return;
+    const confirmed = response?.data as { ok?: boolean; error?: string } | null | undefined;
     const error = confirmed && confirmed.ok ? null : { message: "That code was not accepted." };
     setVerifyBusy(false);
-    if (error) { setVerifyError("That code didn't match. Check your email and try again."); return; }
+    if (error) { setVerifyError(confirmed?.error || "That code was not accepted. Check your email and try again."); return; }
     persistEmailVerified(verifyStage.user.id, true);
     let nextDevices = withDeviceRecorded(verifyStage.user.devices, getDeviceId(), describeDevice(), { verified: true });
     try {
@@ -6751,24 +6695,72 @@ export default function Home() {
   };
 
   const resendVerifyCode = async () => {
-    if (!verifyStage) return;
+    if (!verifyStage || verifyBusy) return;
+    const flow = verificationFlowRef.current;
     setVerifyBusy(true);
     setVerifyError("");
     const problem = await sendVerificationCode(verifyStage.email);
+    if (verificationFlowRef.current !== flow) return;
     setVerifyBusy(false);
     if (problem) setVerifyError(problem);
     else setVerifyInfo(`We sent a new code to ${verifyStage.email}.`);
   };
 
   const cancelVerify = () => {
-    setVerifyStage(null);
-    setVerifyCode("");
+    signOut();
     setVerifyError("");
-    setVerifyInfo("");
   };
+
+  useEffect(() => {
+    if (supabaseConfigured() && attendanceConnectionRef.current === "connecting") return;
+    const timer = window.setTimeout(() => {
+      if (restorationAttemptedRef.current || sessionUserRef.current || verificationFlowRef.current || loginInFlightRef.current) return;
+      restorationAttemptedRef.current = true;
+      const generation = authGenerationRef.current;
+      loginInFlightRef.current = true;
+      setLoginBusy(true);
+      void (async () => {
+        try {
+          const saved = sessionStorage.getItem("larsa-control-session") || localStorage.getItem(KEEP_SESSION_KEY);
+          const parsed = saved ? JSON.parse(saved) : null;
+          const user: StaffUser | null = parsed?.user || parsed;
+          const method: SignInMethod = parsed?.method === "pin" ? "pin" : "email";
+          const current = user?.id ? readStaffUsers().find((row) => row.id === user.id) || user : null;
+          if (!current || current.enabled === false || current.offboarded) return;
+          if (supabaseConfigured() && current.email) {
+            const verdict = await checkVerification(current, method);
+            if (authGenerationRef.current !== generation) return;
+            if (!verdict) {
+              setLoginError("Could not check account verification. Please sign in to retry.");
+              return;
+            }
+            if (verdict.required) {
+              void requestEmailVerification(current, method);
+              return;
+            }
+          }
+          if (authGenerationRef.current === generation) completeSignIn(current, method);
+        } catch {
+          if (authGenerationRef.current === generation) setLoginError("Could not restore this session. Please sign in again.");
+        } finally {
+          if (authGenerationRef.current === generation) {
+            loginInFlightRef.current = false;
+            setLoginBusy(false);
+          }
+        }
+      })();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [completeSignIn, readStaffUsers, attendanceConnection, requestEmailVerification]);
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
+    if (loginInFlightRef.current || verificationFlowRef.current) return;
+    loginInFlightRef.current = true;
+    setLoginBusy(true);
+    setLoginError("");
+    const generation = ++authGenerationRef.current;
+    try {
     /* A cached roster is enough to verify a manual sign-in. Waiting for the
        Supabase connection first made every employee pay the full 12-second
        network timeout even when this device already had the authoritative
@@ -6785,6 +6777,7 @@ export default function Home() {
       const deadline = Date.now() + 7000;
       while (!users.length && Date.now() < deadline) {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+        if (authGenerationRef.current !== generation) return;
         users = readStaffUsers();
       }
       if (!users.length) {
@@ -6838,14 +6831,16 @@ export default function Home() {
         && Boolean(row.password)
         && emailMatches(row)
         );
-    const credentialOk = user ? (loginMode === "pin" ? true : await verifyPassword(enteredPass, user.password)) : false; if (!user || !credentialOk) {
+    const credentialOk = user ? (loginMode === "pin" ? true : await verifyPassword(enteredPass, user.password)) : false;
+    if (authGenerationRef.current !== generation) return;
+    if (!user || !credentialOk) {
       // No employee matched — the same box also accepts a Viewer's
       // username+password (see tryViewerSignIn), so that is checked before
       // giving up. Employee usernames and Viewer usernames are separate
       // namespaces in separate tables, so this never changes which employee
       // a correct email+password pair signs in as.
       if (loginMode === "email") {
-        const viewerResult = await tryViewerSignIn(enteredLocal, enteredPass);
+        const viewerResult = await tryViewerSignIn(enteredLocal, enteredPass, generation);
         if (viewerResult === "signed-in") return;
         if (viewerResult === "disabled") {
           setLoginError("This account is no longer active. Contact your Larsa Engineering contact.");
@@ -6878,92 +6873,18 @@ export default function Home() {
           : "No account found for that email address.");
       return;
     }
-    if (loginMode === "email") {
-      migrateEmailVerification();
-      const refreshed = readStaffUsers().find((row) => row.id === user.id) || user;
-      const deviceId = getDeviceId();
-      const localVerificationDue = deviceNeedsVerification(refreshed, deviceId);
-      /* A device that already has a current local verification stamp does not
-         need to block sign-in on a second network round trip. The session
-         watchdog still checks the server when that local window expires, and
-         first-time/expired devices continue through the authoritative check
-         below. This is the normal returning-user path and removes the several
-         seconds that the policy function used to add to every login. */
-      const locallyVerified = refreshed.emailVerified === true && !localVerificationDue;
-      const periodic = supabaseConfigured() && refreshed.email && !locallyVerified
-        ? await checkVerification({ id: refreshed.id, email: refreshed.email, access: refreshed.access, role: refreshed.role })
-        : null;
-      const periodicDue = locallyVerified ? false : periodic ? periodic.required : localVerificationDue;
-      /* Whether this mailbox has EVER been proved is answered by the server
-         first: user_verification stamps every accepted code and is keyed to
-         the person's email, so it cannot be lost the way a flag inside the
-         shared staff document can. The blob's emailVerified used to be the
-         only witness, and every time a stale save reverted it the app
-         demanded a code at the very next sign-in — regardless of the
-         interval configured in Platform Settings. The flag stays as the
-         offline fallback, and is healed from the server verdict below so
-         the document converges back to the truth. */
-      const initialRequired = periodic
-        ? periodic.policy.enabled !== false && periodic.policy.initial_verification_required !== false
-        : true;
-      /* When the policy service answers, its mailbox stamp is authoritative.
-         The old local emailVerified flag was a migration convenience and
-         allowed some legacy employees to bypass the initial challenge while
-         others were asked for it. Use the server stamp for online sign-in;
-         only fall back to the local flag when the policy service is
-         unreachable. */
-      const initialProven = periodic
-        ? Boolean(periodic.lastVerifiedAt)
-        : refreshed.emailVerified === true;
-      if (periodic?.lastVerifiedAt && refreshed.emailVerified !== true) {
-        persistEmailVerified(refreshed.id, true);
-      }
-      if (supabaseConfigured() && refreshed.email && ((initialRequired && !initialProven) || periodicDue)) {
-        setVerifyError("");
-        setVerifyInfo("Sending your verification code…");
-        setVerifyBusy(true);
-        sendVerificationCode(refreshed.email).then((problem) => {
-          setVerifyBusy(false);
-          if (problem) { setVerifyInfo(""); setLoginError(problem); return; }
-          setVerifyStage({ user: refreshed, email: refreshed.email as string });
-          setVerifyInfo(`We sent a 6-digit code to ${refreshed.email}. Enter it below to finish signing in.`);
-        });
+    if (supabaseConfigured() && user.email) {
+      // Password/PIN entry never renews email proof. Always use the current
+      // server policy and genuine mailbox stamp, including for familiar devices.
+      const verdict = await checkVerification(user, loginMode);
+      if (authGenerationRef.current !== generation) return;
+      if (!verdict) {
+        setLoginError("Could not check account verification. Please try signing in again.");
         return;
       }
-    }
-    /* PIN sign-in proves its inbox the same way email sign-in does: the first
-       time (and again every configured period — weekly by default) the person
-       enters an emailed code. Governed by Platform Settings, where the period
-       is set and the whole check can be switched off, exactly like the email
-       policy above. A username-only account with no mailbox is never asked. */
-    if (loginMode === "pin" && supabaseConfigured() && user.email) {
-      const pinPolicy = await loadPolicy();
-      if (pinPolicy.enabled !== false && pinPolicy.pin_verification_required !== false) {
-        const hours = Math.max(1, Number(pinPolicy.pin_hours) || 168);
-        /* When this person last proved their inbox. Asked of the SERVER first:
-           it stamps user_verification every time a code is accepted, and that
-           record cannot be lost the way a field inside the shared staff blob
-           can. Anchoring on the local device stamp alone is what made a weekly
-           policy behave as if it were every-single-sign-in. The device stamp
-           stays as the fallback for when Supabase cannot be reached. */
-        const serverStatus = await checkVerification({ id: user.id, email: user.email, access: user.access, role: user.role });
-        const device = findDevice(user, getDeviceId());
-        const deviceAt = device?.lastVerified ? new Date(device.lastVerified).getTime() : 0;
-        const serverAt = serverStatus?.lastVerifiedAt ? new Date(serverStatus.lastVerifiedAt).getTime() : 0;
-        const verifiedAt = Math.max(Number.isFinite(serverAt) ? serverAt : 0, Number.isFinite(deviceAt) ? deviceAt : 0);
-        const pinDue = !verifiedAt || Date.now() - verifiedAt >= hours * 3600000;
-        if (pinDue) {
-          setVerifyError("");
-          setVerifyInfo("Sending your verification code…");
-          setVerifyBusy(true);
-          sendVerificationCode(user.email).then((problem) => {
-            setVerifyBusy(false);
-            if (problem) { setVerifyInfo(""); setLoginError(problem); return; }
-            setVerifyStage({ user, email: user.email as string, method: "pin" });
-            setVerifyInfo(`We sent a 6-digit code to ${user.email}. Enter it below to finish signing in.`);
-          });
-          return;
-        }
+      if (verdict.required) {
+        void requestEmailVerification(user, loginMode);
+        return;
       }
     }
     try {
@@ -6972,10 +6893,44 @@ export default function Home() {
     } catch {
       // Remembering the address is a convenience, never a sign-in requirement.
     }
-    if (loginMode === "email") { try { const deviceStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (deviceStore && Array.isArray(deviceStore.users)) { const seat = deviceStore.users.findIndex((row) => row.id === user.id); if (seat >= 0) { deviceStore.users[seat] = { ...deviceStore.users[seat], devices: withDeviceRecorded(deviceStore.users[seat].devices, getDeviceId(), describeDevice(), { verified: true }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(deviceStore)); } } } catch { /* remembering the device is a convenience, never a requirement */ } } if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) { try { const legacyStore = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null; if (legacyStore && Array.isArray(legacyStore.users)) { const at = legacyStore.users.findIndex((row) => row.id === user.id); if (at >= 0) { legacyStore.users[at] = { ...legacyStore.users[at], ...(loginMode === "pin" ? { pin: await hashPin(enteredPin), pinChangedAt: serverNowIso() } : { password: await hashPassword(enteredPass), passwordChangedAt: serverNowIso() }) }; localStorage.setItem("larsaStaffV8", JSON.stringify(legacyStore)); } } } catch { /* Rewriting the old secret is best effort; sign-in must not fail on it. */ } } completeSignIn(readStaffUsers().find((row) => row.id === user.id) || user, loginMode);
+    if (needsUpgrade(loginMode === "pin" ? user.pin : user.password)) {
+      try {
+        const upgrade = loginMode === "pin"
+          ? { pin: await hashPin(enteredPin), pinChangedAt: serverNowIso() }
+          : { password: await hashPassword(enteredPass), passwordChangedAt: serverNowIso() };
+        if (authGenerationRef.current !== generation) return;
+        const store = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null;
+        const at = store?.users?.findIndex((row) => row.id === user.id) ?? -1;
+        if (store?.users && at >= 0) {
+          store.users[at] = { ...store.users[at], ...upgrade };
+          localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+        }
+      } catch { /* A failed legacy-secret upgrade must not prevent sign-in. */ }
+    }
+    if (authGenerationRef.current !== generation) return;
+    try {
+      const store = parseStore("larsaStaffV8") as { users?: StaffUser[] } | null;
+      const at = store?.users?.findIndex((row) => row.id === user.id) ?? -1;
+      if (store?.users && at >= 0) {
+        store.users[at] = { ...store.users[at], devices: withDeviceRecorded(store.users[at].devices, getDeviceId(), describeDevice(), {}) };
+        localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+      }
+    } catch { /* Device history is a convenience, never proof of verification. */ }
+    completeSignIn(readStaffUsers().find((row) => row.id === user.id) || user, loginMode);
+    } catch {
+      if (authGenerationRef.current === generation) setLoginError("Sign-in could not finish. Please try again.");
+    } finally {
+      if (authGenerationRef.current === generation) {
+        loginInFlightRef.current = false;
+        setLoginBusy(false);
+      }
+    }
   };
 
   const signOut = useCallback(() => {
+    ++authGenerationRef.current;
+    loginInFlightRef.current = false;
+    setLoginBusy(false);
     setLarsaSyncWritesPaused(true);
     setLarsaSyncSessionActive(false);
     try { authBroadcastRef.current?.postMessage({ type: "signed-out" }); } catch { /* BroadcastChannel is optional */ }
@@ -7047,8 +7002,8 @@ export default function Home() {
     channel.onmessage = (event) => {
       const message = event.data as { type?: string; userId?: string } | null;
       const current = sessionUserRef.current;
-      if (!current) return;
-      if (message?.type === "signed-out" || (message?.type === "session" && message.userId && message.userId !== current.id)) {
+      if (!current && !verificationFlowRef.current && !loginInFlightRef.current) return;
+      if (message?.type === "signed-out" || (message?.type === "session" && message.userId && message.userId !== current?.id)) {
         signOut();
         setLoginError("This account changed in another tab. Please sign in again.");
       }
@@ -7081,30 +7036,42 @@ export default function Home() {
      governing the moment the preview ends. */
   useEffect(() => {
     if (previewOwner) return;
-    if (!sessionUser || sessionMethod !== "email" || !supabaseConfigured() || !sessionUser.email) return;
-    const verifyCurrentSession = (current: StaffUser) => {
-      if (!current.email) return;
-      checkVerification({ id: current.id, email: current.email, access: current.access, role: current.role }).then((verdict) => {
-        if (verdict && verdict.required && verdict.policy.force_relogin) {
-          void requestEmailVerification(current, "email");
-        }
-      });
-    };
-    const remaining = verificationRemainingMs(sessionUser, getDeviceId());
-    if (remaining <= 0) {
-      /* A transient policy timeout is fail-open: never sign someone out just
-         because the check could not be reached. If it is due, use the same
-         in-session verification flow as a fresh sign-in. */
-      verifyCurrentSession(sessionUser);
-      return;
-    }
-    const timer = window.setTimeout(() => {
+    if (!sessionUser || !sessionMethod || !supabaseConfigured() || !sessionUser.email) return;
+    let stopped = false;
+    let checking = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const generation = authGenerationRef.current;
+    const verifyCurrentSession = async () => {
+      if (stopped || checking || document.visibilityState === "hidden") return;
+      checking = true;
       const current = sessionUserRef.current;
-      if (!current?.email || sessionMethodRef.current !== "email") return;
-      verifyCurrentSession(current);
-    }, Math.max(0, Math.min(remaining, 2147483647)));
-    return () => window.clearTimeout(timer);
-  }, [previewOwner, sessionMethod, sessionUser, signOut]);
+      const method = sessionMethodRef.current;
+      if (!current?.email || !method) { checking = false; return; }
+      const verdict = await checkVerification(current, method);
+      checking = false;
+      if (stopped || generation !== authGenerationRef.current || sessionUserRef.current?.id !== current.id) return;
+      if (verdict?.required && verdict.policy.force_relogin) {
+        void requestEmailVerification(current, method);
+        return;
+      }
+      // Observe policy edits within five minutes. A failed request retries in
+      // thirty seconds; no per-second polling, destructive logout, or busy loop.
+      const delay = !verdict ? 30_000 : verdict.required ? 300_000
+        : Math.max(1_000, Math.min(300_000, (verdict.expiresInHours || 1) * 3_600_000));
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { void verifyCurrentSession(); }, delay);
+    };
+    const onFocus = () => { void verifyCurrentSession(); };
+    void verifyCurrentSession();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [previewOwner, sessionMethod, sessionUser, requestEmailVerification]);
 
   const clickWhenReady = useCallback(
     (find: () => HTMLButtonElement | null, missingMessage: string, maxAttempts = 100, intervalMs = 100) => {
@@ -11497,7 +11464,7 @@ export default function Home() {
                 </>
               )}
               <div className="auth-error" role="alert">{loginError}</div>
-              <button type="submit" className="auth-submit">Sign In</button><p className="auth-secondary">{loginMode === "email" ? (<button type="button" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot password?</button>) : null}{signupOpen ? (<button type="button" onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button>) : null}</p>
+              <button type="submit" className="auth-submit" disabled={loginBusy}>{loginBusy ? "Signing in…" : "Sign In"}</button><p className="auth-secondary">{loginMode === "email" ? (<button type="button" onClick={() => { setAccessMode("forgot"); setLoginError(""); }}>Forgot password?</button>) : null}{signupOpen ? (<button type="button" onClick={() => { setAccessMode("signup"); setLoginError(""); }}>Create account</button>) : null}</p>
             </form>
           </section>
         </div>

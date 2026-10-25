@@ -14,6 +14,6 @@ try{
     await new Promise(resolve=>setTimeout(resolve,250));
   }
   if(!ready)throw new Error('local test server failed to start');
-  const test=spawn(process.execPath,['tests/attendance-freeze.smoke.mjs',...process.argv.includes('--debug')?['http://localhost:5199/','--debug']:[]],{env:{...environment,SMOKE_URL:'http://localhost:5199/',FAIL_REALTIME:'1',ASSERT_FORMATTER_BUDGET:'1',FREEZE_CYCLES:process.env.FREEZE_CYCLES||'12'},stdio:'inherit'});
+  const test=spawn(process.execPath,[process.env.SMOKE_SCRIPT||'tests/attendance-freeze.smoke.mjs',...process.argv.includes('--debug')?['http://localhost:5199/','--debug']:[]],{env:{...environment,SMOKE_URL:'http://localhost:5199/',FAIL_REALTIME:'1',ASSERT_FORMATTER_BUDGET:'1',FREEZE_CYCLES:process.env.FREEZE_CYCLES||'12'},stdio:'inherit'});
   const [code]=await once(test,'exit');process.exitCode=code||0;
 }finally{server.kill();}
