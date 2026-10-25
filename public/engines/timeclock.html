@@ -37,6 +37,15 @@
             .replace(/function v30OtherStatus\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OtherStatus(uid){\n")
             .replace(/function v30OnBreak\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30OnBreak(uid){\n")
             .replace(/function v30ClockedIn\(uid\)\{\n\s*if\(typeof freshState==='function'\)freshState\(\);\n/, "function v30ClockedIn(uid){\n")
+            /* The clock-page injection used to filter and sort the entire
+               attendance history separately for the current user and again
+               for every employee in the manager dropdown. Build the latest
+               status index once per injection instead: O(logs + employees),
+               rather than repeatedly sorting the full log for each person. */
+            .replace(/function v30OtherStatus\(uid\)\{[\s\S]*?function v30ToggleBreak\(\)\{/, "function v30LatestAttendanceByUid(){const result=new Map();(state.logs||[]).forEach(function(log){if(!log||!log.uid||!log.time)return;const status=log.status;if(!['In','Out','Break Start','Break End'].includes(status))return;const stamp=Date.parse(log.time);if(!Number.isFinite(stamp))return;let row=result.get(log.uid);if(!row){row={clock:null,any:null,clockAt:-Infinity,anyAt:-Infinity};result.set(log.uid,row);}if((status==='In'||status==='Out')&&stamp>row.clockAt){row.clock=log;row.clockAt=stamp;}if(stamp>row.anyAt){row.any=log;row.anyAt=stamp;}});return result;}\nfunction v30OtherStatus(uid,latestByUid){latestByUid=latestByUid||v30LatestAttendanceByUid();const latest=latestByUid.get(uid)?.clock;return latest&&latest.status==='In'?'In':'Out';}\nfunction v30OnBreak(uid,latestByUid){latestByUid=latestByUid||v30LatestAttendanceByUid();const latest=latestByUid.get(uid)?.any;return latest&&latest.status==='Break Start'?latest:null;}\nfunction v30ClockedIn(uid,latestByUid){latestByUid=latestByUid||v30LatestAttendanceByUid();const latest=latestByUid.get(uid)?.clock;return !!(latest&&latest.status==='In');}\nfunction v30ToggleBreak(){")
+            .replace("const onBreak=v30OnBreak(currentUser.id);", "const latestByUid=v30LatestAttendanceByUid();const onBreak=v30OnBreak(currentUser.id,latestByUid);")
+            .replace("v30ClockedIn(currentUser.id)", "v30ClockedIn(currentUser.id,latestByUid)")
+            .replace("v30OtherStatus(u.id)", "v30OtherStatus(u.id,latestByUid)")
             /* Clock punches are committed to the server first. The parent
                stores only a small paint-ahead overlay locally so the visible
                Clock page can update immediately without serializing the full
