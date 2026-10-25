@@ -4826,6 +4826,32 @@ export default function Home() {
     () => (hydrated ? parseStore("larsaStaffV8") as Record<string, unknown> | null : null),
     [hydrated, storageTick],
   );
+  /* The active clock is an embedded surface, so a punch must not force the
+     parent to parse the ~840 KB compatibility blob again just to validate the
+     already-rendered employee. Keep the last parent snapshot available for
+     the small removed-id payload; it is refreshed by the normal storage/sync
+     path and is never used as the authoritative punch decision. */
+  const staffStoreRef = useRef<Record<string, unknown> | null>(null);
+  staffStoreRef.current = staffStore;
+  /* Attendance writes can advance storageTick several times per minute. The
+     approval-flow migration only depends on the roster and organization
+     structure, not on the attendance log. Keep a small structural signature
+     so a clock punch cannot schedule another full staff-document parse/write.
+     This is derived from the already parsed staffStore. */
+  const approvalFlowRevision = useMemo(() => {
+    const users = accessUsers.map((person) => [
+      person.id,
+      person.enabled !== false,
+      person.offboarded === true,
+      person.department || "",
+      person.manager || "",
+      person.access || "",
+    ].join("~")).join("|");
+    const org = staffStore?.org && typeof staffStore.org === "object"
+      ? JSON.stringify(staffStore.org)
+      : "";
+    return `${users}::${org}`;
+  }, [accessUsers, staffStore]);
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
   /* A punch can settle several queued events in one pass. Keep the embedded
      engine repaint single-flight so four quick In/Out actions cannot enqueue
@@ -5220,7 +5246,7 @@ export default function Home() {
       setStorageTick((value) => value + 1);
     }, 0);
     return () => clearTimeout(timer);
-  }, [accessUsers, hydrated, storageTick]);
+  }, [approvalFlowRevision, hydrated]);
 
   useEffect(() => {
     if (!hydrated || !accessUsers.length) return;
@@ -7912,14 +7938,26 @@ export default function Home() {
         if (!quiet) notify("You cannot record attendance for this employee."); return false;
       }
     }
-    const initialStore = parseStore("larsaStaffV8") as {
+    const cachedStore = (typeof staffStoreRef !== "undefined" ? staffStoreRef.current : null) as {
       logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string; enabled?: boolean }[];
       removedLogIds?: string[];
     } | null;
-    if (!initialStore?.users?.some(person => person.id === user.id && person.enabled !== false)) {
+    const compatibilityStore = cachedStore || (typeof parseStore === "function"
+      ? parseStore("larsaStaffV8") as typeof cachedStore
+      : null);
+    /* Explicit Clock In/Out buttons already identify the employee and the
+       current roster is in accessUsersRef. Only compatibility callers that
+       omit intent need a fallback blob read; the normal click path stays
+       free of a synchronous full-document JSON.parse. */
+    const liveAccessUsers = typeof accessUsersRef !== "undefined" ? accessUsersRef.current : [];
+    const roster = liveAccessUsers.length
+      ? liveAccessUsers
+      : compatibilityStore?.users || [];
+    if (!roster.some(person => person.id === user.id && person.enabled !== false)) {
       if (!quiet) notify("Your employee account is unavailable or disabled in the current attendance records. Sign in again; no punch was created.");
       return false;
     }
+    const initialStore = compatibilityStore;
     let decided: AttendancePunchInput["status"];
     /* The normal clock buttons pass an explicit displayed intent and must
        preserve it exactly. Compatibility callers that omit intent must first

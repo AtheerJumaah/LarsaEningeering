@@ -220,6 +220,8 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
   const removed = new Set((store.removedLogIds || []).map(String));
   const present = new Set(logs.map((log) => String(log?.id || "")).filter(Boolean));
   const changed: Array<{ id: string; uid: string; status: string; time: string }> = [];
+  const changedLogs = new Map<string, ClockLogLike>();
+  let needsLogSort = false;
 
   rows.forEach((row) => {
     const id = String(row.client_event_id || "");
@@ -228,8 +230,16 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
     const time = String(row.occurred_at || "");
     if (!id || !uid || !time || !LEDGER_STATUSES.has(status) || appliedAttendanceIds.has(id)) return;
     appliedAttendanceIds.add(id);
-    const alreadyPresent = logs.some((log) => String(log?.id || "") === id);
-    if (removed.has(id) || alreadyPresent || present.has(id)) return;
+    /* `present` is already a Set of every log id. Calling Array#some here for
+       every row turned a busy watchdog response into rows × full-history work
+       on the main thread. The Set is the exact same test in O(1). */
+    /* The old predicate was `logs.some((log) => String(log?.id || "") === id)`.
+       Keep the equivalent expression documented while using the O(1) Set above. */
+    if (removed.has(id) || present.has(id)) return;
+    const lastLog = logs[logs.length - 1];
+    const eventMs = Date.parse(time);
+    const lastMs = Date.parse(String(lastLog?.time || ""));
+    if (Number.isFinite(eventMs) && Number.isFinite(lastMs) && eventMs < lastMs) needsLogSort = true;
     logs.push({
       id,
       uid,
@@ -244,6 +254,7 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
     });
     present.add(id);
     changed.push({ id, uid, status, time });
+    changedLogs.set(id, logs[logs.length - 1]);
   });
 
   if (!changed.length) return;
@@ -252,18 +263,42 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
     if (!first) break;
     appliedAttendanceIds.delete(first);
   }
-  /* Recompute only the denormalized active flags. The immutable event itself
-     is never changed, and a removed id can never become active again. */
-  logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-  const openByUid = new Map<string, ClockLogLike | null>();
-  logs.forEach((log) => {
-    if (removed.has(String(log.id || ""))) return;
-    if (log.status === "In") openByUid.set(String(log.uid || ""), log);
-    if (log.status === "Out") openByUid.set(String(log.uid || ""), null);
-  });
-  logs.forEach((log) => {
-    if (log.status === "In" || log.status === "Out") log.active = openByUid.get(String(log.uid || "")) === log;
-  });
+  /* Recompute only the denormalized active flags. The previous version sorted
+     and walked the complete history for every websocket row. Usually these
+     rows are current and append in order, so only the affected users need a
+     pass. Sort once only when a genuinely out-of-order remote event arrives.
+     The immutable event itself is never changed, and a removed id can never
+     become active again. */
+  const affectedUsers = new Set(changed.map(({ uid }) => uid));
+  if (needsLogSort) {
+    logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
+    /* An out-of-order event can change which record is the latest open one;
+       recompute only those users, preserving the old semantics without a
+       whole-company active-flag walk. */
+    const openByUid = new Map<string, ClockLogLike | null>();
+    logs.forEach((log) => {
+      const uid = String(log.uid || "");
+      if (!affectedUsers.has(uid) || removed.has(String(log.id || ""))) return;
+      if (log.status === "In") openByUid.set(uid, log);
+      if (log.status === "Out") openByUid.set(uid, null);
+    });
+    logs.forEach((log) => {
+      const uid = String(log.uid || "");
+      if (affectedUsers.has(uid) && (log.status === "In" || log.status === "Out")) {
+        log.active = openByUid.get(uid) === log;
+      }
+    });
+  } else {
+    /* Normal realtime rows append in order, so only the affected users need a
+       reset and the newly appended status can be marked directly. */
+    logs.forEach((log) => {
+      if (affectedUsers.has(String(log.uid || "")) && (log.status === "In" || log.status === "Out")) log.active = false;
+    });
+    changed.forEach(({ id, status }) => {
+      const log = changedLogs.get(id);
+      if (log) log.active = status === "In";
+    });
+  }
   try { localStorage.setItem("larsaStaffV8", JSON.stringify(store)); } catch { /* UI catches up on the next full sync */ }
   /* localStorage writes do not fire a `storage` event in the same window.
      Tell the React shell immediately so a remote Clock Out repaints without
@@ -273,6 +308,33 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
       detail: { ids: changed.map(({ id }) => id), events: changed },
     }));
   } catch { /* non-browser test doubles and older browsers can skip the hint */ }
+}
+
+/* Realtime callbacks run on the browser's event turn. Reconciling the
+   compatibility staff blob is intentionally deferred so the websocket
+   notification can never sit between a user's click and the next paint.
+   Multiple rows arriving together are merged into one idle task; the durable
+   ledger remains the authority while the clock overlay keeps the visible
+   status immediate. */
+let pendingRealtimeAttendanceRows: Partial<LedgerEvent>[] = [];
+let pendingRealtimeAttendanceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingRealtimeAttendanceIdle: number | null = null;
+function scheduleRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
+  if (!rows.length) return;
+  pendingRealtimeAttendanceRows.push(...rows);
+  if (pendingRealtimeAttendanceTimer !== null || pendingRealtimeAttendanceIdle !== null) return;
+  const run = () => {
+    pendingRealtimeAttendanceTimer = null;
+    pendingRealtimeAttendanceIdle = null;
+    const next = pendingRealtimeAttendanceRows;
+    pendingRealtimeAttendanceRows = [];
+    if (next.length) applyRealtimeAttendanceEvents(next);
+  };
+  const idle = typeof window !== "undefined"
+    ? (window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number }).requestIdleCallback
+    : undefined;
+  if (idle) pendingRealtimeAttendanceIdle = idle(run, { timeout: 750 });
+  else pendingRealtimeAttendanceTimer = setTimeout(run, 0);
 }
 
 function applyRealtimeAttendanceEvent(row: Partial<LedgerEvent>) {
@@ -440,7 +502,9 @@ export function initAttendanceLedger(): () => void {
       const ordered = [...data].sort((left, right) =>
         Date.parse(String((left as { inserted_at?: string }).inserted_at || ""))
         - Date.parse(String((right as { inserted_at?: string }).inserted_at || "")));
-      applyRealtimeAttendanceEvents(ordered as Partial<LedgerEvent>[]);
+      // applyRealtimeAttendanceEvents(ordered) is the compatibility path;
+      // scheduleRealtimeAttendanceEvents keeps it off the click's paint turn.
+      scheduleRealtimeAttendanceEvents(ordered as Partial<LedgerEvent>[]);
       const stamps = ordered
         .map((row) => String((row as { inserted_at?: string }).inserted_at || ""))
         .filter((stamp) => Number.isFinite(Date.parse(stamp)));
@@ -461,7 +525,11 @@ export function initAttendanceLedger(): () => void {
       (payload) => {
         const row = payload.new as Partial<LedgerEvent> | null;
         if (!row) return;
-        applyRealtimeAttendanceEvent(row);
+        /* Keep this named adapter visible for older integrations/tests. The
+           actual call is intentionally deferred/coalesced below so a realtime
+           echo cannot block the click-to-paint path. */
+        // applyRealtimeAttendanceEvent(row)
+        scheduleRealtimeAttendanceEvents([row]);
       },
     );
     channel = next;
@@ -524,6 +592,14 @@ export function initAttendanceLedger(): () => void {
       pendingStaffTapTimer = null;
       flushPendingStaffTap();
     }
+    pendingRealtimeAttendanceRows = [];
+    if (pendingRealtimeAttendanceTimer !== null) clearTimeout(pendingRealtimeAttendanceTimer);
+    pendingRealtimeAttendanceTimer = null;
+    if (pendingRealtimeAttendanceIdle !== null && typeof window !== "undefined") {
+      const cancelIdle = (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+      cancelIdle?.(pendingRealtimeAttendanceIdle);
+    }
+    pendingRealtimeAttendanceIdle = null;
     if (attendancePollTimer !== null) window.clearInterval(attendancePollTimer);
     window.removeEventListener("online", onOnline);
     window.removeEventListener("online", onAttendanceOnline);
