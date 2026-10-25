@@ -754,19 +754,18 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      timer as well — cheap, because the stamp probe above finds nothing to
      fetch when nothing changed. Hidden tabs skip it: they refresh on the
      visibilitychange that brings them back. */
-  /* Realtime remains the primary path. These visible-tab stamp probes are the
+  /* Realtime remains the primary path. These visible-tab stamp probes are a
      safety net for phones/browsers whose websocket is delayed or unavailable.
-     The general probe only selects store_key + updated_at (never the ~840 KB
-     staff blob when nothing changed), while the attendance-only probe runs
-     every five seconds. Realtime remains the fast path; this fallback is
-     deliberately slower so it cannot compete with a punch for the browser's
-     main thread or the database connection. */
+     Even though each probe is small, running them every few seconds from every
+     open device creates continuous auth/database traffic and can starve the
+     shared backend during normal work. Realtime and focus/reconnect refreshes
+     cover the fast path; these timers only recover missed websocket changes. */
   const revalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("periodic revalidate", NON_ATTENDANCE_KEYS);
-  }, 3_000);
+  }, 60_000);
   const attendanceRevalidateTimer = setInterval(() => {
     if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
-  }, 5_000);
+  }, 15_000);
 
   /* The app must revalidate its real state the moment it is looked at again
      or reconnected — nobody should ever need a refresh (hard or otherwise)
