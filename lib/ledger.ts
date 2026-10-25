@@ -206,20 +206,16 @@ function eventFromLog(log: ClockLogLike, store: StaffStoreLike, source: string):
    app-state sync still follows and remains authoritative for roster edits. */
 const appliedAttendanceIds = new Set<string>();
 
-/* A watchdog response can contain up to 200 rows. Replaying each row through
-   the single-row path made every row parse, sort, stringify, and write the
-   whole staff blob, creating a long main-thread task and the browser's
-   "page isn't responding" dialog. Reconcile the response as one transaction:
-   one read, one merge, one active-flag pass, one write, and one repaint hint.
-   The appliedAttendanceIds idempotency set still protects overlapping polls. */
+/* Realtime is a paint-ahead hint, not a reason to rewrite the large staff
+   document. The server punch response and sync layer own persistence. Keep
+   only a bounded overlay locally; this avoids sorting and serializing every
+   attendance log on every server echo. */
 function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
   if (!rows.length) return;
-  const store = readJson<StaffStoreLike>("larsaStaffV8", {});
-  if (!Array.isArray(store.logs)) store.logs = [];
-  const logs = store.logs;
-  const removed = new Set((store.removedLogIds || []).map(String));
-  const present = new Set(logs.map((log) => String(log?.id || "")).filter(Boolean));
-  const changed: Array<{ id: string; uid: string; status: string; time: string }> = [];
+  const changed: Array<{
+    id: string; uid: string; status: string; time: string;
+    type: string; note?: string; clockedBy?: string;
+  }> = [];
 
   rows.forEach((row) => {
     const id = String(row.client_event_id || "");
@@ -228,22 +224,12 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
     const time = String(row.occurred_at || "");
     if (!id || !uid || !time || !LEDGER_STATUSES.has(status) || appliedAttendanceIds.has(id)) return;
     appliedAttendanceIds.add(id);
-    const alreadyPresent = logs.some((log) => String(log?.id || "") === id);
-    if (removed.has(id) || alreadyPresent || present.has(id)) return;
-    logs.push({
-      id,
-      uid,
+    changed.push({
+      id, uid, status, time,
       type: row.work_mode ? String(row.work_mode) : "Office",
-      status,
-      time,
-      active: false,
-      lastSeen: time,
       ...(row.note ? { note: String(row.note) } : {}),
       ...(row.clocked_by ? { clockedBy: String(row.clocked_by) } : {}),
-      recovery: "realtime-ledger",
     });
-    present.add(id);
-    changed.push({ id, uid, status, time });
   });
 
   if (!changed.length) return;
@@ -252,22 +238,13 @@ function applyRealtimeAttendanceEvents(rows: Partial<LedgerEvent>[]) {
     if (!first) break;
     appliedAttendanceIds.delete(first);
   }
-  /* Recompute only the denormalized active flags. The immutable event itself
-     is never changed, and a removed id can never become active again. */
-  logs.sort((left, right) => new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-  const openByUid = new Map<string, ClockLogLike | null>();
-  logs.forEach((log) => {
-    if (removed.has(String(log.id || ""))) return;
-    if (log.status === "In") openByUid.set(String(log.uid || ""), log);
-    if (log.status === "Out") openByUid.set(String(log.uid || ""), null);
-  });
-  logs.forEach((log) => {
-    if (log.status === "In" || log.status === "Out") log.active = openByUid.get(String(log.uid || "")) === log;
-  });
-  try { localStorage.setItem("larsaStaffV8", JSON.stringify(store)); } catch { /* UI catches up on the next full sync */ }
-  /* localStorage writes do not fire a `storage` event in the same window.
-     Tell the React shell immediately so a remote Clock Out repaints without
-     waiting for the slower app_state sync or a manual refresh. */
+  const overlayKey = "larsaAttendanceOverlayV1";
+  const overlay = readJson<Array<Record<string, unknown>>>(overlayKey, []);
+  const byId = new Map(overlay.map((event) => [String(event?.id || ""), event]));
+  changed.forEach((event) => byId.set(event.id, { ...event, lastSeen: event.time }));
+  try { localStorage.setItem(overlayKey, JSON.stringify([...byId.values()].slice(-100))); } catch { /* server remains authoritative */ }
+  /* Same-window storage writes do not emit `storage`; send only the small
+     event payload so the active clock can repaint without reading the blob. */
   try {
     window.dispatchEvent(new CustomEvent("larsa:attendance-realtime", {
       detail: { ids: changed.map(({ id }) => id), events: changed },

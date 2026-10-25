@@ -4874,6 +4874,10 @@ export default function Home() {
         staffStoreDirtyRef.current = true;
         return;
       }
+      if (activeRef.current.native === "quickClock") {
+        setAttendancePaintTick((value) => value + 1);
+        return;
+      }
       queueStorageRefresh();
     };
     window.addEventListener("storage", onStorage);
