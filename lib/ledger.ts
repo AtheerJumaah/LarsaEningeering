@@ -66,6 +66,7 @@ type StaffStoreLike = {
 
 const QUEUE_KEY = "larsaLedgerQueueV1";
 const SEEN_KEY = "larsaLedgerSeenV1";
+const REMOVED_IDS_KEY = "larsaAttendanceRemovedIdsV1";
 const LEDGER_STATUSES = new Set(["In", "Out", "Break Start", "Break End"]);
 /* How far back boot reconciliation looks. Wide enough to cover any realistic
    stale-device window; the ledger itself keeps everything forever. */
@@ -341,6 +342,7 @@ export function initAttendanceLedger(): () => void {
   const current = localStorage.getItem("larsaStaffV8");
   if (current) {
     const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+    writeJson(REMOVED_IDS_KEY, Array.isArray(store.removedLogIds) ? store.removedLogIds.slice(-500) : []);
     (store.logs || []).slice(-2000).forEach((log) => {
       if (log?.id) appliedAttendanceIds.add(String(log.id));
     });
@@ -714,4 +716,9 @@ export function markLogsRemoved(store: StaffStoreLike, ids: string[]) {
   const removed = Array.isArray(store.removedLogIds) ? store.removedLogIds : [];
   ids.forEach((id) => { if (id && !removed.includes(id)) removed.push(id); });
   store.removedLogIds = removed.slice(-500);
+  writeJson(REMOVED_IDS_KEY, store.removedLogIds);
+}
+
+export function readRemovedLogIds(): string[] {
+  return readJson<string[]>(REMOVED_IDS_KEY, []);
 }

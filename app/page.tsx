@@ -4,7 +4,7 @@ import Image from "next/image";
 import { createPortal } from "react-dom";
 import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, setLarsaSyncSessionActive, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
-import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
+import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, readRemovedLogIds, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
@@ -7928,21 +7928,21 @@ export default function Home() {
         if (!quiet) notify("You cannot record attendance for this employee."); return false;
       }
     }
-    const initialStore = parseStore("larsaStaffV8") as {
-      logs?: ClockLog[]; users?: { id?: string; email?: string; name?: string; enabled?: boolean }[];
-      removedLogIds?: string[];
-    } | null;
-    if (!initialStore?.users?.some(person => person.id === user.id && person.enabled !== false)) {
+    /* The directory is already hydrated in memory. Parsing larsaStaffV8 here
+       used to synchronously decode the entire company log on every deliberate
+       clock click, before the request could even be queued. */
+    if (user.enabled === false) {
       if (!quiet) notify("Your employee account is unavailable or disabled in the current attendance records. Sign in again; no punch was created.");
       return false;
     }
+    let removedLogIds = readRemovedLogIds();
     let decided: AttendancePunchInput["status"];
     /* The normal clock buttons pass an explicit displayed intent and must
        preserve it exactly. Compatibility callers that omit intent must first
        resolve the authoritative server state; never guess from stale local
        state or create a punch when that confirmation is unavailable. */
     if (intent === undefined) {
-      const confirmed = await confirmClockState(user.id, initialStore?.removedLogIds || []);
+      const confirmed = await confirmClockState(user.id, removedLogIds);
       if (!confirmed.reached || !confirmed.status) {
         if (!quiet) notify("We could not confirm your current clock status. Choose Clock In or Clock Out and try again.");
         return false;
@@ -7975,7 +7975,7 @@ export default function Home() {
         work_mode: mode,
         note: note.trim() || null,
         source: actor.id !== user.id ? "manager-punch" : decided.startsWith("Break") ? "employee-break" : "employee-punch",
-        removed_ids: initialStore?.removedLogIds || [],
+        removed_ids: removedLogIds,
       });
     }
     const pending = queue;
@@ -19353,8 +19353,10 @@ function QuickClock({
       return null;
     }
   }, [attendancePaintTick, user?.id]);
-  const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
-    .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
+  const latestPunch = logs.reduce<ClockLog | null>((latest, log) => {
+    if (log.uid !== user?.id || (log.status !== "In" && log.status !== "Out")) return latest;
+    return !latest || Date.parse(log.time || "") > Date.parse(latest.time || "") ? log : latest;
+  }, null);
   const overlayAsPending = overlayPunch ? {
     status: overlayPunch.status,
     occurred_at: overlayPunch.time,
