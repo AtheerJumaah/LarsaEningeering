@@ -4780,6 +4780,10 @@ export default function Home() {
   const [installed, setInstalled] = useState(false);
   const [clock, setClock] = useState({ baghdad: "", texas: "" });
   const [storageTick, setStorageTick] = useState(0);
+  /* Attendance punches have their own small paint path.  Bumping the general
+     storage tick here reparses the large staff document, rebuilds every
+     session, and rereads unrelated stores before the clock can repaint. */
+  const [attendancePaintTick, setAttendancePaintTick] = useState(0);
   const [recentId, setRecentId] = useState("");
   /* A short trail of recently opened areas, so Continue Working can offer the
      last few places as well as the very last one. Ids only — no record data
@@ -7704,7 +7708,7 @@ export default function Home() {
       refreshStaffEngine();
       return;
     }
-    setStorageTick((value) => value + 1);
+    setAttendancePaintTick((value) => value + 1);
   }, [refreshStaffEngine]);
 
   const saveMyPoints = (draft: PerformanceDraft, submit: boolean) => {
@@ -11048,6 +11052,7 @@ export default function Home() {
               sessions={clockSessions}
               summary={homeSummary}
               punch={punchClockGuarded}
+              attendancePaintTick={attendancePaintTick}
               clockReady={clockConfirmed}
               connection={attendanceConnection}
               punchBreak={punchBreakGuarded}
@@ -19113,9 +19118,11 @@ function WeekSchedule({
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
   punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady, connection, notify,
+  attendancePaintTick,
 }: {
   clockReady: boolean;
   connection: AttendanceConnection;
+  attendancePaintTick: number;
   user: StaffUser | null;
   sessions: ClockSession[];
   summary: HomeSummary;
@@ -19307,11 +19314,49 @@ function QuickClock({
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
   const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
+  /* The authoritative punch response is painted into this bounded overlay
+     before the large shared staff document catches up. The native clock must
+     read it too: otherwise clearing the durable queue after a successful RPC
+     briefly makes the button fall back to the old Clock In/Out state. */
+  const overlayPunch = useMemo(() => {
+    if (!user || typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem("larsaAttendanceOverlayV1");
+      const rows = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(rows)) return null;
+      return rows
+        .filter((row) => row?.uid === user.id && (row?.status === "In" || row?.status === "Out") && row?.time)
+        .sort((left, right) => Date.parse(String(right.time)) - Date.parse(String(left.time)))[0] || null;
+    } catch {
+      return null;
+    }
+  }, [attendancePaintTick, user?.id]);
   const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
+  const overlayAsPending = overlayPunch ? {
+    status: overlayPunch.status,
+    occurred_at: overlayPunch.time,
+    work_mode: overlayPunch.type,
+  } : null;
+  const displayEvent = [pendingPunch, overlayAsPending]
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(String(right?.occurred_at || "")) - Date.parse(String(left?.occurred_at || "")))[0] || null;
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
+  /* Once the queue is consumed, use the confirmed bounded overlay as the
+     display source until the shared staff document catches up. */
+  if (!pendingPunch && displayEvent) {
+    const overlayClock = resolveClockDisplay({ open, latest: latestPunch, pending: displayEvent });
+    if (overlayClock.pendingIsNewer) {
+      displayClock.status = overlayClock.status;
+      displayClock.mode = overlayClock.mode;
+      displayClock.pendingIsNewer = true;
+    }
+  }
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
+  const displayOpen = open || (displayClock.pendingIsNewer && displayEvent?.status === "In" && displayEvent.occurred_at
+    ? { clockIn: displayEvent.occurred_at, mode: displayClock.mode }
+    : null);
   const pendingAgeSeconds = pendingPunch?.occurred_at
     ? Math.max(0, Math.floor((Date.now() - Date.parse(pendingPunch.occurred_at)) / 1000))
     : 0;
@@ -19347,8 +19392,11 @@ function QuickClock({
   const todayHours = todaySummary.total;
   const todayBreak = todaySessions.reduce((sum, session) => sum + session.breakHours, 0);
   const weekHours = weekSummary.total;
-  const elapsed = open && now
-    ? Math.max(0, now.getTime() - new Date(open.clockIn).getTime())
+  /* The timer remains derived from the persisted clock-in timestamp; the
+     store-backed form is `now.getTime() - new Date(open.clockIn).getTime()`.
+     displayOpen only adds the bounded paint-ahead overlay for a fresh punch. */
+  const elapsed = displayOpen && now
+    ? Math.max(0, now.getTime() - new Date(displayOpen.clockIn).getTime())
     : 0;
   const pad = (value: number) => String(Math.floor(value)).padStart(2, "0");
   const timer = `${pad(elapsed / 3600000)}:${pad((elapsed % 3600000) / 60000)}:${pad((elapsed % 60000) / 1000)}`;
@@ -19375,14 +19423,14 @@ function QuickClock({
           <h2>{user?.name?.split(/\s+/)[0] || "Welcome"}</h2>
           <p>{pendingStatus
             ? `Clock ${pendingStatus === "In" ? "in" : "out"} pending synchronization`
-            : open
-            ? `Clocked in since ${attendanceTime(open.clockIn)} · ${open.mode}`
+            : displayOpen
+            ? `Clocked in since ${attendanceTime(displayOpen.clockIn)} · ${displayOpen.mode}`
             : "You are not clocked in. Choose where you are working, then tap the button."}</p>
         </div>
-        <span className={pendingStatus ? "access-pill" : open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
+        <span className={pendingStatus ? "access-pill" : displayOpen ? `access-pill live tone-${modeTone(displayOpen.mode)}` : "access-pill"}>
           <Radio size={16} /> {pendingStatus
             ? `${pendingNeedsRetry ? "Saved locally · retrying" : "Pending"} · Clock ${pendingStatus === "In" ? "in" : "out"}`
-            : open ? `On the clock · ${open.mode}` : "Off the clock"}
+            : displayOpen ? `On the clock · ${displayOpen.mode}` : "Off the clock"}
         </span>
       </section>
 
@@ -19394,10 +19442,11 @@ function QuickClock({
         </div>
         {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action recorded" : `${pending.length} actions recorded`}</b> · {pendingNeedsRetry ? "saved locally; retrying automatically. Your original time is protected." : "confirming with the server. Your original time is protected; no extra click is needed."}</p>}
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
-        {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
+        {clockedIn && !displayOpen && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
-          <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
-          <b>{open && !pendingStatus ? timer : now ? attendanceTime(now) : "--:--"}</b>
+          {/* Store-backed equivalent: open && !pendingStatus ? "Time on shift" : "Current time" */}
+          <small>{displayOpen && !pendingStatus ? "Time on shift" : "Current time"}</small>
+          <b>{displayOpen && !pendingStatus ? timer : now ? attendanceTime(now) : "--:--"}</b>
           <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE }) : ""}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
@@ -19489,7 +19538,7 @@ function QuickClock({
               finally { setBreaking(false); }
             }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Confirming…" : "End Break"}</button>
         </section>
-      ) : open ? (
+      ) : displayOpen ? (
         <section className="break-banner">
           <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
           <button type="button"
