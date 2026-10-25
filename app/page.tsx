@@ -19325,28 +19325,19 @@ function QuickClock({
   }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo]);
   /* Only the "Recent" window is capped; a chosen period shows everything. */
   const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
-  const [now, setNow] = useState<Date | null>(null);
+  /* A one-second React state tick used to re-render this entire root page.
+     That page owns the embedded engines, large reports, and attendance data,
+     so every clock second could compete with a punch/navigation and make the
+     browser appear hung. Keep the live value in a ref and paint only the two
+     clock readout nodes imperatively. */
+  const nowRef = useRef<Date>(new Date(serverNowMs()));
+  const now = nowRef.current;
   // Keep the third summary column distinct from the always-visible weekly column.
   const [period, setPeriod] = useState("month");
   const todayKeyForSummary = attendanceDateKey(new Date());
   const monthStart = `${todayKeyForSummary.slice(0, 7)}-01`;
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(todayKeyForSummary);
-  useEffect(() => {
-    const update = () => setNow(new Date(serverNowMs()));
-    update();
-    const timer = window.setInterval(update, 1000);
-    /* A visible tab can be throttled while it is backgrounded. Catch up on
-       return so the clock never appears stuck at the value from before the
-       tab was covered or restored. */
-    const onVisibility = () => { if (!document.hidden) update(); };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
-
   const open = summary.openClock;
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
@@ -19356,6 +19347,35 @@ function QuickClock({
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
+  useEffect(() => {
+    const pad = (value: number) => String(Math.floor(value)).padStart(2, "0");
+    const paint = () => {
+      const current = new Date(serverNowMs());
+      nowRef.current = current;
+      const readout = document.querySelector<HTMLElement>("[data-attendance-readout]");
+      if (readout) {
+        if (open && !pendingStatus) {
+          const elapsed = Math.max(0, current.getTime() - new Date(open.clockIn).getTime());
+          readout.textContent = `${pad(elapsed / 3600000)}:${pad((elapsed % 3600000) / 60000)}:${pad((elapsed % 60000) / 1000)}`;
+        } else {
+          readout.textContent = attendanceTime(current);
+        }
+      }
+      const date = document.querySelector<HTMLElement>("[data-attendance-date]");
+      if (date) date.textContent = current.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE });
+    };
+    paint();
+    const timer = window.setInterval(paint, 1000);
+    /* A visible tab can be throttled while it is backgrounded. Catch up on
+       return so the clock never appears stuck at the value from before the
+       tab was covered or restored, without re-rendering the whole shell. */
+    const onVisibility = () => { if (!document.hidden) paint(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [open?.clockIn, pendingStatus]);
   const pendingAgeSeconds = pendingPunch?.occurred_at
     ? Math.max(0, Math.floor((Date.now() - Date.parse(pendingPunch.occurred_at)) / 1000))
     : 0;
@@ -19441,8 +19461,8 @@ function QuickClock({
         {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
         <div className="clock-readout compact">
           <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
-          <b>{open && !pendingStatus ? timer : now ? attendanceTime(now) : "--:--"}</b>
-          <em>{now ? now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE }) : ""}</em>
+           <b data-attendance-readout>{open && !pendingStatus ? timer : attendanceTime(now)}</b>
+           <em data-attendance-date>{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE })}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
           {WORK_MODES.map((item) => (

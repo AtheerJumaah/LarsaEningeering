@@ -121,11 +121,12 @@ test("durable recovery is single-flight and never shares the punch critical path
 });
 
 test("the visible shift timer has a foreground heartbeat and catches up after tab throttling", () => {
-  const clock = page.slice(page.indexOf("const [now, setNow]"), page.indexOf("const open = summary.openClock"));
-  assert.match(clock, /const update = \(\) => setNow\(new Date\(serverNowMs\(\)\)\);/);
-  assert.match(clock, /const timer = window\.setInterval\(update, 1000\);/);
-  assert.match(clock, /document\.addEventListener\("visibilitychange", onVisibility\);/);
-  assert.match(clock, /window\.clearInterval\(timer\);/);
+  const clock = page.slice(page.indexOf("const nowRef"), page.indexOf("const open = summary.openClock"));
+  assert.match(clock, /const nowRef = useRef<Date>\(new Date\(serverNowMs\(\)\)\);/);
+  assert.match(page, /const timer = window\.setInterval\(paint, 1000\);/);
+  assert.match(page, /document\.addEventListener\("visibilitychange", onVisibility\);/);
+  assert.match(page, /window\.clearInterval\(timer\);/);
+  assert.match(page, /data-attendance-readout/);
 });
 
 test("legacy Clock-page decoration cannot rebuild the page every four seconds", () => {
