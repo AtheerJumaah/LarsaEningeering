@@ -71,16 +71,48 @@ const LEDGER_STATUSES = new Set(["In", "Out", "Break Start", "Break End"]);
    stale-device window; the ledger itself keeps everything forever. */
 const RECONCILE_WINDOW_MS = 45 * 24 * 3600_000;
 
+/* The seen-id list is a de-duplication index, not the attendance ledger. It
+ * used to be parsed and stringified on every successful Clock In/Out. Once a
+ * device had accumulated a few thousand punches that synchronous localStorage
+ * round-trip became a visible main-thread pause after the server response.
+ * Keep one in-memory index for the lifetime of the page and persist it in a
+ * deferred task. A reload still gets the durable list; a click never has to
+ * rewrite it before the UI can paint. */
+let seenAttendanceIds: Set<string> | null = null;
+let seenAttendancePersistTimer: ReturnType<typeof setTimeout> | null = null;
+function attendanceSeenSet() {
+  if (!seenAttendanceIds) seenAttendanceIds = new Set(readJson<string[]>(SEEN_KEY, []));
+  return seenAttendanceIds;
+}
+function persistAttendanceSeen() {
+  seenAttendancePersistTimer = null;
+  const seen = attendanceSeenSet();
+  writeJson(SEEN_KEY, Array.from(seen));
+}
+function scheduleAttendanceSeenPersist() {
+  if (seenAttendancePersistTimer !== null) return;
+  seenAttendancePersistTimer = setTimeout(persistAttendanceSeen, 0);
+}
+function rememberAttendanceId(id: string) {
+  const seen = attendanceSeenSet();
+  if (seen.has(id)) return false;
+  seen.add(id);
+  while (seen.size > 10000) {
+    const first = seen.values().next().value;
+    if (!first) break;
+    seen.delete(first);
+  }
+  scheduleAttendanceSeenPersist();
+  return true;
+}
+
 /* The authoritative punch RPC has already accepted this event. Marking it
  * seen before the local staff blob is written prevents the compatibility tap
  * below from submitting the same event a second time. Offline events are not
  * marked here; they remain eligible for the durable queue. */
 export function markAttendanceEventSent(clientEventId: string) {
   if (!clientEventId) return;
-  const seen = new Set(readJson<string[]>(SEEN_KEY, []));
-  if (seen.has(clientEventId)) return;
-  seen.add(clientEventId);
-  writeJson(SEEN_KEY, Array.from(seen).slice(-10000));
+  rememberAttendanceId(clientEventId);
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -355,18 +387,16 @@ export function ledgerTapStaffWrite(rawValue: string) {
   }
   const logs = Array.isArray(store?.logs) ? store.logs : [];
   if (!logs.length) return;
-  const seen = new Set(readJson<string[]>(SEEN_KEY, []));
   const fresh: LedgerEvent[] = [];
+  const seen = attendanceSeenSet();
   logs.forEach((log) => {
     if (!log?.id || seen.has(String(log.id))) return;
     const event = eventFromLog(log, store, log.correctionId ? "approved-correction" : log.recovery ? "recovery-import" : log.clockedBy ? "manager-action" : "legacy-local-action");
-    if (event) {
+    if (event && rememberAttendanceId(String(log.id))) {
       fresh.push(event);
-      seen.add(String(log.id));
     }
   });
   if (fresh.length) {
-    writeJson(SEEN_KEY, Array.from(seen));
     enqueue(fresh);
   }
 }
@@ -429,9 +459,13 @@ export function initAttendanceLedger(): () => void {
     (store.logs || []).slice(-2000).forEach((log) => {
       if (log?.id) appliedAttendanceIds.add(String(log.id));
     });
-    const seen = new Set(readJson<string[]>(SEEN_KEY, []));
-    (store.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
-    writeJson(SEEN_KEY, Array.from(seen));
+    (store.logs || []).forEach(log => { if (log.id) rememberAttendanceId(String(log.id)); });
+    /* Baseline seeding is the one boot-time exception: make it durable before
+       the page can be closed, while normal punches use the deferred path. */
+    if (seenAttendancePersistTimer !== null) {
+      clearTimeout(seenAttendancePersistTimer);
+      persistAttendanceSeen();
+    }
   }
   void flushLedgerQueue();
   const timer = window.setInterval(() => { void flushLedgerQueue(); }, 60_000);
