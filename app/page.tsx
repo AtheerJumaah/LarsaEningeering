@@ -5112,6 +5112,14 @@ export default function Home() {
             window.setTimeout(startRecoveryWhenQuiet, 5000);
             return;
           }
+          /* Even a non-clock native page is user-facing. The repair is a
+             safety net, not a startup dependency; wait for the tab to be
+             hidden so paging the ledger and rewriting the compatibility blob
+             can never make the visible app take forever. */
+          if (!document.hidden) {
+            window.setTimeout(startRecoveryWhenQuiet, 15000);
+            return;
+          }
           reconcileDurableState();
         };
         if (idle) idle(() => window.setTimeout(startRecoveryWhenQuiet, 1500), { timeout: 10_000 });
