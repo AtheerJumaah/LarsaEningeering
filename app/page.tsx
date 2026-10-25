@@ -19378,9 +19378,19 @@ function QuickClock({
   }
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
-  const displayOpen = open || (displayClock.pendingIsNewer && displayEvent?.status === "In" && displayEvent.occurred_at
-    ? { clockIn: displayEvent.occurred_at, mode: displayClock.mode }
-    : null);
+  /* `open` comes from the shared staff snapshot and can briefly lag the
+     authoritative paint-ahead overlay. In particular, after Clock Out the
+     overlay correctly says Out while `open` still points at the previous
+     shift; preferring `open` here kept the old elapsed timer visible and then
+     carried it into the next Clock In. The timer must belong to the newest
+     resolved In event, and must stop entirely when the resolved state is Out. */
+  const displayOpen = displayClock.status !== "In"
+    ? null
+    : displayClock.pendingIsNewer && displayEvent?.status === "In" && displayEvent.occurred_at
+      ? { clockIn: displayEvent.occurred_at, mode: displayClock.mode }
+      : open && (!latestPunch || (latestPunch.status === "In" && latestPunch.time === open.clockIn))
+        ? open
+        : null;
   const pendingAgeSeconds = pendingPunch?.occurred_at
     ? Math.max(0, Math.floor((Date.now() - Date.parse(pendingPunch.occurred_at)) / 1000))
     : 0;
