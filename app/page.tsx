@@ -4998,7 +4998,8 @@ export default function Home() {
                    other staff pages still take the full refresh path below. */
                 staffRef.current?.contentWindow?.eval(`
                   if(typeof applyAttendanceOverlay==="function")applyAttendanceOverlay();
-                  if(typeof activePage!=="undefined"&&activePage==='clock'&&typeof renderClock==="function")renderClock();
+                  if(typeof activePage!=="undefined"&&activePage==='clock'&&typeof refreshClockAction==="function")refreshClockAction();
+                  else if(typeof activePage!=="undefined"&&activePage==='clock'&&typeof renderClock==="function")renderClock();
                 `);
               } else {
                 staffRef.current?.contentWindow?.eval(`
@@ -7722,7 +7723,8 @@ export default function Home() {
              repeated In/Out cycles. Keep the same state and DOM result while
              avoiding unrelated page work; other staff pages retain the full
              render path. */
-          if(currentUser && activePage==='clock' && typeof renderClock==="function")renderClock();
+          if(currentUser && activePage==='clock' && typeof refreshClockAction==="function")refreshClockAction();
+          else if(currentUser && activePage==='clock' && typeof renderClock==="function")renderClock();
           else if(typeof render==="function"&&currentUser)render();
         `);
       } catch {
@@ -8134,6 +8136,22 @@ export default function Home() {
   // native clock. The old packed timesheets independently counted gross time.
   useEffect(() => {
     const holder = window as unknown as { __larsaAttendanceSessions?: () => Record<string, unknown>[] };
+    /* The embedded Clock page asks for its summary every time it repaints.
+       That can happen more than once for one punch (the optimistic overlay,
+       the RPC result, and the realtime echo).  The old bridge rebuilt a Map
+       over every session on each call, so repeated clock in/out actions made
+       the main thread do the same attendance walk over and over while the
+       visible frame was trying to paint.  Keep the projected rows while the
+       underlying memoized session array, roster, and viewer scope are the
+       same.  A new server/storage snapshot changes one of those references
+       and naturally invalidates the cache. */
+    let bridgeCache: {
+      sessions: ClockSession[] | null;
+      users: StaffUser[];
+      actorId: string;
+      scopeKey: string;
+      rows: Record<string, unknown>[];
+    } | null = null;
     const readSessions = () => {
       /* Reuse the memoized session walk the parent already computed for its
          own attendance surfaces. Re-parsing the entire staff blob here made
@@ -8147,10 +8165,25 @@ export default function Home() {
       const users = bridgeUsers || (Array.isArray(store?.users) ? store.users as StaffUser[] : []);
       const actor = users.find(user => user.id === sessionUserRef.current?.id);
       if (!actor || actor.enabled === false) return [];
-      const allowed = new Set(scopedUsers(actor, users.map(user => ({ ...user, enabled: true }))).map(user => user.id));
       const companyScope = isAdmin(actor) || actor.permissionProfile?.scope === "company";
-      const rows = new Map<string, Record<string, unknown>>();
       const bridgeSessions = typeof clockSessionsRef !== "undefined" ? clockSessionsRef.current : null;
+      const scopeKey = [
+        actor.id,
+        actor.access || "",
+        actor.permissionProfile?.scope || "",
+        actor.department || "",
+        actor.manager || "",
+        companyScope ? "company" : "scoped",
+      ].join("~");
+      if (bridgeCache
+        && bridgeCache.sessions === bridgeSessions
+        && bridgeCache.users === users
+        && bridgeCache.actorId === actor.id
+        && bridgeCache.scopeKey === scopeKey) {
+        return bridgeCache.rows;
+      }
+      const allowed = new Set(scopedUsers(actor, users.map(user => ({ ...user, enabled: true }))).map(user => user.id));
+      const rows = new Map<string, Record<string, unknown>>();
       const sessions = bridgeSessions || buildClockSessions(store, users);
       sessions.forEach(session => {
         if (!companyScope && !allowed.has(session.uid)) return;
@@ -8167,7 +8200,15 @@ export default function Home() {
         row.Review = Boolean(row.Review || session.stale || session.unclosed || session.long);
         rows.set(key, row);
       });
-      return Array.from(rows.values());
+      const projected = Array.from(rows.values());
+      bridgeCache = {
+        sessions: bridgeSessions,
+        users,
+        actorId: actor.id,
+        scopeKey,
+        rows: projected,
+      };
+      return projected;
     };
     holder.__larsaAttendanceSessions = readSessions;
     return () => { if (holder.__larsaAttendanceSessions === readSessions) delete holder.__larsaAttendanceSessions; };
