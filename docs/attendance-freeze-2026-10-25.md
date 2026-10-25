@@ -36,6 +36,10 @@ to several GB while the most recent measured JavaScript heap remained around
    conversion, midnight boundaries, and native attendance display now reuse
    bounded caches. The fixed browser run created eight formatters initially,
    with no per-punch growth. Exact attendance arithmetic and DST tests pass.
+5. **Startup hydration mismatch.** The server's initial overview greeting could
+   differ from the device's greeting in another timezone. The overview now mounts
+   after hydration. The regression uses a UTC server and a Chicago browser and
+   treats all browser errors, including hydration errors, as failures.
 
 ## Verification
 

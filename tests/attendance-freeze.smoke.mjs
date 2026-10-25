@@ -15,7 +15,7 @@ for(let day=1;day<=20;day++)for(const u of users){
 let staff={users,logs};let stamp=new Date().toISOString();const events=[];
 const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true,args:['--remote-debugging-port=9335']});
 const watchdog=setTimeout(()=>{console.error('FAIL: browser regression exceeded 90 seconds');process.exit(1)},90000);watchdog.unref();
-const context=await browser.newContext({serviceWorkers:'block'});
+const context=await browser.newContext({serviceWorkers:'block',timezoneId:'America/Chicago'});
 if(process.env.FAIL_REALTIME==='1'||process.argv.includes('--fail-realtime'))await context.routeWebSocket('**/realtime/**',socket=>socket.close({code:1011,reason:'Simulated network interruption'}));
 await context.route('**/*.supabase.co/**',async route=>{
   const req=route.request(),url=new URL(req.url());let body=[];
@@ -49,7 +49,7 @@ await context.addInitScript(({user,staff,debug})=>{
 const start=Date.now();
 let page;
 try{
-  page=await context.newPage();page.on('console',message=>{if(message.text().startsWith('TASK '))console.log(message.text())});page.on('crash',()=>console.error('BROWSER PAGE CRASHED'));let errors=0;const fatalErrors=[];page.on('pageerror',e=>{if(!e.message.includes('#418'))fatalErrors.push(e.message);if(errors++<3)console.log('PAGE ERROR',e.stack);});
+  page=await context.newPage();page.on('console',message=>{if(message.text().startsWith('TASK '))console.log(message.text())});page.on('crash',()=>console.error('BROWSER PAGE CRASHED'));let errors=0;const fatalErrors=[];page.on('pageerror',e=>{fatalErrors.push(e.message);if(errors++<3)console.log('PAGE ERROR',e.stack);});
   await page.goto(process.argv[2]||process.env.SMOKE_URL||'https://larsaeng.app/',{waitUntil:'domcontentloaded',timeout:30000});
   const button=()=>page.locator('.native.active .clock-punch');
   await button().waitFor({timeout:30000});
@@ -69,7 +69,7 @@ try{
     console.log('PUNCH',JSON.stringify({i:i+1,clickMs,confirmedMs,elapsed:Date.now()-before,...metrics}));
   }
   await page.close();page=await context.newPage();
-  page.on('pageerror',error=>{if(!error.message.includes('#418'))fatalErrors.push(error.message)});
+  page.on('pageerror',error=>fatalErrors.push(error.message));
   await page.goto(process.argv[2]||process.env.SMOKE_URL||'https://larsaeng.app/',{waitUntil:'domcontentloaded'});
   await button().waitFor({timeout:30000});
   await page.waitForTimeout(6000);

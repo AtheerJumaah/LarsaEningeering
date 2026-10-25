@@ -2,7 +2,7 @@
 // Supabase request, including websocket connections; no live writes occur.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-const environment={...process.env,NEXT_PUBLIC_SUPABASE_URL:'https://attendance-test.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'test-key'};
+const environment={...process.env,TZ:'UTC',NEXT_PUBLIC_SUPABASE_URL:'https://attendance-test.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'test-key'};
 const next='node_modules/next/dist/bin/next';
 if(!process.argv.includes('--skip-build')){const build=spawn(process.execPath,[next,'build'],{env:environment,stdio:'inherit'});
 const [built]=await once(build,'exit');if(built!==0)process.exit(built||1);}

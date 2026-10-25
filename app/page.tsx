@@ -4702,7 +4702,7 @@ export default function Home() {
      is explicitly treated as local mode for development/legacy installs. */
   const initialAttendanceConnection: AttendanceConnection = !supabaseConfigured()
     ? "local"
-    : typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "connecting";
+    : typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "connecting";
   const [attendanceConnection, setAttendanceConnection] = useState<AttendanceConnection>(initialAttendanceConnection);
   const attendanceConnectionRef = useRef<AttendanceConnection>(initialAttendanceConnection);
   /* A browser cache is useful for the offline read-only screen, but it must
@@ -11088,7 +11088,10 @@ export default function Home() {
         </header>
 
         <section className="workspace">
-          <NativePanel active={active.native} view="overview">
+          {/* The overview contains a device-local greeting. Render it after
+              mount so a server in UTC cannot hydrate an evening greeting
+              over a client's afternoon greeting and rebuild the root. */}
+          <NativePanel active={hydrated ? active.native : undefined} view="overview">
             <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
           </NativePanel>
           <NativePanel active={active.native} view="admin">

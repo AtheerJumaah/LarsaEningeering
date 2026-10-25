@@ -351,7 +351,8 @@ test("administration switches mount one current panel and never expose a pre-hyd
     "accountingHub", "weekSchedule", "myPoints", "performance", "development", "performanceHistory",
     "salesCommissions", "payrollPortal", "myPay", "constructionFinancials", "projects",
   ]) {
-    assert.match(page, new RegExp(`NativePanel active=\\{active\\.native\\} view=\\"${view}\\"`), `${view} must use the exclusive panel boundary`);
+    const active = view === "overview" ? "hydrated \\? active\\.native : undefined" : "active\\.native";
+    assert.match(page, new RegExp(`NativePanel active=\\{${active}\\} view=\\"${view}\\"`), `${view} must use the exclusive panel boundary`);
   }
   assert.match(page, /function NativePanel\(/);
   assert.match(page, /if \(active !== view\) return null;/);
