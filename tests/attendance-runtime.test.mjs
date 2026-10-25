@@ -39,10 +39,34 @@ function runtime(path, client, seed = {}) {
   });
   context.window.setInterval = context.setInterval;
   context.window.clearInterval = context.clearInterval;
+  context.window.setTimeout = context.setTimeout;
+  context.window.clearTimeout = context.clearTimeout;
   vm.runInContext(ts.transpileModule(read(path), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { api: exports, data, listeners, timers, context };
 }
 const settle = async () => { for (let i=0;i<20;i++) await new Promise(r=>setImmediate(r)); };
+
+test('attendance channel removal tolerates synchronous CLOSED callbacks and backs off retries', async()=>{
+  const channels=[];const removed=[];
+  const client={
+    auth:{getSession:async()=>({data:{session:{}}}),onAuthStateChange:()=>({data:{subscription:{unsubscribe(){}}}})},
+    from(){throw new Error('no pending queue')},
+    channel(){const channel={on(){return channel},subscribe(callback){channel.status=callback;return channel}};channels.push(channel);return channel},
+    removeChannel(channel){removed.push(channel);assert.ok(removed.length<10,'recursive channel removal');channel.status('CLOSED');return Promise.resolve('ok')},
+  };
+  const r=runtime('lib/ledger.ts',client);const cleanup=r.api.initAttendanceLedger();await settle();
+  assert.equal(channels.length,1);
+  channels[0].status('CHANNEL_ERROR');channels[0].status('CLOSED');
+  assert.equal(removed.length,1);
+  const first=r.timers.find(timer=>timer.ms===1000&&!timer.interval);assert.ok(first);first.fn();await settle();
+  assert.equal(channels.length,2);
+  channels[0].status('CLOSED');assert.equal(removed.length,1,'old callbacks cannot remove the replacement');
+  channels[1].status('TIMED_OUT');assert.equal(removed.length,2);
+  const second=r.timers.find(timer=>timer.ms===2000&&!timer.interval);assert.ok(second);second.fn();await settle();
+  channels[2].status('SUBSCRIBED');channels[2].status('CLOSED');
+  assert.equal(r.timers.filter(timer=>timer.ms===1000&&!timer.interval).length,2,'a healthy subscription resets retry backoff');
+  cleanup();
+});
 function server() {
   let failing = true;
   const rows = { larsaStaffV8: { users:[{id:'employee'}], logs:[] } };

@@ -4,7 +4,7 @@
 // to /engines/timeclock.html kept serving the old broken file to everyone.
 // Bump whenever a calculation engine changes so an already-open browser
 // cannot keep serving an older accounting mirror from its service worker.
-const CACHE_NAME = "larsa-control-v60";
+const CACHE_NAME = "larsa-control-v61";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",

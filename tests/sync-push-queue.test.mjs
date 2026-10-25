@@ -46,3 +46,14 @@ test("an immediate save waits for an in-flight write and flushes the newer edit"
   assert.deepEqual(sent, [1, 2], "the newer organization snapshot must be sent after the in-flight one");
   assert.equal(serverValue, 2, "the server-confirmed state must contain the latest edit");
 });
+
+test("a save that makes no progress yields to the UI and stops without claiming success", async()=>{
+  let calls=0;let painted=false;
+  const push=createPushQueue(async()=>{calls++},()=>true);
+  setTimeout(()=>{painted=true},0);
+  await assert.rejects(push('unused-store'),/not been confirmed/);
+  assert.equal(calls,5);
+  assert.equal(painted,true,'save retries must allow browser tasks to run');
+  calls=0;await assert.rejects(push('unused-store'),/not been confirmed/);
+  assert.equal(calls,5,'a failed drain releases its slot for a later retry');
+});

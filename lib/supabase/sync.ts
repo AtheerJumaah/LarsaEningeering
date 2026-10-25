@@ -392,7 +392,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       if (cancelled || syncWritesPaused) throw new Error("Sync is currently unavailable.");
       await pushKeyOnce(key);
     },
-    (key: SyncedKey) => !cancelled && localStorage.getItem(key) !== lastKnown.get(key),
+    /* localStorage represents an absent store as null; Map#get uses undefined.
+       Comparing them directly marked every unused optional store as dirty.
+       pushKeyOnce then did no work (both are absent), and the queue retried in
+       an endless microtask loop that froze the renderer and exhausted memory. */
+    (key: SyncedKey) => !cancelled && localStorage.getItem(key) !== (lastKnown.get(key) ?? null),
   );
 
   function schedulePush(key: SyncedKey) {
@@ -704,7 +708,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           /* No stamp means we cannot prove it is current, so fetch it. */
           && (!stamp || lastSeenAt.get(key) !== stamp));
       if (!stale.length) {
-        keys.forEach((key) => { if (localStorage.getItem(key) !== lastKnown.get(key)) schedulePush(key); });
+        keys.forEach((key) => { if (localStorage.getItem(key) !== (lastKnown.get(key) ?? null)) schedulePush(key); });
         /* A successful stamp probe is enough to prove the server is reachable.
            Reconnection can find no changed rows, but the UI still needs to
            leave its conservative "checking" state so punches become usable. */

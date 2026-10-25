@@ -2533,19 +2533,29 @@ type HomeSummary = {
   roleCards: RoleCard[];
 };
 
+/* Date#toLocale* with options creates a new ICU formatter on every call.
+   These helpers run for every attendance row and clock repaint. Keep the
+   formatter instances stable, including the one-second readout date. */
+const attendanceTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", timeZone: ATTENDANCE_TIME_ZONE });
+const attendanceDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", timeZone: ATTENDANCE_TIME_ZONE,
+});
+const attendanceDateLabelFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: ATTENDANCE_TIME_ZONE });
+const attendanceClockDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE });
+
 function attendanceTime(instant: string | Date) {
   const date = instant instanceof Date ? instant : new Date(instant);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: ATTENDANCE_TIME_ZONE });
+  return Number.isNaN(date.getTime()) ? "" : attendanceTimeFormatter.format(date);
 }
 
 function attendanceDateTime(instant: string | Date) {
   const date = instant instanceof Date ? instant : new Date(instant);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { timeZone: ATTENDANCE_TIME_ZONE });
+  return Number.isNaN(date.getTime()) ? "" : attendanceDateTimeFormatter.format(date);
 }
 
 function attendanceDateLabel(dateKey: string) {
   const date = new Date(`${dateKey}T12:00:00Z`);
-  return Number.isNaN(date.getTime()) ? dateKey : date.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: ATTENDANCE_TIME_ZONE });
+  return Number.isNaN(date.getTime()) ? dateKey : attendanceDateLabelFormatter.format(date);
 }
 
 function shiftLabel(entries: { start?: string; end?: string; name?: string }[]) {
@@ -19403,7 +19413,7 @@ function QuickClock({
         }
       }
       const date = document.querySelector<HTMLElement>("[data-attendance-date]");
-      if (date) date.textContent = current.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE });
+      if (date) date.textContent = attendanceClockDateFormatter.format(current);
     };
     paint();
     const timer = window.setInterval(paint, 1000);
@@ -19503,7 +19513,7 @@ function QuickClock({
         <div className="clock-readout compact">
           <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
            <b data-attendance-readout>{open && !pendingStatus ? timer : attendanceTime(now)}</b>
-           <em data-attendance-date>{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", timeZone: ATTENDANCE_TIME_ZONE })}</em>
+           <em data-attendance-date>{attendanceClockDateFormatter.format(now)}</em>
         </div>
         <div className="clock-modes" role="group" aria-label="Where are you working">
           {WORK_MODES.map((item) => (

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import {
   ATTENDANCE_TIME_ZONE,
   attendanceDateKey,
@@ -12,6 +13,22 @@ import {
   splitAttendanceInterval,
   validAttendanceTimeZone,
 } from "../lib/attendance-timezone.mjs";
+
+test('repeated history calculations reuse timezone formatters and preserve exact hours',()=>{
+  let allocations=0;
+  const DateTimeFormat=new Proxy(Intl.DateTimeFormat,{construct(target,args){allocations++;return Reflect.construct(target,args)}});
+  const context=vm.createContext({Intl:{DateTimeFormat},Date,Map,Number,String,NaN});
+  const source=readFileSync(new URL('../lib/attendance-timezone.mjs',import.meta.url),'utf8').replace(/^export /gm,'');
+  vm.runInContext(source,context);
+  for(let cycle=0;cycle<8;cycle++)for(let day=1;day<=20;day++){
+    const date=`2026-10-${String(day).padStart(2,'0')}`;
+    const rows=context.splitAttendanceInterval(`${date}T14:00:00Z`,`${date}T18:00:00Z`);
+    assert.equal(rows.reduce((sum,row)=>sum+Date.parse(row.to)-Date.parse(row.from),0),4*3600000);
+    assert.equal(context.attendanceDateTimeInput(`${date}T14:00:00Z`),`${date}T09:00`);
+  }
+  assert.ok(allocations<=3,`formatter allocation must depend on zones/formats, not history rows: ${allocations}`);
+  assert.equal(context.validAttendanceTimeZone(''),false);
+});
 
 test("the proposed canonical attendance zone is explicit and valid", () => {
   assert.equal(ATTENDANCE_TIME_ZONE, "America/Chicago");

@@ -6,20 +6,26 @@ export function createPushQueue<Key>(
 ): (key: Key) => Promise<void> {
   const inFlight = new Map<Key, Promise<void>>();
 
-  async function push(key: Key): Promise<void> {
+  function push(key: Key): Promise<void> {
     const active = inFlight.get(key);
-    if (active) {
-      await active;
-    } else {
-      const task = pushOnce(key);
-      inFlight.set(key, task);
-      try {
-        await task;
-      } finally {
-        if (inFlight.get(key) === task) inFlight.delete(key);
+    if (active) return active;
+    /* Own the whole drain, including newer edits, with one promise. A dirty
+       predicate or an unresolvable conflict must never recurse forever through
+       resolved promises: that prevents the browser from painting or handling
+       input. Yield between passes and report an unconfirmed save after a
+       bounded attempt; the local edit remains intact for the next retry. */
+    const task = Promise.resolve().then(async () => {
+      for (let pass = 0; pass < 5; pass++) {
+        await pushOnce(key);
+        if (!isDirty(key)) return;
+        if (pass < 4) await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
-    }
-    if (isDirty(key)) return push(key);
+      throw new Error("The latest changes are still saved on this device but have not been confirmed by the server.");
+    }).finally(() => {
+      if (inFlight.get(key) === task) inFlight.delete(key);
+    });
+    inFlight.set(key, task);
+    return task;
   }
 
   return push;

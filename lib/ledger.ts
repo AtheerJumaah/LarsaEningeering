@@ -488,6 +488,7 @@ export function initAttendanceLedger(): () => void {
   type AttendanceChannel = ReturnType<SupabaseClient["channel"]>;
   let channel: AttendanceChannel | null = null;
   let retryTimer: number | null = null;
+  let retryDelayMs = 1000;
   let authSubscription: { unsubscribe: () => void } | null = null;
   let attendancePollTimer: number | null = null;
   let attendancePollInFlight = false;
@@ -551,7 +552,7 @@ export function initAttendanceLedger(): () => void {
     }
   };
   const subscribe = () => {
-    if (cancelled || channel || !client || typeof (client as SupabaseClient & { channel?: unknown }).channel !== "function") return;
+    if (cancelled || channel || retryTimer !== null || !client || typeof (client as SupabaseClient & { channel?: unknown }).channel !== "function") return;
     const next = client.channel("larsa-attendance-events");
     next.on(
       "postgres_changes",
@@ -568,17 +569,23 @@ export function initAttendanceLedger(): () => void {
     );
     channel = next;
     next.subscribe((status) => {
-      if (cancelled || (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED")) return;
-      /* Remove the dead channel before retrying. A failed channel must not
-         permanently block the guard above from creating its replacement. */
-      if (channel === next) channel = null;
+      /* removeChannel -> unsubscribe can synchronously emit CLOSED again.
+         Claim this channel exactly once BEFORE removal; otherwise that CLOSED
+         callback recursively removes the same channel until the stack and
+         renderer are exhausted. Late callbacks from an old channel must also
+         never tear down its replacement. */
+      if (cancelled || channel !== next) return;
+      if (status === "SUBSCRIBED") { retryDelayMs = 1000; return; }
+      if (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED") return;
+      channel = null;
       if (retryTimer === null) {
         retryTimer = window.setTimeout(() => {
           retryTimer = null;
           void ensureRealtime();
-        }, 750);
+        }, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
       }
-      void client.removeChannel(next);
+      void client.removeChannel(next).catch(() => { /* the REST fallback remains active */ });
     });
   };
   const ensureRealtime = async () => {
