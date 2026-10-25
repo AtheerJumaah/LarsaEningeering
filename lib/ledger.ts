@@ -68,6 +68,11 @@ const QUEUE_KEY = "larsaLedgerQueueV1";
 const SEEN_KEY = "larsaLedgerSeenV1";
 const REMOVED_IDS_KEY = "larsaAttendanceRemovedIdsV1";
 const LEDGER_STATUSES = new Set(["In", "Out", "Break Start", "Break End"]);
+/* Staff writes replace the legacy document, but attendance logs are append-
+   only in normal operation. Cache the IDs/count once so a profile/settings
+   save does not walk the complete (and ever-growing) attendance history. */
+let seenStaffLogIds: Set<string> | null = null;
+let lastStaffLogCount = 0;
 /* How far back boot reconciliation looks. Wide enough to cover any realistic
    stale-device window; the ledger itself keeps everything forever. */
 const RECONCILE_WINDOW_MS = 45 * 24 * 3600_000;
@@ -78,9 +83,10 @@ const RECONCILE_WINDOW_MS = 45 * 24 * 3600_000;
  * marked here; they remain eligible for the durable queue. */
 export function markAttendanceEventSent(clientEventId: string) {
   if (!clientEventId) return;
-  const seen = new Set(readJson<string[]>(SEEN_KEY, []));
+  const seen = seenStaffLogIds ?? new Set(readJson<string[]>(SEEN_KEY, []));
   if (seen.has(clientEventId)) return;
   seen.add(clientEventId);
+  seenStaffLogIds = seen;
   writeJson(SEEN_KEY, Array.from(seen).slice(-10000));
 }
 
@@ -271,16 +277,22 @@ export function ledgerTapStaffWrite(rawValue: string) {
   }
   const logs = Array.isArray(store?.logs) ? store.logs : [];
   if (!logs.length) return;
-  const seen = new Set(readJson<string[]>(SEEN_KEY, []));
+  const seen = seenStaffLogIds ?? new Set(readJson<string[]>(SEEN_KEY, []));
+  const scanFrom = logs.length < lastStaffLogCount
+    ? 0
+    : Math.max(0, lastStaffLogCount - 1);
   const fresh: LedgerEvent[] = [];
-  logs.forEach((log) => {
-    if (!log?.id || seen.has(String(log.id))) return;
+  for (let index = scanFrom; index < logs.length; index += 1) {
+    const log = logs[index];
+    if (!log?.id || seen.has(String(log.id))) continue;
     const event = eventFromLog(log, store, log.correctionId ? "approved-correction" : log.recovery ? "recovery-import" : log.clockedBy ? "manager-action" : "legacy-local-action");
     if (event) {
       fresh.push(event);
       seen.add(String(log.id));
     }
-  });
+  }
+  lastStaffLogCount = logs.length;
+  seenStaffLogIds = seen;
   if (fresh.length) {
     writeJson(SEEN_KEY, Array.from(seen));
     enqueue(fresh);
@@ -342,12 +354,15 @@ export function initAttendanceLedger(): () => void {
   const current = localStorage.getItem("larsaStaffV8");
   if (current) {
     const store = readJson<StaffStoreLike>("larsaStaffV8", {});
+    const logs = Array.isArray(store.logs) ? store.logs : [];
+    lastStaffLogCount = logs.length;
     writeJson(REMOVED_IDS_KEY, Array.isArray(store.removedLogIds) ? store.removedLogIds.slice(-500) : []);
-    (store.logs || []).slice(-2000).forEach((log) => {
+    logs.slice(-2000).forEach((log) => {
       if (log?.id) appliedAttendanceIds.add(String(log.id));
     });
     const seen = new Set(readJson<string[]>(SEEN_KEY, []));
-    (store.logs || []).forEach(log => { if (log.id) seen.add(String(log.id)); });
+    logs.forEach(log => { if (log.id) seen.add(String(log.id)); });
+    seenStaffLogIds = seen;
     writeJson(SEEN_KEY, Array.from(seen));
   }
   void flushLedgerQueue();
