@@ -5102,6 +5102,16 @@ export default function Home() {
             window.setTimeout(startRecoveryWhenQuiet, 1500);
             return;
           }
+          /* A ledger/account recovery can page thousands of rows and rewrite
+             the compatibility blob. It is safe background repair, never a
+             clock prerequisite, so do not run it while the native clock or
+             legacy staff clock is the visible surface. That work used to
+             arrive a few seconds after Clock In and freeze the foreground
+             timer at roughly four seconds, leaving Clock Out unresponsive. */
+          if (activeRef.current.native === "quickClock" || activeRef.current.engine === "staff") {
+            window.setTimeout(startRecoveryWhenQuiet, 5000);
+            return;
+          }
           reconcileDurableState();
         };
         if (idle) idle(() => window.setTimeout(startRecoveryWhenQuiet, 1500), { timeout: 10_000 });
