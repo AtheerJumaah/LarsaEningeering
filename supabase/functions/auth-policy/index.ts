@@ -217,29 +217,25 @@ Deno.serve(async (req: Request) => {
     const method = payload.method === "pin" ? "pin" : "email";
     if (!userId && !email) return json({ ok: false, error: "Unknown account." });
 
-    const policy = await readPolicy();
-
     /* Match by the permanent identity (normalized email) FIRST, and by uid as
        the fallback for username-only accounts. Several rows can reference the
        same person across account recreations; the newest genuine stamp wins,
        so recreating an account never restarts anyone's verification clock. */
-    let rows: { last_periodic_email_verified_at: string | null; verification_exempt: boolean | null }[] = [];
-    if (email) {
-      const { data, error } = await db
+    // These reads are independent. Awaiting all three in sequence added a
+    // database round trip for each before the sign-in form could proceed.
+    const [policy, byEmail, byId] = await Promise.all([
+      readPolicy(),
+      email ? db
         .from("user_verification")
         .select("last_periodic_email_verified_at, verification_exempt")
-        .eq("normalized_email", email);
-      if (error) return json({ ok: false, error: "Could not check verification." });
-      rows = rows.concat((data as typeof rows) || []);
-    }
-    if (userId) {
-      const { data, error } = await db
+        .eq("normalized_email", email) : Promise.resolve({ data: [], error: null }),
+      userId ? db
         .from("user_verification")
         .select("last_periodic_email_verified_at, verification_exempt")
-        .eq("user_id", userId);
-      if (error) return json({ ok: false, error: "Could not check verification." });
-      rows = rows.concat((data as typeof rows) || []);
-    }
+        .eq("user_id", userId) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (byEmail.error || byId.error) return json({ ok: false, error: "Could not check verification." });
+    const rows = [...(byEmail.data || []), ...(byId.data || [])] as { last_periodic_email_verified_at: string | null; verification_exempt: boolean | null }[];
 
     if (rows.some((row) => row.verification_exempt)) {
       return json({ ok: true, required: false, exempt: true, policy, hours: null });
