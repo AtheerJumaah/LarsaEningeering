@@ -14,8 +14,8 @@
  * and not on open, which would spend a code on someone who only came to look.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { Database, DownloadCloud, KeyRound, ShieldCheck, UserCog } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Database, DownloadCloud, KeyRound, Save, ShieldCheck, UserCog } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { registerBackCloser } from "./backstack";
 
@@ -223,9 +223,33 @@ async function sendStepUpCode(email: string, name?: string): Promise<boolean> {
   }
 }
 
+function VerificationInterval({ id, title, description, enabled, value, unit, disabled, onToggle, onChange }: {
+  id: string; title: string; description: string; enabled: boolean; value: number;
+  unit: string; disabled: boolean; onToggle: (enabled: boolean) => void; onChange: (value: number) => void;
+}) {
+  return (
+    <div className="ps-field ps-interval" data-enabled={enabled}>
+      <div className="ps-interval-head">
+        <label htmlFor={`${id}-interval`}>{title}</label>
+        <label className="ps-switch">
+          <input type="checkbox" role="switch" aria-label={`${title} on or off`} checked={enabled} disabled={disabled} onChange={(event) => onToggle(event.target.checked)} />
+          <span className="ps-switch-track" aria-hidden="true" />
+          <span>{enabled ? "On" : "Off"}</span>
+        </label>
+      </div>
+      <div className="ps-inline">
+        <input id={`${id}-interval`} type="number" min={1} max={8760} disabled={disabled || !enabled} value={value} aria-describedby={`${id}-hint`} onChange={(event) => onChange(Math.max(1, Math.min(8760, Number(event.target.value) || 1)))} />
+        <small>{unit}</small>
+      </div>
+      <small id={`${id}-hint`} className="ps-note">{description}</small>
+    </div>
+  );
+}
+
 export function PlatformSettings({ viewer, users }: { viewer: Person | null; users: Person[] }) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
+  const intervalValues = useRef({ engineer: 72, privileged: 24 });
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [exemptions, setExemptions] = useState<ExemptionRow[]>([]);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
@@ -263,6 +287,9 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     if (p && p.ok) {
       setPolicy(p.policy as Policy);
       setDraft(p.policy as Policy);
+      const next = p.policy as Policy;
+      if (next.engineer_hours !== null) intervalValues.current.engineer = next.engineer_hours;
+      if (next.privileged_hours !== null) intervalValues.current.privileged = next.privileged_hours;
     }
     /* These three are admin-only on the server now, so they carry the actor.
        The policy read above stays open — sign-in needs it before anyone has
@@ -419,11 +446,51 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     return <div className="platform-settings"><p className="org-none">Loading platform settings...</p></div>;
   }
 
+  const intervalUnit = draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours";
   const dirty = JSON.stringify(policy) !== JSON.stringify(draft);
   const backupDirty = Boolean(backupCfg && backupDraft && JSON.stringify(backupCfg) !== JSON.stringify(backupDraft));
 
   return (
     <div className="platform-settings">
+      <div className="ps-savebar" aria-label="Save sign-in and signup settings">
+        <div className="ps-savebar-main">
+          <div className="ps-save-summary">
+            <b>Sign-in &amp; signup settings</b>
+            <span className={dirty ? "ps-save-state is-dirty" : "ps-save-state"} role="status">{dirty ? "Unsaved changes" : "All changes saved"}</span>
+          </div>
+          <div className="ps-actions">
+            <button type="button" className="btn small" disabled={!dirty || busy || Boolean(pending)} onClick={() => {
+              if (policy.engineer_hours !== null) intervalValues.current.engineer = policy.engineer_hours;
+              if (policy.privileged_hours !== null) intervalValues.current.privileged = policy.privileged_hours;
+              setDraft(policy);
+              setMessage("");
+            }}>Discard</button>
+            <button type="button" className="org-add" disabled={!dirty || busy || Boolean(pending)} onClick={() => begin({ kind: "save" })}><Save size={15} /> {busy ? "Please wait…" : "Save changes"}</button>
+          </div>
+        </div>
+      {message ? <p className="org-note">{message}</p> : null}
+
+      {pending ? (
+        <div className="ps-confirm" role="group" aria-label="Confirm settings change">
+          <input
+            aria-label="Confirmation code"
+            className="ps-input"
+            type="text"
+            inputMode="numeric"
+            maxLength={8}
+            placeholder="6-digit code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            autoFocus
+          />
+          <button type="button" className="org-add" disabled={busy || !code.trim()} onClick={confirm}>Confirm</button>
+          <button type="button" className="btn small" disabled={busy} onClick={() => { setPending(null); setCode(""); setMessage(""); }}>Cancel</button>
+        </div>
+      ) : null}
+
+      </div>
+
+      <fieldset className="ps-policy-fields" disabled={busy || Boolean(pending)}>
       <section className="org-card">
         <span className="org-eyebrow"><ShieldCheck size={14} /> Sign-in security</span>
         <h3>Periodic email verification</h3>
@@ -444,54 +511,28 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
               <option value="days">Calendar days</option>
               <option value="business_days">Business days (Sun–Thu)</option>
             </select>
-            <small>The numbers below are read in this unit. Business days follow the Iraqi working week; Friday and Saturday never count.</small>
+            <small>Email intervals use this unit. Business days follow Sun–Thu. PIN re-verification always uses hours.</small>
           </span>
         </label>
-        <div className="ps-grid">
-          <label className="ps-field">
-            <span>Engineers</span>
-            <span className="ps-inline">
-              <input type="number" min={1} max={8760} disabled={draft.engineer_hours === null}
-                value={draft.engineer_hours ?? 72}
-                onChange={(e) => setDraft({ ...draft, engineer_hours: Number(e.target.value) || 72 })} />
-              <small>{draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours"}</small>
-              <label className="ps-mini"><input type="checkbox" checked={draft.engineer_hours === null}
-                onChange={(e) => setDraft({ ...draft, engineer_hours: e.target.checked ? null : 72 })} /> off</label>
-            </span>
-          </label>
-          <label className="ps-field">
-            <span>Accountants &amp; admins</span>
-            <span className="ps-inline">
-              <input type="number" min={1} max={8760} disabled={draft.privileged_hours === null}
-                value={draft.privileged_hours ?? 24}
-                onChange={(e) => setDraft({ ...draft, privileged_hours: Number(e.target.value) || 24 })} />
-              <small>{draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours"}</small>
-              <label className="ps-mini"><input type="checkbox" checked={draft.privileged_hours === null}
-                onChange={(e) => setDraft({ ...draft, privileged_hours: e.target.checked ? null : 24 })} /> off</label>
-            </span>
-          </label>
+        <div className="ps-grid ps-verification-grid">
+          <VerificationInterval id="engineer" title="Engineers" description="Email verification for employee sign-ins."
+            enabled={draft.engineer_hours !== null} value={draft.engineer_hours ?? intervalValues.current.engineer} unit={intervalUnit}
+            disabled={!draft.enabled} onToggle={(enabled) => setDraft({ ...draft, engineer_hours: enabled ? intervalValues.current.engineer : null })}
+            onChange={(value) => { intervalValues.current.engineer = value; setDraft({ ...draft, engineer_hours: value }); }} />
+          <VerificationInterval id="privileged" title="Accountants & admins" description="Email verification for privileged sign-ins."
+            enabled={draft.privileged_hours !== null} value={draft.privileged_hours ?? intervalValues.current.privileged} unit={intervalUnit}
+            disabled={!draft.enabled} onToggle={(enabled) => setDraft({ ...draft, privileged_hours: enabled ? intervalValues.current.privileged : null })}
+            onChange={(value) => { intervalValues.current.privileged = value; setDraft({ ...draft, privileged_hours: value }); }} />
+          <VerificationInterval id="pin" title="PIN re-verification" description="PIN sign-in asks for an email code. 168 hours = weekly."
+            enabled={draft.pin_verification_required !== false} value={draft.pin_hours || 168} unit="hours"
+            disabled={!draft.enabled} onToggle={(enabled) => setDraft({ ...draft, pin_verification_required: enabled })}
+            onChange={(value) => setDraft({ ...draft, pin_hours: value })} />
         </div>
 
         <label className="ps-row">
           <input type="checkbox" checked={draft.force_relogin} onChange={(e) => setDraft({ ...draft, force_relogin: e.target.checked })} />
           <span><b>Sign out when the interval expires</b><small>Off keeps the session alive; the next sign-in still has to verify.</small></span>
         </label>
-
-        <label className="ps-row">
-          <input type="checkbox" checked={draft.pin_verification_required !== false} onChange={(e) => setDraft({ ...draft, pin_verification_required: e.target.checked })} />
-          <span><b>PIN sign-in asks for an email code</b><small>On the first PIN sign-in, then again every interval below — off means a PIN alone always signs in.</small></span>
-        </label>
-        <div className="ps-grid">
-          <label className="ps-field">
-            <span>PIN re-verification</span>
-            <span className="ps-inline">
-              <input type="number" min={1} max={8760} disabled={draft.pin_verification_required === false}
-                value={draft.pin_hours || 168}
-                onChange={(e) => setDraft({ ...draft, pin_hours: Number(e.target.value) || 168 })} />
-              <small>hours (168 = weekly)</small>
-            </span>
-          </label>
-        </div>
 
         <p className="ps-note">Engineers default to 72 hours; accountants and admins to 24; PIN sign-ins to 168 (weekly). Changing anything here asks you for an email code first.</p>
       </section>
@@ -514,12 +555,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
         </label>
       </section>
 
-      {dirty ? (
-        <div className="ps-actions">
-          <button type="button" className="org-add" disabled={busy} onClick={() => begin({ kind: "save" })}>Save changes</button>
-          <button type="button" className="btn small" disabled={busy} onClick={() => { setDraft(policy); setMessage(""); }}>Discard</button>
-        </div>
-      ) : null}
+      </fieldset>
 
       <section className="org-card">
         <span className="org-eyebrow"><KeyRound size={14} /> Exemptions</span>
@@ -615,7 +651,8 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
               </div>
             </div>
             <div className="ps-actions">
-              {backupDirty ? <button type="button" className="org-add" disabled={backupBusy} onClick={saveBackupSettings}>Save backup settings</button> : null}
+              <button type="button" className="org-add" disabled={!backupDirty || backupBusy} onClick={saveBackupSettings}><Save size={15} /> Save backup settings</button>
+              <span className="ps-note" role="status">{backupDirty ? "Unsaved backup changes" : "Backup settings saved"}</span>
               <button type="button" className="btn small" disabled={backupBusy} onClick={runManualBackup}>Back up now</button>
             </div>
             <p className="ps-note">Backups capture the whole platform — staff, accounting, payroll, projects and settings. Password and PIN hashes are removed from any downloaded copy.</p>
@@ -665,25 +702,6 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           </ul>
         )}
       </section>
-
-      {message ? <p className="org-note">{message}</p> : null}
-
-      {pending ? (
-        <div className="ps-confirm">
-          <input
-            className="ps-input"
-            type="text"
-            inputMode="numeric"
-            maxLength={8}
-            placeholder="6-digit code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            autoFocus
-          />
-          <button type="button" className="org-add" disabled={busy || !code.trim()} onClick={confirm}>Confirm</button>
-          <button type="button" className="btn small" disabled={busy} onClick={() => { setPending(null); setCode(""); setMessage(""); }}>Cancel</button>
-        </div>
-      ) : null}
 
       {pitRow ? (
         <PointInTimeModal

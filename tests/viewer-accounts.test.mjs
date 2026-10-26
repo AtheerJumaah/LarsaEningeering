@@ -111,7 +111,7 @@ test("PIN sign-in proves its inbox like email sign-in: first time, then per the 
   // The knob and the switch, managed in Platform Settings like the email ones.
   assert.match(verification, /pin_verification_required: true, pin_hours: 168/);
   assert.match(platform, /PIN sign-in asks for an email code/);
-  assert.match(platform, /pin_hours: Number\(e\.target\.value\) \|\| 168/);
+  assert.match(platform, /onChange=\{\(value\) => setDraft\(\{ \.\.\.draft, pin_hours: value \}\)\}/);
   // Enforced end to end: the policy row stores it and the function serves it.
   assert.match(migration, /add column if not exists pin_verification_required boolean not null default true/);
   assert.match(policyFn, /pin_verification_required, pin_hours, interval_unit"\)/);
