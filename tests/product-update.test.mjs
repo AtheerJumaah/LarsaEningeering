@@ -33,7 +33,7 @@ test("management and history expose scoped, separate time and performance report
   ]);
   assert.match(page, /function EngineeringManagementPortal/);
   assert.match(page, /staffIdsVisibleTo\(org, viewer, users\)/);
-  assert.match(page, /"structure" \| "time" \| "performance"/);
+  assert.match(page, /"structure" \| "structure2" \| "time" \| "performance"/);
   assert.match(page, />Today<\/button>.*>7 days<\/button>.*>30 days<\/button>.*>6 months<\/button>.*>Year<\/button>/s);
   assert.match(org, /directReportsOf\(users, user, org\)/);
   /* The structure page was rewritten as cards; the old inline-create field

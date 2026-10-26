@@ -5,7 +5,7 @@
  *      departments and a report that counts them as three. It reads from the
  *      Engineering Management structure now.
  *
- *   2. Engineering Management is one screen with four sections behind tabs, and
+ *   2. Engineering Management is one screen with its sections behind tabs, and
  *      only the screen itself was in the sidebar — so from the outside it
  *      looked like a single page and the other three were invisible until you
  *      were already inside. Each section is listed.
@@ -45,18 +45,19 @@ test("and an empty chart says where to go rather than offering nothing", () => {
   assert.match(page, /<option value="">No department selected<\/option>/);
 });
 
-// ------------------------------------------- the four engineering sections
-test("all four Engineering Management sections are in the sidebar", () => {
+// ------------------------------------------- the engineering sections
+test("all Engineering Management sections are in the sidebar", () => {
   for (const [id, label] of [
     ["org-structure", "Engineering Dashboard"],
     ["org-chart", "Structure"],
+    ["org-chart-2", "Structure 2"],
     ["org-team-time", "Team Timesheets"],
     ["org-team-points", "Team Performance"],
   ]) {
     assert.match(page, new RegExp(`\\{ id: "${id}", label: "${label}"`), `${label} is missing`);
   }
-  // All four are the same screen; only the tab differs.
-  assert.match(page, /const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = \{\s*\n\s*"org-structure": "dashboard",\s*\n\s*"org-chart": "structure",\s*\n\s*"org-team-time": "time",\s*\n\s*"org-team-points": "performance",/);
+  // All entries are the same screen; only the tab differs.
+  assert.match(page, /const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = \{\s*\n\s*"org-structure": "dashboard",\s*\n\s*"org-chart": "structure",\s*\n\s*"org-chart-2": "structure2",\s*\n\s*"org-team-time": "time",\s*\n\s*"org-team-points": "performance",/);
 });
 
 test("org-structure keeps its id, and so keeps everything pointing at it", () => {
@@ -92,5 +93,6 @@ test("the tab is derived, not synchronised", () => {
 test("the tabs themselves still work on their own", () => {
   // The sidebar decides where you arrive, not where you may go next.
   assert.match(page, /onClick=\{\(\) => setTab\("structure"\)\}/);
+  assert.match(page, /onClick=\{\(\) => setTab\("structure2"\)\}/);
   assert.match(page, /onClick=\{\(\) => setTab\("dashboard"\)\}/);
 });
