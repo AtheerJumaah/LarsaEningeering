@@ -6,6 +6,8 @@
 
 import { useMemo, useState } from "react";
 import {
+  ChevronDown,
+  Crown,
   GripVertical,
   LayoutGrid,
   Network,
@@ -29,10 +31,38 @@ import {
   teamsVisibleTo,
   writeOrg,
 } from "../lib/org";
-import type { Department, OrgChart, OrgUser, Team } from "../lib/org";
+import type { Department, ExecutivePosition, OrgChart, OrgUser, Team } from "../lib/org";
 
 type Structure2View = "chart" | "matrix";
-type DropKind = "head" | "lead" | "member";
+type DropKind = "executive" | "head" | "lead" | "member";
+type PeopleSort = "asc" | "desc";
+
+const NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+const EXECUTIVE_TITLES = [
+  { title: "Chief Executive Officer (CEO)", pattern: /\b(ceo|chief executive officer)\b/i },
+  { title: "President", pattern: /^(?:(?!vice president).)*\bpresident\b/i },
+  { title: "Chief Operating Officer (COO)", pattern: /\b(coo|chief operating officer)\b/i },
+  { title: "Chief Financial Officer (CFO)", pattern: /\b(cfo|chief financial officer)\b/i },
+  { title: "Chief Technology Officer (CTO)", pattern: /\b(cto|chief technology officer)\b/i },
+  { title: "Chief Information Officer (CIO)", pattern: /\b(cio|chief information officer)\b/i },
+  { title: "Chief Human Resources Officer (CHRO)", pattern: /\b(chro|chief human resources officer)\b/i },
+  { title: "Chief People Officer", pattern: /\bchief people officer\b/i },
+  { title: "Chief Product Officer", pattern: /\bchief product officer\b/i },
+  { title: "Chief Marketing Officer (CMO)", pattern: /\b(cmo|chief marketing officer)\b/i },
+  { title: "Chief Legal Officer (CLO)", pattern: /\b(clo|chief legal officer)\b/i },
+  { title: "Chief Strategy Officer (CSO)", pattern: /\b(cso|chief strategy officer)\b/i },
+  { title: "Managing Director", pattern: /\bmanaging director\b/i },
+  { title: "Executive Vice President (EVP)", pattern: /\b(evp|executive vice president)\b/i },
+  { title: "Senior Vice President (SVP)", pattern: /\b(svp|senior vice president)\b/i },
+  { title: "Vice President (VP)", pattern: /\b(vp|vice president)\b/i },
+] as const;
+
+function inferredExecutivePositions(users: OrgUser[]): ExecutivePosition[] {
+  return EXECUTIVE_TITLES.flatMap(({ title, pattern }, index) => {
+    const personIds = users.filter((person) => pattern.test(String(person.role || ""))).map((person) => person.id);
+    return personIds.length ? [{ id: `executive_inferred_${index}`, title, personIds }] : [];
+  });
+}
 
 function initials(name: string): string {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -62,7 +92,7 @@ function PersonToken({ person, removable, onOpen, onRemove }: {
 }
 
 function DropZone({ kind, targetId, label, people, editable, activeTarget, draggedPersonId, onTarget, onAccept, onRemove, onOpen }: {
-  kind: "head" | "lead" | "member";
+  kind: DropKind;
   targetId: string;
   label: string;
   people: OrgUser[];
@@ -70,7 +100,7 @@ function DropZone({ kind, targetId, label, people, editable, activeTarget, dragg
   activeTarget: string;
   draggedPersonId: string;
   onTarget: (target: string) => void;
-  onAccept: (kind: "head" | "lead" | "member", targetId: string, personId: string) => void;
+  onAccept: (kind: DropKind, targetId: string, personId: string) => void;
   onRemove: (personId: string) => void;
   onOpen: (personId: string) => void;
 }) {
@@ -106,6 +136,8 @@ export function OrgStructure2({
   const [draft, setDraft] = useState<OrgChart | null>(null);
   const [view, setView] = useState<Structure2View>("chart");
   const [search, setSearch] = useState("");
+  const [peopleSort, setPeopleSort] = useState<PeopleSort>("asc");
+  const [peopleOpen, setPeopleOpen] = useState(true);
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [dragPersonId, setDragPersonId] = useState("");
   const [dragTeamId, setDragTeamId] = useState("");
@@ -124,10 +156,19 @@ export function OrgStructure2({
     (department) => isOrgAdmin(viewer) || visibleTeams.some((team) => team.departmentId === department.id),
   );
   const selectedPerson = byId.get(selectedPersonId) || null;
-  const filteredPeople = active.filter((person) => {
+  const executivePositions = useMemo(
+    () => chart.executivePositions || inferredExecutivePositions(active),
+    [active, chart.executivePositions],
+  );
+  const sortedActive = useMemo(() => [...active].sort((left, right) => {
+    const compared = NAME_COLLATOR.compare(String(left.name || ""), String(right.name || ""));
+    return peopleSort === "asc" ? compared : -compared;
+  }), [active, peopleSort]);
+  const filteredPeople = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return !needle || [person.name, person.role, person.department].some((value) => String(value || "").toLowerCase().includes(needle));
-  });
+    return sortedActive.filter((person) => !needle || [person.name, person.role, person.department]
+      .some((value) => String(value || "").toLowerCase().includes(needle)));
+  }, [search, sortedActive]);
 
   function nameOf(id: string): string {
     return String(byId.get(id)?.name || "").trim();
@@ -159,8 +200,11 @@ export function OrgStructure2({
     return manager && manager.id !== personId ? [manager.id] : [];
   }
 
-  function rolesFor(personId: string): { label: string; tone: "head" | "lead" | "member" }[] {
-    const roles: { label: string; tone: "head" | "lead" | "member" }[] = [];
+  function rolesFor(personId: string): { label: string; tone: "executive" | "head" | "lead" | "member" }[] {
+    const roles: { label: string; tone: "executive" | "head" | "lead" | "member" }[] = [];
+    executivePositions.forEach((position) => {
+      if ((position.personIds || []).includes(personId)) roles.push({ label: position.title, tone: "executive" });
+    });
     chart.departments.forEach((department) => {
       if ((department.headIds || []).includes(personId)) roles.push({ label: `Head · ${department.name}`, tone: "head" });
     });
@@ -215,6 +259,20 @@ export function OrgStructure2({
     stage({ ...chart, teams: chart.teams.map((team) => team.id === teamId ? update(team) : team) }, message);
   }
 
+  function editExecutivePositions(next: ExecutivePosition[], message: string) {
+    stage({ ...chart, executivePositions: next }, message);
+  }
+
+  function toggleExecutive(position: ExecutivePosition, personId: string, checked: boolean) {
+    const personIds = checked
+      ? unique([...(position.personIds || []), personId])
+      : (position.personIds || []).filter((id) => id !== personId);
+    editExecutivePositions(
+      executivePositions.map((row) => row.id === position.id ? { ...row, personIds } : row),
+      checked ? "Executive position assigned." : "Executive position removed.",
+    );
+  }
+
   function toggleHead(department: Department, personId: string, checked: boolean) {
     const ids = checked ? unique([...(department.headIds || []), personId]) : (department.headIds || []).filter((id) => id !== personId);
     editDepartment(department.id, (row) => ({ ...row, headIds: ids }), checked ? "Department-head role added." : "Department-head role removed.");
@@ -232,7 +290,10 @@ export function OrgStructure2({
 
   function acceptPerson(kind: DropKind, targetId: string, personId: string) {
     if (!personId) return;
-    if (kind === "head") {
+    if (kind === "executive") {
+      const position = executivePositions.find((row) => row.id === targetId);
+      if (position && isOrgAdmin(viewer)) toggleExecutive(position, personId, true);
+    } else if (kind === "head") {
       const department = chart.departments.find((row) => row.id === targetId);
       if (department && canEditDepartment(chart, viewer, department.id, users)) toggleHead(department, personId, true);
     } else {
@@ -245,7 +306,12 @@ export function OrgStructure2({
     setDropTarget("");
   }
 
-  function removePersonRole(kind: "head" | "lead" | "member", targetId: string, personId: string) {
+  function removePersonRole(kind: DropKind, targetId: string, personId: string) {
+    if (kind === "executive") {
+      const position = executivePositions.find((row) => row.id === targetId);
+      if (position) toggleExecutive(position, personId, false);
+      return;
+    }
     if (kind === "head") {
       const department = chart.departments.find((row) => row.id === targetId);
       if (department) toggleHead(department, personId, false);
@@ -269,6 +335,30 @@ export function OrgStructure2({
     const name = String(value || "").trim();
     if (!name) return;
     stage({ ...chart, departments: [...chart.departments, { id: newId("dep"), name, headIds: [] }] }, "Department created.");
+  }
+
+  async function addExecutivePosition() {
+    const value = await dialog.prompt({ title: "New executive position", message: "Add any company-level leadership position needed in the Organization Chart.", placeholder: "CEO, President, COO, VP…", confirmLabel: "Add position" });
+    const title = String(value || "").trim();
+    if (!title) return;
+    editExecutivePositions([...executivePositions, { id: newId("executive"), title, personIds: [] }], "Executive position created.");
+  }
+
+  async function renameExecutivePosition(position: ExecutivePosition) {
+    const value = await dialog.prompt({ title: "Rename executive position", message: "Choose the leadership title shown in the Organization Chart.", defaultValue: position.title, placeholder: "Executive position", confirmLabel: "Apply title" });
+    const title = String(value || "").trim();
+    if (title && title !== position.title) {
+      editExecutivePositions(executivePositions.map((row) => row.id === position.id ? { ...row, title } : row), "Executive position renamed.");
+    }
+  }
+
+  async function removeExecutivePosition(position: ExecutivePosition) {
+    if (!(await dialog.confirm(`Remove ${position.title}? People keep their department and team assignments.`))) return;
+    stage({
+      ...chart,
+      executivePositions: executivePositions.filter((row) => row.id !== position.id),
+      removedExecutivePositionIds: unique([...(chart.removedExecutivePositionIds || []), position.id]),
+    }, "Executive position removed.");
   }
 
   async function addTeam(departmentId: string) {
@@ -326,11 +416,31 @@ export function OrgStructure2({
       {note ? <p className="s2-note">{note}</p> : null}
 
       {view === "chart" ? (
-        <div className="s2-workspace">
+        <>
+          <section className="s2-executive-board">
+            <header>
+              <div><span className="eyebrow"><Crown size={13} /> Company leadership</span><h4>Executive positions</h4><p>Place CEO, President, COO, VP, or any custom leadership position above the department structure.</p></div>
+              {isOrgAdmin(viewer) ? <button type="button" className="org-add" onClick={addExecutivePosition}><Plus size={14} /> Executive position</button> : null}
+            </header>
+            <div className="s2-executive-grid">
+              {executivePositions.map((position) => (
+                <article className="s2-executive-position" key={position.id}>
+                  <header><div><small>Executive position</small><b>{position.title}</b></div>{isOrgAdmin(viewer) ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${position.title}`} onClick={() => renameExecutivePosition(position)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${position.title}`} onClick={() => removeExecutivePosition(position)}><X size={13} /></button></span> : null}</header>
+                  <DropZone kind="executive" targetId={position.id} label="Position holder" people={peopleFor(position.personIds || [])} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("executive", position.id, personId)} onOpen={setSelectedPersonId} />
+                </article>
+              ))}
+              {!executivePositions.length ? <div className="s2-executive-empty"><Crown size={22} /><span><b>No executive positions yet</b><small>Add only the company-level positions your organization needs.</small></span>{isOrgAdmin(viewer) ? <button type="button" onClick={addExecutivePosition}><Plus size={14} /> Add position</button> : null}</div> : null}
+            </div>
+          </section>
+
+          <div className="s2-workspace">
           <aside className="s2-people-palette">
-            <header><div><span className="eyebrow">People</span><h4>Drag to assign</h4></div><span>{filteredPeople.length}</span></header>
-            <label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label>
-            <div className="s2-palette-list">
+            <header><div><span className="eyebrow">People</span><h4>People directory</h4><p>Drag a name to assign it</p></div><span>{active.length}</span></header>
+            <button type="button" className="s2-directory-toggle" aria-expanded={peopleOpen} onClick={() => setPeopleOpen((open) => !open)}><span>{peopleOpen ? "Hide names" : `Show all ${active.length} names`}</span><ChevronDown size={15} /></button>
+            {peopleOpen ? <>
+              <label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label>
+              <div className="s2-palette-tools"><label><span>Sort</span><select aria-label="Sort people by first name" value={peopleSort} onChange={(event) => setPeopleSort(event.target.value as PeopleSort)}><option value="asc">First name A–Z</option><option value="desc">First name Z–A</option></select></label><small>{filteredPeople.length} shown</small></div>
+              <div className="s2-palette-list" aria-label={`People sorted ${peopleSort === "asc" ? "A to Z" : "Z to A"}`}>
               {filteredPeople.map((person) => {
                 const roles = rolesFor(person.id);
                 return (
@@ -350,7 +460,9 @@ export function OrgStructure2({
                   </button>
                 );
               })}
-            </div>
+              {!filteredPeople.length ? <p className="s2-palette-empty">No names match this search.</p> : null}
+              </div>
+            </> : <p className="s2-palette-collapsed">The directory is collapsed. Open it to search, sort, or drag a person.</p>}
           </aside>
 
           <div className="s2-canvas">
@@ -389,20 +501,23 @@ export function OrgStructure2({
             })}
             {!departments.length ? <div className="s2-blank"><Network size={28} /><h4>No departments yet</h4><p>Create a department, then drag people into its teams.</p></div> : null}
           </div>
-        </div>
+          </div>
+        </>
       ) : (
         <section className="s2-matrix-card">
-          <header><div><span className="eyebrow">Assignment matrix</span><h4>One person, every role</h4><p>Membership and leadership remain separate, so one employee can hold several positions.</p></div><label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label></header>
+          <header><div><span className="eyebrow">Assignment matrix</span><h4>One person, every role</h4><p>Executive, department, team, and reporting assignments remain separate, so one employee can hold several positions.</p></div><div className="s2-matrix-filters"><label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label><select aria-label="Sort people by first name" value={peopleSort} onChange={(event) => setPeopleSort(event.target.value as PeopleSort)}><option value="asc">First name A–Z</option><option value="desc">First name Z–A</option></select></div></header>
           <div className="s2-matrix-wrap">
             <table className="s2-matrix">
-              <thead><tr><th>Employee</th><th>Department head</th><th>Team lead</th><th>Team member</th><th>Reports to</th><th /></tr></thead>
+              <thead><tr><th>Employee</th><th>Executive position</th><th>Department head</th><th>Team lead</th><th>Team member</th><th>Reports to</th><th /></tr></thead>
               <tbody>{filteredPeople.map((person) => {
+                const executive = executivePositions.filter((row) => (row.personIds || []).includes(person.id));
                 const head = chart.departments.filter((row) => (row.headIds || []).includes(person.id));
                 const leads = chart.teams.filter((row) => (row.leadIds || []).includes(person.id));
                 const member = chart.teams.filter((row) => (row.memberIds || []).includes(person.id));
                 const managers = reportingFor(person.id);
                 return <tr key={person.id}>
                   <td><span className="s2-matrix-person"><i>{initials(String(person.name || ""))}</i><span><b>{person.name}</b><small>{person.role || "Employee"}</small></span></span></td>
+                  <td>{executive.length ? executive.map((row) => <span className="s2-matrix-pill executive" key={row.id}>{row.title}</span>) : <span className="s2-empty">—</span>}</td>
                   <td>{head.length ? head.map((row) => <span className="s2-matrix-pill head" key={row.id}>{row.name}</span>) : <span className="s2-empty">—</span>}</td>
                   <td>{leads.length ? leads.map((row) => <span className="s2-matrix-pill lead" key={row.id}>{row.name}</span>) : <span className="s2-empty">—</span>}</td>
                   <td>{member.length ? member.map((row) => <span className="s2-matrix-pill" key={row.id}>{row.name}</span>) : <span className="s2-empty">—</span>}</td>
@@ -420,7 +535,8 @@ export function OrgStructure2({
           <aside className="s2-inspector" role="dialog" aria-modal="true" aria-label={`Assignments for ${selectedPerson.name}`}>
             <header><span className="s2-avatar large">{initials(String(selectedPerson.name || ""))}</span><div><span className="eyebrow">Assignments & reporting</span><h3>{selectedPerson.name}</h3><p>{selectedPerson.role || "Employee"}</p></div><button type="button" aria-label="Close assignments" onClick={() => setSelectedPersonId("")}><X size={18} /></button></header>
             <section><h4>Current roles</h4><div className="s2-role-list">{rolesFor(selectedPerson.id).map((role) => <span className={`s2-role ${role.tone}`} key={`${role.tone}:${role.label}`}>{role.label}</span>)}{!rolesFor(selectedPerson.id).length ? <span className="s2-empty">No structural role yet</span> : null}</div></section>
-            <section><h4>Additional reporting lines</h4><p className="s2-section-note">Independent from team membership. This supports an executive who also reports technically inside another department.</p><div className="s2-manager-list">{reportingFor(selectedPerson.id).map((id) => <span className="s2-manager" key={id}>{nameOf(id)}{isOrgAdmin(viewer) ? <button type="button" aria-label={`Remove manager ${nameOf(id)}`} onClick={() => setReporting(selectedPerson.id, reportingFor(selectedPerson.id).filter((row) => row !== id))}><X size={12} /></button> : null}</span>)}</div>{isOrgAdmin(viewer) ? <select value={managerChoice} onChange={(event) => { const id = event.target.value; setManagerChoice(""); if (id) setReporting(selectedPerson.id, [...reportingFor(selectedPerson.id), id]); }}><option value="">Add another manager…</option>{active.filter((row) => row.id !== selectedPerson.id && !reportingFor(selectedPerson.id).includes(row.id)).map((row) => <option value={row.id} key={row.id}>{row.name}</option>)}</select> : null}</section>
+            <section><h4>Executive leadership</h4><p className="s2-section-note">Company-level positions stay separate from technical department and team assignments.</p><div className="s2-check-list">{executivePositions.map((position) => <label key={position.id}><input type="checkbox" checked={(position.personIds || []).includes(selectedPerson.id)} disabled={!isOrgAdmin(viewer)} onChange={(event) => toggleExecutive(position, selectedPerson.id, event.target.checked)} /><span><b>{position.title}</b><small>Executive position</small></span></label>)}</div>{!executivePositions.length ? <span className="s2-empty">No executive positions have been created.</span> : null}</section>
+            <section><h4>Additional reporting lines</h4><p className="s2-section-note">Independent from team membership. This supports an executive who also reports technically inside another department.</p><div className="s2-manager-list">{reportingFor(selectedPerson.id).map((id) => <span className="s2-manager" key={id}>{nameOf(id)}{isOrgAdmin(viewer) ? <button type="button" aria-label={`Remove manager ${nameOf(id)}`} onClick={() => setReporting(selectedPerson.id, reportingFor(selectedPerson.id).filter((row) => row !== id))}><X size={12} /></button> : null}</span>)}</div>{isOrgAdmin(viewer) ? <select value={managerChoice} onChange={(event) => { const id = event.target.value; setManagerChoice(""); if (id) setReporting(selectedPerson.id, [...reportingFor(selectedPerson.id), id]); }}><option value="">Add another manager…</option>{sortedActive.filter((row) => row.id !== selectedPerson.id && !reportingFor(selectedPerson.id).includes(row.id)).map((row) => <option value={row.id} key={row.id}>{row.name}</option>)}</select> : null}</section>
             <section><h4>Department leadership</h4><div className="s2-check-list">{departments.map((department) => { const editable = isOrgAdmin(viewer); return <label key={department.id}><input type="checkbox" checked={(department.headIds || []).includes(selectedPerson.id)} disabled={!editable} onChange={(event) => toggleHead(department, selectedPerson.id, event.target.checked)} /><span><b>{department.name}</b><small>Department head</small></span></label>; })}</div></section>
             <section><h4>Team assignments</h4><div className="s2-team-assignments">{visibleTeams.map((team) => { const editable = canEditDepartment(chart, viewer, team.departmentId, users); const department = chart.departments.find((row) => row.id === team.departmentId); return <div key={team.id}><span><b>{team.name}</b><small>{department?.name || "Department"}</small></span><label><input type="checkbox" checked={(team.memberIds || []).includes(selectedPerson.id)} disabled={!editable} onChange={(event) => toggleTeamRole(team, "memberIds", selectedPerson.id, event.target.checked)} /> Member</label><label><input type="checkbox" checked={(team.leadIds || []).includes(selectedPerson.id)} disabled={!editable} onChange={(event) => toggleTeamRole(team, "leadIds", selectedPerson.id, event.target.checked)} /> Lead</label></div>; })}</div></section>
           </aside>

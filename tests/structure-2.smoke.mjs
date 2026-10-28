@@ -81,7 +81,32 @@ try {
   assert.equal(await panel.getByText("Casey Operations", { exact: true }).first().isVisible(), true);
   assert.equal(await panel.getByText("Architecture A", { exact: true }).first().isVisible(), true);
 
+  const directory = panel.locator(".s2-people-palette");
+  const people = directory.locator(".s2-palette-person");
+  assert.match(await people.first().innerText(), /Admin Owner/, "people must initially sort by first name A–Z");
+  await directory.getByLabel("Sort people by first name").selectOption("desc");
+  assert.match(await people.first().innerText(), /Erin Engineer/, "people must optionally sort by first name Z–A");
+  await directory.getByRole("button", { name: "Hide names", exact: true }).click();
+  assert.equal(await people.count(), 0, "the names drawer must collapse");
+  await directory.getByRole("button", { name: "Show all 4 names", exact: true }).click();
+  await directory.getByLabel("Sort people by first name").selectOption("asc");
+
+  const cooPosition = panel.locator(".s2-executive-position").filter({ hasText: "Chief Operating Officer (COO)" });
+  assert.equal(await cooPosition.getByText("Casey Operations", { exact: true }).isVisible(), true, "existing executive titles must be recognized");
+
   const engineerCard = panel.locator(".s2-palette-person").filter({ hasText: "Erin Engineer" });
+  const executiveZone = cooPosition.locator(".s2-dropzone");
+  const executiveDragData = await page.evaluateHandle(() => new DataTransfer());
+  await engineerCard.dispatchEvent("dragstart", { dataTransfer: executiveDragData });
+  await executiveZone.dispatchEvent("dragenter", { dataTransfer: executiveDragData });
+  await executiveZone.dispatchEvent("dragover", { dataTransfer: executiveDragData });
+  await executiveZone.dispatchEvent("drop", { dataTransfer: executiveDragData });
+  await engineerCard.dispatchEvent("dragend", { dataTransfer: executiveDragData });
+  await executiveZone.getByText("Erin Engineer", { exact: true }).waitFor();
+  await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+  await panel.getByText("Organization changes saved to the company server.", { exact: true }).waitFor();
+  assert.ok(staff.org.executivePositions.find((position) => position.title.includes("COO")).personIds.includes(engineer.id), "executive assignment must save");
+
   const architectureTeam = panel.locator(".s2-team").filter({ hasText: "Architecture A" });
   const leadZone = architectureTeam.locator(".s2-dropzone").filter({ hasText: "Team lead" });
   const dragData = await page.evaluateHandle(() => new DataTransfer());
@@ -98,6 +123,7 @@ try {
   await panel.getByRole("tab", { name: "Matrix", exact: true }).click();
   await panel.getByText("One person, every role", { exact: true }).waitFor();
   const cooRow = panel.locator(".s2-matrix tbody tr").filter({ hasText: "Casey Operations" });
+  assert.match(await cooRow.innerText(), /Chief Operating Officer \(COO\)/);
   assert.match(await cooRow.innerText(), /Operations/);
   assert.match(await cooRow.innerText(), /Architecture A/);
   assert.match(await cooRow.innerText(), /Admin Owner/);
@@ -116,6 +142,7 @@ try {
   assert.ok(writes.length > 0, "save must reach the synchronized company document");
   assert.ok(staff.org.teams.find((team) => team.id === "team-operations").leadIds.includes(coo.id), "saved overlapping lead role missing");
 
+  await panel.getByRole("tab", { name: "Organization chart", exact: true }).click();
   await page.screenshot({ path: ".organization-chart-desktop.png", fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });
   const closeNavigation = page.getByRole("button", { name: "Close navigation", exact: true });
@@ -141,7 +168,7 @@ try {
   await page.screenshot({ path: ".organization-chart-mobile.png", fullPage: false });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Organization Chart must not overflow the page on mobile");
   assert.deepEqual(errors, []);
-  console.log("PASS Organization Chart: old Structure removed, drag/discard, matrix, overlapping roles, reporting, save/sync, mobile");
+  console.log("PASS Organization Chart: people drawer/sort, executive tier, drag/discard, matrix, overlapping roles, reporting, save/sync, mobile");
 } catch (error) {
   console.error("ORGANIZATION CHART UI DIAGNOSTIC", (await page.locator("body").innerText()).slice(-3000));
   throw error;

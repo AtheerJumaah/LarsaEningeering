@@ -21,8 +21,22 @@ test("Organization Chart supports overlapping roles, drag assignment, matrix rev
   assert.match(structure2, /kind="head"/);
   assert.match(structure2, /kind="lead"/);
   assert.match(structure2, /kind="member"/);
+  assert.match(structure2, /kind="executive"/);
+  assert.match(structure2, /Executive positions/);
+  assert.match(structure2, /addExecutivePosition/);
+  assert.match(structure2, /First name A–Z/);
+  assert.match(structure2, /First name Z–A/);
+  assert.match(structure2, /aria-expanded=\{peopleOpen\}/);
   assert.match(structure2, /Assignment matrix/);
   assert.match(structure2, /Additional reporting lines/);
   assert.match(structure2, /Save changes/);
   assert.match(structure2, /disabled=\{!draft \|\| saving\}/);
+});
+
+test("Organization Chart persists executive positions without breaking older saved charts", async () => {
+  const org = await read("lib/org.ts");
+  assert.match(org, /export type ExecutivePosition/);
+  assert.match(org, /executivePositions\?: ExecutivePosition\[\]/);
+  assert.match(org, /Array\.isArray\(org\.executivePositions\)/);
+  assert.match(org, /\.\.\.\(executivePositions \? \{ executivePositions \} : \{\}\)/);
 });

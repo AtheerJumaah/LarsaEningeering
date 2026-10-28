@@ -39,10 +39,20 @@ export type Team = {
   memberIds: string[];
 };
 
+export type ExecutivePosition = {
+  id: string;
+  title: string;
+  /* A position normally has one holder, but co-leadership stays possible. */
+  personIds: string[];
+};
+
 export type OrgChart = {
   departments: Department[];
   teams: Team[];
+  /** Company leadership sits above departments and remains independently editable. */
+  executivePositions?: ExecutivePosition[];
   /** Explicit removals distinguish a real delete from a stale partial chart. */
+  removedExecutivePositionIds?: string[];
   removedDepartmentIds?: string[];
   removedTeamIds?: string[];
   /**
@@ -88,9 +98,29 @@ export function readStoredOrg(): OrgChart | null {
       Array.isArray(managers) ? managers.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [],
     ]))
     : undefined;
+  const executivePositions = Array.isArray(org.executivePositions)
+    ? org.executivePositions.flatMap((position) => {
+      if (!position || typeof position !== "object") return [];
+      const row = position as Partial<ExecutivePosition>;
+      const id = typeof row.id === "string" ? row.id.trim() : "";
+      const title = typeof row.title === "string" ? row.title.trim() : "";
+      if (!id || !title) return [];
+      return [{
+        id,
+        title,
+        personIds: Array.isArray(row.personIds)
+          ? row.personIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          : [],
+      }];
+    })
+    : undefined;
   return {
     departments: org.departments,
     teams: Array.isArray(org.teams) ? org.teams : [],
+    ...(executivePositions ? { executivePositions } : {}),
+    ...(Array.isArray(org.removedExecutivePositionIds) ? {
+      removedExecutivePositionIds: org.removedExecutivePositionIds.filter((id): id is string => typeof id === "string"),
+    } : {}),
     removedDepartmentIds: Array.isArray(org.removedDepartmentIds) ? org.removedDepartmentIds.filter((id): id is string => typeof id === "string") : [],
     removedTeamIds: Array.isArray(org.removedTeamIds) ? org.removedTeamIds.filter((id): id is string => typeof id === "string") : [],
     ...(reporting ? { reporting } : {}),

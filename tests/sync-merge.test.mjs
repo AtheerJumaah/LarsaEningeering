@@ -103,6 +103,27 @@ test("organization removals require tombstones and survive merge and direct CAS 
   assert.deepEqual(protectedWrite.org.removedDepartmentIds, ["dep-a"]);
 });
 
+test("executive positions have the same stale-device and deletion protection as teams", () => {
+  const ceo = { id: "exec-ceo", title: "CEO", personIds: ["u1"] };
+  const coo = { id: "exec-coo", title: "COO", personIds: ["u2"] };
+  const base = { org: { departments: [], teams: [], executivePositions: [ceo] } };
+  const local = { org: { departments: [], teams: [], executivePositions: [ceo] } };
+  const remote = { org: { departments: [], teams: [], executivePositions: [ceo, coo] } };
+  const merged = mergeValues(base, local, remote);
+  assert.deepEqual(merged.org.executivePositions.map((row) => row.id), ["exec-ceo", "exec-coo"]);
+
+  const removed = { org: { departments: [], teams: [], executivePositions: [coo], removedExecutivePositionIds: ["exec-ceo"] } };
+  const protectedWrite = protectOutgoing(removed, remote);
+  assert.deepEqual(protectedWrite.org.executivePositions.map((row) => row.id), ["exec-coo"]);
+  assert.deepEqual(protectedWrite.org.removedExecutivePositionIds, ["exec-ceo"]);
+});
+
+test("an older chart without an executive layer keeps title inference available", () => {
+  const chart = { org: { departments: [], teams: [] } };
+  const protectedWrite = protectOutgoing(chart, chart);
+  assert.equal(Object.prototype.hasOwnProperty.call(protectedWrite.org, "executivePositions"), false);
+});
+
 test("direct CAS protection restores a missing org object and missing nested chart arrays", () => {
   const dep = { id: "dep-a", name: "Architecture", headIds: [] };
   const team = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };

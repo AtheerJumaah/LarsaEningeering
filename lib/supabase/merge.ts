@@ -97,6 +97,7 @@ export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule", "reporting"]);
    team cannot erase it. */
 const ORG_DEPARTMENT_TOMBSTONES = "removedDepartmentIds";
 const ORG_TEAM_TOMBSTONES = "removedTeamIds";
+const ORG_EXECUTIVE_TOMBSTONES = "removedExecutivePositionIds";
 
 /* On a fresh browser load the server snapshot is normally authoritative. One
    important exception is an organization chart that was saved locally while
@@ -311,7 +312,17 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
         }
         const removedDepartments = new Set(unionIds(org[ORG_DEPARTMENT_TOMBSTONES], serverOrg[ORG_DEPARTMENT_TOMBSTONES]));
         const removedTeams = new Set(unionIds(org[ORG_TEAM_TOMBSTONES], serverOrg[ORG_TEAM_TOMBSTONES]));
-        for (const [key, removed] of [["departments", removedDepartments], ["teams", removedTeams]] as const) {
+        const removedExecutives = new Set(unionIds(org[ORG_EXECUTIVE_TOMBSTONES], serverOrg[ORG_EXECUTIVE_TOMBSTONES]));
+        const hasExecutiveLayer = Object.prototype.hasOwnProperty.call(org, "executivePositions")
+            || Object.prototype.hasOwnProperty.call(serverOrg, "executivePositions")
+            || Object.prototype.hasOwnProperty.call(org, ORG_EXECUTIVE_TOMBSTONES)
+            || Object.prototype.hasOwnProperty.call(serverOrg, ORG_EXECUTIVE_TOMBSTONES)
+            || removedExecutives.size > 0;
+        for (const [key, removed] of [["departments", removedDepartments], ["teams", removedTeams], ["executivePositions", removedExecutives]] as const) {
+            /* Older charts legitimately have no executivePositions key. Do
+               not turn that absence into an explicit empty list: the UI uses
+               absence to infer existing CEO/COO titles from staff records. */
+            if (key === "executivePositions" && !hasExecutiveLayer) continue;
             const ours = Array.isArray(org[key]) ? org[key] as Json[] : [];
             const theirs = Array.isArray(serverOrg[key]) ? serverOrg[key] as Json[] : [];
             const seen = new Set<string>();
@@ -327,6 +338,7 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
         }
         org[ORG_DEPARTMENT_TOMBSTONES] = [...removedDepartments];
         org[ORG_TEAM_TOMBSTONES] = [...removedTeams];
+        if (hasExecutiveLayer) org[ORG_EXECUTIVE_TOMBSTONES] = [...removedExecutives];
         out.org = org;
     }
 
@@ -474,13 +486,18 @@ export function mergeValues(base: Json, local: Json, remote: Json, context: Merg
             unionIds(baseOrg[ORG_TEAM_TOMBSTONES], local[ORG_TEAM_TOMBSTONES]),
             remote[ORG_TEAM_TOMBSTONES],
         ));
+        const removedExecutives = new Set(unionIds(
+            unionIds(baseOrg[ORG_EXECUTIVE_TOMBSTONES], local[ORG_EXECUTIVE_TOMBSTONES]),
+            remote[ORG_EXECUTIVE_TOMBSTONES],
+        ));
         const out: JsonObject = {};
         const keys = [...Object.keys(remote), ...Object.keys(local).filter((child) => !(child in remote))];
         keys.forEach((child) => {
             if (child === ORG_DEPARTMENT_TOMBSTONES) { out[child] = [...removedDepartments]; return; }
             if (child === ORG_TEAM_TOMBSTONES) { out[child] = [...removedTeams]; return; }
-            if (child === "departments" || child === "teams") {
-                const removed = child === "departments" ? removedDepartments : removedTeams;
+            if (child === ORG_EXECUTIVE_TOMBSTONES) { out[child] = [...removedExecutives]; return; }
+            if (child === "departments" || child === "teams" || child === "executivePositions") {
+                const removed = child === "departments" ? removedDepartments : child === "teams" ? removedTeams : removedExecutives;
                 const before = Array.isArray(baseOrg[child]) ? baseOrg[child] as JsonObject[] : [];
                 const ours = Array.isArray(local[child]) ? local[child] as JsonObject[] : [];
                 const theirs = Array.isArray(remote[child]) ? remote[child] as JsonObject[] : [];
