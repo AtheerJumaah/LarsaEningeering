@@ -4,7 +4,7 @@
  * dragged into more than one role, while the matrix and person inspector make
  * overlapping assignments explicit and keyboard/touch accessible. */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Crown,
@@ -75,6 +75,15 @@ function unique(ids: string[]): string[] {
   return [...new Set(ids.filter(Boolean))];
 }
 
+function PeopleSortControl({ value, onChange }: { value: PeopleSort; onChange: (value: PeopleSort) => void }) {
+  return (
+    <span className="s2-sort-toggle" role="group" aria-label="Sort people by first name">
+      <button type="button" aria-pressed={value === "asc"} className={value === "asc" ? "active" : ""} onClick={() => onChange("asc")}>A–Z</button>
+      <button type="button" aria-pressed={value === "desc"} className={value === "desc" ? "active" : ""} onClick={() => onChange("desc")}>Z–A</button>
+    </span>
+  );
+}
+
 function PersonToken({ person, removable, onOpen, onRemove }: {
   person: OrgUser;
   removable?: boolean;
@@ -132,6 +141,8 @@ export function OrgStructure2({
   onSaved?: () => void;
 }) {
   const dialog = useDialog();
+  const structureRef = useRef<HTMLDivElement | null>(null);
+  const dragPointerYRef = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [draft, setDraft] = useState<OrgChart | null>(null);
   const [view, setView] = useState<Structure2View>("chart");
@@ -145,6 +156,45 @@ export function OrgStructure2({
   const [managerChoice, setManagerChoice] = useState("");
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState("");
+
+  /* Native drag-and-drop does not scroll the app shell reliably. Track only
+     the transient pointer position in a ref, then move the real .native
+     scroller in animation frames while the pointer rests near an edge. No
+     React state changes happen in the loop, so a long drag stays responsive. */
+  useEffect(() => {
+    if (!dragPersonId && !dragTeamId) return;
+    const surface = structureRef.current?.closest<HTMLElement>(".native");
+    if (!surface) return;
+    let frame = 0;
+    const trackPointer = (event: DragEvent) => { dragPointerYRef.current = event.clientY; };
+    const clearPointer = () => { dragPointerYRef.current = null; };
+    const scrollAtEdge = () => {
+      const pointerY = dragPointerYRef.current;
+      if (pointerY !== null) {
+        const rect = surface.getBoundingClientRect();
+        const top = Math.max(0, rect.top);
+        const bottom = Math.min(window.innerHeight, rect.bottom);
+        const height = Math.max(1, bottom - top);
+        const edge = Math.min(150, Math.max(72, height * 0.18));
+        let speed = 0;
+        if (pointerY < top + edge) speed = -Math.ceil(4 + 22 * (top + edge - pointerY) / edge);
+        else if (pointerY > bottom - edge) speed = Math.ceil(4 + 22 * (pointerY - (bottom - edge)) / edge);
+        if (speed) surface.scrollTop += speed;
+      }
+      frame = window.requestAnimationFrame(scrollAtEdge);
+    };
+    document.addEventListener("dragover", trackPointer);
+    document.addEventListener("drop", clearPointer);
+    document.addEventListener("dragend", clearPointer);
+    frame = window.requestAnimationFrame(scrollAtEdge);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("dragover", trackPointer);
+      document.removeEventListener("drop", clearPointer);
+      document.removeEventListener("dragend", clearPointer);
+      dragPointerYRef.current = null;
+    };
+  }, [dragPersonId, dragTeamId]);
 
   const savedChart = useMemo(() => effectiveOrg(users), [users, revision]);
   const chart = draft || savedChart;
@@ -386,7 +436,9 @@ export function OrgStructure2({
   }
 
   return (
-    <div className="structure2">
+    <div ref={structureRef} className={`structure2${dragPersonId || dragTeamId ? " is-dragging" : ""}`}>
+      <div className="s2-scroll-cue top" aria-hidden="true">Move up</div>
+      <div className="s2-scroll-cue bottom" aria-hidden="true">Move down</div>
       <section className="s2-intro">
         <div>
           <span className="eyebrow"><Network size={14} /> Organization chart</span>
@@ -439,7 +491,7 @@ export function OrgStructure2({
             <button type="button" className="s2-directory-toggle" aria-expanded={peopleOpen} onClick={() => setPeopleOpen((open) => !open)}><span>{peopleOpen ? "Hide names" : `Show all ${active.length} names`}</span><ChevronDown size={15} /></button>
             {peopleOpen ? <>
               <label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label>
-              <div className="s2-palette-tools"><label><span>Sort</span><select aria-label="Sort people by first name" value={peopleSort} onChange={(event) => setPeopleSort(event.target.value as PeopleSort)}><option value="asc">First name A–Z</option><option value="desc">First name Z–A</option></select></label><small>{filteredPeople.length} shown</small></div>
+              <div className="s2-palette-tools"><span className="s2-sort-label">First name</span><PeopleSortControl value={peopleSort} onChange={setPeopleSort} /><small>{filteredPeople.length} shown</small></div>
               <div className="s2-palette-list" aria-label={`People sorted ${peopleSort === "asc" ? "A to Z" : "Z to A"}`}>
               {filteredPeople.map((person) => {
                 const roles = rolesFor(person.id);
@@ -505,7 +557,7 @@ export function OrgStructure2({
         </>
       ) : (
         <section className="s2-matrix-card">
-          <header><div><span className="eyebrow">Assignment matrix</span><h4>One person, every role</h4><p>Executive, department, team, and reporting assignments remain separate, so one employee can hold several positions.</p></div><div className="s2-matrix-filters"><label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label><select aria-label="Sort people by first name" value={peopleSort} onChange={(event) => setPeopleSort(event.target.value as PeopleSort)}><option value="asc">First name A–Z</option><option value="desc">First name Z–A</option></select></div></header>
+          <header><div><span className="eyebrow">Assignment matrix</span><h4>One person, every role</h4><p>Executive, department, team, and reporting assignments remain separate, so one employee can hold several positions.</p></div><div className="s2-matrix-filters"><label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label><PeopleSortControl value={peopleSort} onChange={setPeopleSort} /></div></header>
           <div className="s2-matrix-wrap">
             <table className="s2-matrix">
               <thead><tr><th>Employee</th><th>Executive position</th><th>Department head</th><th>Team lead</th><th>Team member</th><th>Reports to</th><th /></tr></thead>

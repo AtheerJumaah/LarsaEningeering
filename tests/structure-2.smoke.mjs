@@ -84,17 +84,31 @@ try {
   const directory = panel.locator(".s2-people-palette");
   const people = directory.locator(".s2-palette-person");
   assert.match(await people.first().innerText(), /Admin Owner/, "people must initially sort by first name A–Z");
-  await directory.getByLabel("Sort people by first name").selectOption("desc");
+  await directory.getByRole("button", { name: "Z–A", exact: true }).click();
   assert.match(await people.first().innerText(), /Erin Engineer/, "people must optionally sort by first name Z–A");
   await directory.getByRole("button", { name: "Hide names", exact: true }).click();
   assert.equal(await people.count(), 0, "the names drawer must collapse");
   await directory.getByRole("button", { name: "Show all 4 names", exact: true }).click();
-  await directory.getByLabel("Sort people by first name").selectOption("asc");
+  await directory.getByRole("button", { name: "A–Z", exact: true }).click();
 
   const cooPosition = panel.locator(".s2-executive-position").filter({ hasText: "Chief Operating Officer (COO)" });
   assert.equal(await cooPosition.getByText("Casey Operations", { exact: true }).isVisible(), true, "existing executive titles must be recognized");
 
   const engineerCard = panel.locator(".s2-palette-person").filter({ hasText: "Erin Engineer" });
+  const scrollSurface = page.locator(".native.active");
+  const scrollDragData = await page.evaluateHandle(() => new DataTransfer());
+  await scrollSurface.evaluate((node) => { node.scrollTop = 0; });
+  await engineerCard.dispatchEvent("dragstart", { dataTransfer: scrollDragData });
+  await page.evaluate(() => document.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientY: innerHeight - 2, dataTransfer: new DataTransfer() })));
+  await page.waitForTimeout(350);
+  const scrolledDown = await scrollSurface.evaluate((node) => node.scrollTop);
+  assert.ok(scrolledDown > 0, "dragging near the bottom must scroll the whole organization chart down");
+  await page.evaluate(() => document.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientY: 1, dataTransfer: new DataTransfer() })));
+  await page.waitForTimeout(350);
+  assert.ok(await scrollSurface.evaluate((node) => node.scrollTop) < scrolledDown, "dragging near the top must scroll the whole organization chart up");
+  await engineerCard.dispatchEvent("dragend", { dataTransfer: scrollDragData });
+  await scrollSurface.evaluate((node) => { node.scrollTop = 0; });
+
   const executiveZone = cooPosition.locator(".s2-dropzone");
   const executiveDragData = await page.evaluateHandle(() => new DataTransfer());
   await engineerCard.dispatchEvent("dragstart", { dataTransfer: executiveDragData });

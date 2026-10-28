@@ -24,9 +24,13 @@ test("Organization Chart supports overlapping roles, drag assignment, matrix rev
   assert.match(structure2, /kind="executive"/);
   assert.match(structure2, /Executive positions/);
   assert.match(structure2, /addExecutivePosition/);
-  assert.match(structure2, /First name A–Z/);
-  assert.match(structure2, /First name Z–A/);
+  assert.match(structure2, /function PeopleSortControl/);
+  assert.match(structure2, />A–Z<\/button>/);
+  assert.match(structure2, />Z–A<\/button>/);
   assert.match(structure2, /aria-expanded=\{peopleOpen\}/);
+  assert.match(structure2, /closest<HTMLElement>\("\.native"\)/);
+  assert.match(structure2, /requestAnimationFrame\(scrollAtEdge\)/);
+  assert.match(structure2, /surface\.scrollTop \+= speed/);
   assert.match(structure2, /Assignment matrix/);
   assert.match(structure2, /Additional reporting lines/);
   assert.match(structure2, /Save changes/);
