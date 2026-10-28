@@ -5,7 +5,7 @@
  * overlapping assignments explicit and keyboard/touch accessible. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent } from "react";
+import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   Check,
   ChevronDown,
@@ -14,6 +14,8 @@ import {
   EyeOff,
   GripVertical,
   LayoutGrid,
+  Maximize2,
+  Minus,
   Network,
   Pencil,
   Plus,
@@ -225,17 +227,22 @@ export function OrgStructure2({
 }) {
   const dialog = useDialog();
   const structureRef = useRef<HTMLDivElement | null>(null);
+  const diagramScrollRef = useRef<HTMLDivElement | null>(null);
+  const diagramPanRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [draft, setDraft] = useState<OrgChart | null>(null);
   const [view, setView] = useState<Structure2View>("chart");
   const [diagramNamesVisible, setDiagramNamesVisible] = useState(true);
+  const [diagramZoom, setDiagramZoom] = useState(1);
+  const [diagramPanning, setDiagramPanning] = useState(false);
   const [search, setSearch] = useState("");
   const [peopleSort, setPeopleSort] = useState<PeopleSort>("asc");
   const [peopleOpen, setPeopleOpen] = useState(true);
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [dragPersonId, setDragPersonId] = useState("");
   const [dragTeamId, setDragTeamId] = useState("");
+  const [dragDepartmentId, setDragDepartmentId] = useState("");
   const [diagramDragItem, setDiagramDragItem] = useState<DiagramDragItem | null>(null);
   const [diagramDropTarget, setDiagramDropTarget] = useState("");
   const [dropTarget, setDropTarget] = useState("");
@@ -248,7 +255,7 @@ export function OrgStructure2({
      scroller in animation frames while the pointer rests near an edge. No
      React state changes happen in the loop, so a long drag stays responsive. */
   useEffect(() => {
-    if (!dragPersonId && !dragTeamId && !diagramDragItem) return;
+    if (!dragPersonId && !dragTeamId && !dragDepartmentId && !diagramDragItem) return;
     const surface = structureRef.current?.closest<HTMLElement>(".native");
     if (!surface) return;
     let frame = 0;
@@ -280,7 +287,7 @@ export function OrgStructure2({
       document.removeEventListener("dragend", clearPointer);
       dragPointerYRef.current = null;
     };
-  }, [dragPersonId, dragTeamId, diagramDragItem]);
+  }, [dragDepartmentId, dragPersonId, dragTeamId, diagramDragItem]);
 
   const savedChart = useMemo(() => effectiveOrg(users), [users, revision]);
   const chart = draft || savedChart;
@@ -494,6 +501,10 @@ export function OrgStructure2({
     const target = chart.teams.find((team) => team.id === targetId);
     if (!source || !target || source.id === target.id) return;
     if (!canEditDepartment(chart, viewer, source.departmentId, users) || !canEditDepartment(chart, viewer, target.departmentId, users)) return;
+    if (source.departmentId === target.departmentId) {
+      stage({ ...chart, teams: reorderById(chart.teams, sourceId, targetId) }, "Teams reordered.");
+      return;
+    }
     const moved = { ...source, departmentId: target.departmentId };
     const next = chart.teams.filter((team) => team.id !== source.id);
     const targetIndex = next.findIndex((team) => team.id === target.id);
@@ -508,6 +519,52 @@ export function OrgStructure2({
     if (kind === "department") reorderDepartment(item.id, targetId);
     if (kind === "team") reorderTeam(item.id, targetId);
     clearDiagramDrag();
+  }
+
+  function beginDiagramPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button, .s2-diagram-node, .s2-diagram-move")) return;
+    const surface = diagramScrollRef.current;
+    if (!surface) return;
+    diagramPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: surface.scrollLeft, top: surface.scrollTop };
+    surface.setPointerCapture(event.pointerId);
+    setDiagramPanning(true);
+  }
+
+  function moveDiagramPan(event: ReactPointerEvent<HTMLDivElement>) {
+    const pan = diagramPanRef.current;
+    const surface = diagramScrollRef.current;
+    if (!pan || !surface || pan.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    surface.scrollLeft = pan.left - (event.clientX - pan.x);
+    surface.scrollTop = pan.top - (event.clientY - pan.y);
+  }
+
+  function endDiagramPan(event: ReactPointerEvent<HTMLDivElement>) {
+    const surface = diagramScrollRef.current;
+    if (diagramPanRef.current?.pointerId === event.pointerId) {
+      if (surface?.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId);
+      diagramPanRef.current = null;
+      setDiagramPanning(false);
+    }
+  }
+
+  function changeDiagramZoom(amount: number) {
+    setDiagramZoom((current) => Math.min(1.5, Math.max(.6, Math.round((current + amount) * 10) / 10)));
+  }
+
+  function resetDiagramView() {
+    setDiagramZoom(1);
+    diagramScrollRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+  }
+
+  function fitDiagramView() {
+    const surface = diagramScrollRef.current;
+    const diagram = surface?.querySelector<HTMLElement>(".s2-diagram");
+    if (!surface || !diagram) return;
+    const naturalWidth = Math.max(1, diagram.getBoundingClientRect().width / diagramZoom);
+    const fitted = Math.min(1, Math.max(.6, Math.floor(((surface.clientWidth - 28) / naturalWidth) * 10) / 10));
+    setDiagramZoom(fitted);
+    surface.scrollTo({ left: 0, top: 0, behavior: "smooth" });
   }
 
   async function addDepartment() {
@@ -566,7 +623,7 @@ export function OrgStructure2({
   }
 
   return (
-    <div ref={structureRef} className={`structure2${dragPersonId || dragTeamId ? " is-dragging" : ""}`}>
+    <div ref={structureRef} className={`structure2${dragPersonId || dragTeamId || dragDepartmentId || diagramDragItem ? " is-dragging" : ""}`}>
       <div className="s2-scroll-cue top" aria-hidden="true">Move up</div>
       <div className="s2-scroll-cue bottom" aria-hidden="true">Move down</div>
       <section className="s2-intro">
@@ -607,8 +664,13 @@ export function OrgStructure2({
             </header>
             <div className="s2-executive-grid">
               {executivePositions.map((position) => (
-                <article className="s2-executive-position" key={position.id}>
-                  <header><div><small>Executive position</small><b>{position.title}</b></div>{isOrgAdmin(viewer) ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${position.title}`} onClick={() => renameExecutivePosition(position)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${position.title}`} onClick={() => removeExecutivePosition(position)}><X size={13} /></button></span> : null}</header>
+                <article
+                  className={`s2-executive-position${diagramDropTarget === `build-executive:${position.id}` ? " is-over" : ""}`}
+                  key={position.id}
+                  onDragOver={(event) => { if (diagramDragItem?.kind === "executive" && isOrgAdmin(viewer)) { event.preventDefault(); setDiagramDropTarget(`build-executive:${position.id}`); } }}
+                  onDrop={(event) => { event.preventDefault(); acceptDiagramDrop("executive", position.id); }}
+                >
+                  <header>{isOrgAdmin(viewer) ? <span className="s2-card-drag" draggable aria-label={`Move executive position ${position.title}`} title="Drag to reorder this position" onDragStart={(event) => startDiagramDrag(event, { kind: "executive", id: position.id })} onDragEnd={clearDiagramDrag}><GripVertical size={15} /></span> : null}<div><small>Executive position</small><b>{position.title}</b></div>{isOrgAdmin(viewer) ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${position.title}`} onClick={() => renameExecutivePosition(position)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${position.title}`} onClick={() => removeExecutivePosition(position)}><X size={13} /></button></span> : null}</header>
                   <DropZone kind="executive" targetId={position.id} label="Position holder" people={peopleFor(position.personIds || [])} directoryPeople={sortedActive} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("executive", position.id, personId)} onOpen={setSelectedPersonId} />
                 </article>
               ))}
@@ -653,24 +715,49 @@ export function OrgStructure2({
               const editable = canEditDepartment(chart, viewer, department.id, users);
               const teams = departmentTeams(department.id);
               const departmentDropKey = `department:${department.id}`;
+              const departmentOrderDropKey = `build-department:${department.id}`;
               return (
                 <section
-                  className={`s2-department${dropTarget === departmentDropKey ? " is-over" : ""}`}
+                  className={`s2-department${dropTarget === departmentDropKey || dropTarget === departmentOrderDropKey ? " is-over" : ""}`}
                   key={department.id}
-                  onDragOver={(event) => { if (editable && (dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team"))) event.preventDefault(); }}
-                  onDragEnter={(event) => { if (editable && (dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team"))) { event.preventDefault(); setDropTarget(departmentDropKey); } }}
-                  onDrop={(event) => { const teamId = event.dataTransfer.getData("application/x-larsa-team") || dragTeamId; if (teamId && editable) { event.preventDefault(); moveTeam(teamId, department.id); } }}
+                  onDragOver={(event) => {
+                    const movingDepartment = dragDepartmentId || event.dataTransfer.types.includes("application/x-larsa-department");
+                    const movingTeam = dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team");
+                    if ((movingDepartment && isOrgAdmin(viewer)) || (movingTeam && editable)) event.preventDefault();
+                  }}
+                  onDragEnter={(event) => {
+                    const movingDepartment = dragDepartmentId || event.dataTransfer.types.includes("application/x-larsa-department");
+                    const movingTeam = dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team");
+                    if (movingDepartment && isOrgAdmin(viewer)) { event.preventDefault(); setDropTarget(departmentOrderDropKey); }
+                    else if (movingTeam && editable) { event.preventDefault(); setDropTarget(departmentDropKey); }
+                  }}
+                  onDrop={(event) => {
+                    const movedDepartmentId = event.dataTransfer.getData("application/x-larsa-department") || dragDepartmentId;
+                    if (movedDepartmentId && isOrgAdmin(viewer)) {
+                      event.preventDefault();
+                      reorderDepartment(movedDepartmentId, department.id);
+                      setDragDepartmentId("");
+                      setDropTarget("");
+                      return;
+                    }
+                    const teamId = event.dataTransfer.getData("application/x-larsa-team") || dragTeamId;
+                    if (teamId && editable) { event.preventDefault(); moveTeam(teamId, department.id); }
+                  }}
                 >
                   <header className="s2-department-head">
-                    <div><span className="eyebrow">Department</span><h4>{department.name}</h4><p>{teams.length} {teams.length === 1 ? "team" : "teams"} · {unique(teams.flatMap(teamPeople)).length} people</p></div>
+                    {isOrgAdmin(viewer) ? <span className="s2-card-drag department" draggable aria-label={`Move department ${department.name}`} title="Drag this department above or below another department" onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-larsa-department", department.id); setDragDepartmentId(department.id); }} onDragEnd={() => { setDragDepartmentId(""); setDropTarget(""); }}><GripVertical size={16} /></span> : null}
+                    <div className="s2-department-title"><span className="eyebrow">Department</span><h4>{department.name}</h4><p>{teams.length} {teams.length === 1 ? "team" : "teams"} · {unique(teams.flatMap(teamPeople)).length} people</p></div>
                     {editable ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${department.name}`} onClick={() => renameDepartment(department)}><Pencil size={13} /></button>{isOrgAdmin(viewer) ? null : null}<button type="button" onClick={() => addTeam(department.id)}><Plus size={13} /> Team</button></span> : null}
                   </header>
                   <DropZone kind="head" targetId={department.id} label="Department head" people={peopleFor(department.headIds || [])} directoryPeople={sortedActive} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("head", department.id, personId)} onOpen={setSelectedPersonId} />
                   <div className="s2-team-grid">
                     {teams.map((team) => (
                       <article
-                        className="s2-team"
+                        className={`s2-team${dropTarget === `build-team:${team.id}` ? " is-over" : ""}`}
                         key={team.id}
+                        onDragOver={(event) => { if (editable && (dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team"))) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; } }}
+                        onDragEnter={(event) => { if (editable && (dragTeamId || event.dataTransfer.types.includes("application/x-larsa-team"))) { event.preventDefault(); event.stopPropagation(); setDropTarget(`build-team:${team.id}`); } }}
+                        onDrop={(event) => { const teamId = event.dataTransfer.getData("application/x-larsa-team") || dragTeamId; if (teamId && editable) { event.preventDefault(); event.stopPropagation(); reorderTeam(teamId, team.id); setDragTeamId(""); setDropTarget(""); } }}
                       >
                         <header><span className="s2-team-drag" draggable={editable} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-larsa-team", team.id); setDragTeamId(team.id); }} onDragEnd={() => { setDragTeamId(""); setDropTarget(""); }} aria-label={`Move ${team.name}`}><GripVertical size={14} className="s2-grip" /></span><div><b>{team.name}</b><small>{teamPeople(team).length} people</small></div>{editable ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${team.name}`} onClick={() => renameTeam(team)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${team.name}`} onClick={() => removeTeam(team)}><X size={13} /></button></span> : null}</header>
                         <DropZone kind="lead" targetId={team.id} label="Team lead" people={peopleFor(team.leadIds || [])} directoryPeople={sortedActive} editable={editable} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("lead", team.id, personId)} onOpen={setSelectedPersonId} />
@@ -689,11 +776,29 @@ export function OrgStructure2({
       ) : view === "diagram" ? (
         <section className="s2-diagram-card">
           <header>
-            <div><span className="eyebrow"><Network size={13} /> Visual organization chart</span><h4>Company reporting structure</h4><p>A Visio-style view generated from the same saved assignments. Drag the handles to reorder leadership, departments, and teams; drop a team on another team or department to move it.</p></div>
-            <button type="button" className="s2-diagram-names" aria-pressed={diagramNamesVisible} onClick={() => setDiagramNamesVisible((visible) => !visible)}>{diagramNamesVisible ? <EyeOff size={15} /> : <Eye size={15} />}{diagramNamesVisible ? "Hide employee names" : "Show employee names"}</button>
+            <div><span className="eyebrow"><Network size={13} /> Interactive visual organization chart</span><h4>Company reporting structure</h4><p>Drag the canvas to move around. Drag card handles to switch positions, reorder departments and teams, or move a team into another department.</p></div>
+            <div className="s2-diagram-actions">
+              <span className="s2-diagram-pan-help">Drag background to pan</span>
+              <div className="s2-diagram-zoom" role="group" aria-label="Visual chart zoom controls">
+                <button type="button" aria-label="Zoom out" disabled={diagramZoom <= .6} onClick={() => changeDiagramZoom(-.1)}><Minus size={14} /></button>
+                <output aria-live="polite">{Math.round(diagramZoom * 100)}%</output>
+                <button type="button" aria-label="Zoom in" disabled={diagramZoom >= 1.5} onClick={() => changeDiagramZoom(.1)}><Plus size={14} /></button>
+                <button type="button" aria-label="Fit chart" title="Fit chart to this window" onClick={fitDiagramView}><Maximize2 size={14} /></button>
+                <button type="button" onClick={resetDiagramView}>Reset view</button>
+              </div>
+              <button type="button" className="s2-diagram-names" aria-pressed={diagramNamesVisible} onClick={() => setDiagramNamesVisible((visible) => !visible)}>{diagramNamesVisible ? <EyeOff size={15} /> : <Eye size={15} />}{diagramNamesVisible ? "Hide employee names" : "Show employee names"}</button>
+            </div>
           </header>
-          <div className="s2-diagram-scroll" aria-label="Visual organization chart">
-            <div className="s2-diagram">
+          <div
+            ref={diagramScrollRef}
+            className={`s2-diagram-scroll${diagramPanning ? " is-panning" : ""}`}
+            aria-label="Interactive visual organization chart. Drag the background to pan."
+            onPointerDown={beginDiagramPan}
+            onPointerMove={moveDiagramPan}
+            onPointerUp={endDiagramPan}
+            onPointerCancel={endDiagramPan}
+          >
+            <div className="s2-diagram" style={{ zoom: diagramZoom }}>
               <div className="s2-diagram-tier-label">Company leadership</div>
               <div className="s2-diagram-executives">
                 {executivePositions.length ? executivePositions.map((position) => (

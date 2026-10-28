@@ -308,7 +308,8 @@ button[aria-label="Back to home"] svg {
 .s2-executive-board h4 { margin: 3px 0 2px; font-size: 16px; }
 .s2-executive-board p { margin: 0; color: var(--muted); font-size: 11px; }
 .s2-executive-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(275px, 1fr)); gap: 8px; }
-.s2-executive-position { display: grid; gap: 8px; padding: 10px; border: 1px solid #d8deea; border-radius: 13px; background: #fff; }
+.s2-executive-position { display: grid; gap: 8px; padding: 10px; border: 1px solid #d8deea; border-radius: 13px; background: #fff; transition: border-color .15s, box-shadow .15s, transform .15s; }
+.s2-executive-position.is-over { border-color: #33579a; box-shadow: 0 0 0 3px rgb(51 87 154 / 12%); transform: translateY(-2px); }
 .s2-executive-position > header { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
 .s2-executive-position > header > div { display: grid; gap: 2px; min-width: 0; }
 .s2-executive-position > header small { color: #7a6331; font-size: 8.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
@@ -379,13 +380,19 @@ button[aria-label="Back to home"] svg {
 .s2-department { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: #fff; transition: border-color .15s, box-shadow .15s; }
 .s2-department.is-over { border-color: #33579a; box-shadow: 0 0 0 3px rgb(51 87 154 / 10%); }
 .s2-department-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.s2-department-title { flex: 1; min-width: 0; }
 .s2-department-head h4 { margin: 2px 0; font-size: 17px; }
 .s2-department-head p { margin: 0; color: var(--muted); font-size: 11px; }
+.s2-card-drag { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; border: 1px solid #d6dce6; border-radius: 8px; background: #f7f9fc; color: #7b8798; cursor: grab; touch-action: none; }
+.s2-card-drag:hover { border-color: #8495b0; background: #edf2fa; color: #29457d; }
+.s2-card-drag:active { cursor: grabbing; }
+.s2-card-drag.department { align-self: flex-start; margin-top: 2px; }
 .s2-card-actions { display: inline-flex; align-items: center; gap: 4px; }
 .s2-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 750; cursor: pointer; }
 .s2-card-actions button:hover { color: var(--ink); background: var(--soft); }
 .s2-team-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(285px, 1fr)); gap: 9px; align-items: start; }
-.s2-team { display: grid; gap: 8px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--soft) 72%, #fff); }
+.s2-team { display: grid; gap: 8px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--soft) 72%, #fff); transition: border-color .15s, box-shadow .15s, transform .15s; }
+.s2-team.is-over { border-color: #33579a; box-shadow: 0 0 0 3px rgb(51 87 154 / 12%); transform: translateY(-2px); }
 .s2-team > header { display: flex; align-items: center; gap: 7px; padding: 1px 2px 3px; }
 .s2-team > header > div { display: grid; gap: 1px; min-width: 0; }
 .s2-team > header b { font-size: 13px; }
@@ -413,9 +420,17 @@ button[aria-label="Back to home"] svg {
 .s2-diagram-card > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .s2-diagram-card h4 { margin: 3px 0; font-size: 17px; }
 .s2-diagram-card > header p { margin: 0; max-width: 760px; color: var(--muted); font-size: 11px; }
+.s2-diagram-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+.s2-diagram-pan-help { color: var(--muted); font-size: 9.5px; font-weight: 750; white-space: nowrap; }
+.s2-diagram-zoom { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
+.s2-diagram-zoom button { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 9.5px; font-weight: 800; cursor: pointer; }
+.s2-diagram-zoom button:hover:not(:disabled) { background: #fff; box-shadow: 0 1px 5px rgb(15 23 42 / 8%); }
+.s2-diagram-zoom button:disabled { cursor: default; opacity: .35; }
+.s2-diagram-zoom output { min-width: 38px; color: #526074; font-size: 9px; font-weight: 850; text-align: center; }
 .s2-diagram-names { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 6px; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 10.5px; font-weight: 800; cursor: pointer; }
 .s2-diagram-names:hover { background: var(--soft); }
-.s2-diagram-scroll { overflow: auto; padding: 14px; border: 1px solid #dbe1ea; border-radius: 13px; background: linear-gradient(#f8fafc 1px, transparent 1px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), #fff; background-size: 22px 22px; scrollbar-color: #8d99aa #edf0f4; }
+.s2-diagram-scroll { min-height: 430px; max-height: 72dvh; overflow: auto; padding: 14px; border: 1px solid #dbe1ea; border-radius: 13px; background: linear-gradient(#f8fafc 1px, transparent 1px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), #fff; background-size: 22px 22px; scrollbar-color: #8d99aa #edf0f4; cursor: grab; touch-action: pan-x pan-y; user-select: none; }
+.s2-diagram-scroll.is-panning { cursor: grabbing; }
 .s2-diagram { display: grid; justify-items: stretch; min-width: max(760px, 100%); padding: 5px 4px 18px; }
 .s2-diagram-tier-label { justify-self: center; margin-bottom: 8px; padding: 4px 9px; border-radius: 999px; background: #263f77; color: #fff; font-size: 9px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
 .s2-diagram-executives { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
@@ -518,8 +533,11 @@ button[aria-label="Back to home"] svg {
   .s2-executive-empty button { width: 100%; justify-content: center; }
   .s2-view-toggle { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
   .s2-view-toggle button { flex: 1; justify-content: center; padding-inline: 5px; font-size: 10.5px; }
+  .s2-diagram-actions { align-items: stretch; flex-direction: column; }
+  .s2-diagram-pan-help { text-align: center; }
+  .s2-diagram-zoom { justify-content: center; }
   .s2-diagram-names { width: 100%; }
-  .s2-diagram-scroll { padding: 9px; }
+  .s2-diagram-scroll { min-height: 360px; padding: 9px; }
   .s2-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .s2-stats > span { min-width: 0; }
   .s2-stats > button { grid-column: 1 / -1; width: 100%; margin-left: 0; justify-content: center; }
