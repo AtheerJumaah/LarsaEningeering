@@ -11,8 +11,9 @@ const admin = { id: "admin", name: "Admin Owner", email: "admin@example.invalid"
 const coo = { id: "coo", name: "Casey Operations", email: "coo@example.invalid", enabled: true, access: "Employee", role: "Chief Operating Officer", department: "Management" };
 const architect = { id: "architect", name: "Alex Architect", email: "architect@example.invalid", enabled: true, access: "Employee", role: "Architecture Department Head", department: "Architecture" };
 const engineer = { id: "engineer", name: "Erin Engineer", email: "engineer@example.invalid", enabled: true, access: "Employee", role: "Architect", department: "Architecture" };
+const extraPeople = Array.from({ length: 22 }, (_, index) => ({ id: `extra-${index + 1}`, name: `Employee ${String(index + 1).padStart(2, "0")}`, email: `employee-${index + 1}@example.invalid`, enabled: true, access: "Employee", role: index % 2 ? "Engineer" : "Staff" }));
 let staff = {
-  users: [admin, coo, architect, engineer],
+  users: [admin, coo, architect, engineer, ...extraPeople],
   logs: [],
   org: {
     departments: [
@@ -88,11 +89,26 @@ try {
   assert.match(await people.first().innerText(), /Erin Engineer/, "people must optionally sort by first name Z–A");
   await directory.getByRole("button", { name: "Hide names", exact: true }).click();
   assert.equal(await people.count(), 0, "the names drawer must collapse");
-  await directory.getByRole("button", { name: "Show all 4 names", exact: true }).click();
+  await directory.getByRole("button", { name: "Show all 26 names", exact: true }).click();
   await directory.getByRole("button", { name: "A–Z", exact: true }).click();
+  assert.equal(await people.count(), 26, "the expanded directory must expose every active name");
+  assert.equal(await directory.locator(".s2-palette-list").evaluate((node) => node.scrollHeight <= node.clientHeight + 1), true, "the desktop directory must not hide names in a second inner scroller");
+  await directory.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: ".people-directory-desktop.png", fullPage: false });
 
   const cooPosition = panel.locator(".s2-executive-position").filter({ hasText: "Chief Operating Officer (COO)" });
   assert.equal(await cooPosition.getByText("Casey Operations", { exact: true }).isVisible(), true, "existing executive titles must be recognized");
+  const executiveZone = cooPosition.locator(".s2-dropzone");
+  await executiveZone.getByRole("button", { name: "Choose person", exact: true }).click();
+  const picker = page.locator(".s2-picker");
+  await picker.getByText("Choose position holder", { exact: true }).waitFor();
+  assert.equal(await picker.locator(".s2-picker-list > button").count(), 26, "the role picker must show every active person");
+  await page.screenshot({ path: ".people-picker-desktop.png", fullPage: false });
+  await picker.getByLabel("Search all people", { exact: true }).fill("Erin");
+  await picker.getByRole("button", { name: "Select Erin Engineer", exact: true }).click();
+  await executiveZone.getByText("Erin Engineer", { exact: true }).waitFor();
+  await panel.getByRole("button", { name: "Discard", exact: true }).click();
+  assert.equal(await executiveZone.getByText("Erin Engineer", { exact: true }).count(), 0, "picker assignment must participate in discard/save workflow");
 
   const engineerCard = panel.locator(".s2-palette-person").filter({ hasText: "Erin Engineer" });
   const scrollSurface = page.locator(".native.active");
@@ -109,7 +125,6 @@ try {
   await engineerCard.dispatchEvent("dragend", { dataTransfer: scrollDragData });
   await scrollSurface.evaluate((node) => { node.scrollTop = 0; });
 
-  const executiveZone = cooPosition.locator(".s2-dropzone");
   const executiveDragData = await page.evaluateHandle(() => new DataTransfer());
   await engineerCard.dispatchEvent("dragstart", { dataTransfer: executiveDragData });
   await executiveZone.dispatchEvent("dragenter", { dataTransfer: executiveDragData });
@@ -179,6 +194,13 @@ try {
     const box = await panel.getByRole("button", { name, exact: true }).boundingBox();
     assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name} must remain inside the mobile viewport`);
   }
+  await panel.getByRole("button", { name: "Choose person", exact: true }).first().click();
+  const mobilePicker = page.locator(".s2-picker");
+  await mobilePicker.waitFor();
+  const pickerBox = await mobilePicker.boundingBox();
+  assert.ok(pickerBox && pickerBox.x >= 0 && pickerBox.x + pickerBox.width <= 390, "the full people picker must fit the mobile viewport");
+  assert.equal(await mobilePicker.locator(".s2-picker-list > button").count(), 26, "the mobile picker must make every name reachable");
+  await mobilePicker.getByRole("button", { name: "Close people directory", exact: true }).click();
   await page.screenshot({ path: ".organization-chart-mobile.png", fullPage: false });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Organization Chart must not overflow the page on mobile");
   assert.deepEqual(errors, []);

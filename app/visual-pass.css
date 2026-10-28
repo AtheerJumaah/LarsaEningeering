@@ -318,8 +318,8 @@ button[aria-label="Back to home"] svg {
 .s2-executive-empty b { color: var(--ink); font-size: 12px; }
 .s2-executive-empty small { font-size: 10px; }
 .s2-executive-empty button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 10.5px; font-weight: 750; cursor: pointer; }
-.s2-workspace { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 12px; align-items: start; }
-.s2-people-palette { position: sticky; top: 61px; display: grid; gap: 10px; max-height: calc(100vh - 170px); padding: 13px; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
+.s2-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.s2-people-palette { position: static; display: grid; gap: 10px; max-height: none; padding: 13px; overflow: visible; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
 .s2-people-palette > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .s2-people-palette h4 { margin: 2px 0 0; font-size: 15px; }
 .s2-people-palette > header p { margin: 2px 0 0; color: var(--muted); font-size: 9.5px; }
@@ -330,15 +330,15 @@ button[aria-label="Back to home"] svg {
 .s2-directory-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
 .s2-search { display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); color: var(--muted); }
 .s2-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; }
-.s2-palette-tools { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.s2-palette-tools { display: flex; align-items: center; justify-content: flex-start; gap: 7px; }
 .s2-sort-label { color: var(--muted); font-size: 9.5px; font-weight: 750; }
 .s2-sort-toggle { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 .s2-sort-toggle button { min-width: 40px; min-height: 26px; padding: 4px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 800; cursor: pointer; transition: background .14s ease, color .14s ease, box-shadow .14s ease; }
 .s2-sort-toggle button:hover { color: var(--ink); background: #fff; }
 .s2-sort-toggle button.active { background: #243d77; color: #fff; box-shadow: 0 2px 6px rgb(36 61 119 / 20%); }
 .s2-sort-toggle button:focus-visible { outline: 2px solid #5075bf; outline-offset: 2px; }
-.s2-palette-tools small { flex: none; color: var(--muted); font-size: 9px; }
-.s2-palette-list { display: grid; gap: 5px; min-height: 120px; overflow-y: scroll; padding-right: 5px; scrollbar-gutter: stable; scrollbar-color: #9ba5b5 #edf0f4; scrollbar-width: auto; }
+.s2-palette-tools small { flex: none; margin-left: auto; color: var(--muted); font-size: 9px; }
+.s2-palette-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 6px; min-height: 80px; overflow: visible; padding: 2px; }
 .s2-palette-list::-webkit-scrollbar { width: 10px; }
 .s2-palette-list::-webkit-scrollbar-track { border-radius: 999px; background: #edf0f4; }
 .s2-palette-list::-webkit-scrollbar-thumb { border: 2px solid #edf0f4; border-radius: 999px; background: #9ba5b5; }
@@ -351,10 +351,30 @@ button[aria-label="Back to home"] svg {
 .s2-avatar { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 10px; background: #e9eef8; color: #29457d; font-size: 10px; font-weight: 850; }
 .s2-avatar.large { width: 44px; height: 44px; border-radius: 13px; font-size: 13px; }
 .s2-palette-copy { display: grid; min-width: 0; gap: 2px; }
-.s2-palette-copy b, .s2-palette-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s2-palette-copy b, .s2-palette-copy small { overflow: visible; white-space: normal; }
 .s2-palette-copy b { font-size: 12px; }
 .s2-palette-copy small { color: var(--muted); font-size: 10px; }
 .s2-role-count { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #243d77; color: #fff; font-size: 10px; font-weight: 800; }
+.s2-pick-person { display: inline-flex; align-items: center; gap: 4px; min-height: 27px; padding: 4px 7px; border: 1px solid #b9c5d9; border-radius: 7px; background: #f7f9fd; color: #29457d; font: inherit; font-size: 9.5px; font-weight: 800; cursor: pointer; }
+.s2-pick-person:hover { border-color: #6f86af; background: #edf3ff; }
+.s2-picker-backdrop { position: fixed; inset: 0; z-index: 2050; display: grid; place-items: center; padding: 24px; background: rgb(15 23 42 / 42%); backdrop-filter: blur(3px); }
+.s2-picker { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; width: min(920px, 100%); max-height: min(820px, calc(100dvh - 48px)); padding: 17px; overflow: hidden; border: 1px solid #cfd6e2; border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgb(15 23 42 / 28%); }
+.s2-picker > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.s2-picker > header h3 { margin: 3px 0; font-size: 19px; }
+.s2-picker > header p { margin: 0; color: var(--muted); font-size: 11px; }
+.s2-picker > header > button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); cursor: pointer; }
+.s2-picker-tools { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; align-items: center; gap: 8px; }
+.s2-picker-tools > span:last-child { color: var(--muted); font-size: 10px; font-weight: 750; white-space: nowrap; }
+.s2-picker-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); align-content: start; gap: 7px; overflow-y: auto; padding: 2px 7px 2px 2px; scrollbar-gutter: stable; scrollbar-color: #8d99aa #edf0f4; }
+.s2-picker-list > button { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 64px; padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: #fff; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.s2-picker-list > button:hover { border-color: #7086ae; background: #f4f7fc; box-shadow: 0 3px 10px rgb(36 61 119 / 8%); }
+.s2-picker-list > button:focus-visible { outline: 2px solid #5075bf; outline-offset: 2px; }
+.s2-picker-list > button:disabled { background: #f5f6f8; cursor: default; opacity: .72; }
+.s2-picker-list > button > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.s2-picker-list b { font-size: 12px; white-space: normal; }
+.s2-picker-list small { color: var(--muted); font-size: 10px; white-space: normal; }
+.s2-picker-list i { display: inline-flex; align-items: center; gap: 3px; color: #29457d; font-style: normal; font-size: 9.5px; font-weight: 800; }
+.s2-picker-empty { grid-column: 1 / -1; margin: 0; padding: 28px; border: 1px dashed var(--line); border-radius: 11px; color: var(--muted); text-align: center; }
 .s2-canvas { display: grid; gap: 12px; min-width: 0; }
 .s2-department { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: #fff; transition: border-color .15s, box-shadow .15s; }
 .s2-department.is-over { border-color: #33579a; box-shadow: 0 0 0 3px rgb(51 87 154 / 10%); }
@@ -446,9 +466,7 @@ button[aria-label="Back to home"] svg {
 .s2-team-assignments label { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; }
 
 @media (max-width: 960px) {
-  .s2-workspace { grid-template-columns: 1fr; }
-  .s2-people-palette { position: static; max-height: none; }
-  .s2-palette-list { grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); max-height: 300px; }
+  .s2-palette-list { grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); }
 }
 @media (max-width: 680px) {
   .structure2, .s2-intro, .s2-savebar, .s2-matrix-card { min-width: 0; }
@@ -475,6 +493,13 @@ button[aria-label="Back to home"] svg {
   .s2-matrix-filters .s2-sort-toggle { width: 100%; box-sizing: border-box; }
   .s2-matrix-filters .s2-sort-toggle button { flex: 1; }
   .s2-scroll-cue { left: 50%; }
+  .s2-palette-list { grid-template-columns: 1fr; }
+  .s2-picker-backdrop { align-items: end; padding: 10px; }
+  .s2-picker { max-height: calc(100dvh - 20px); padding: 14px; border-radius: 16px; }
+  .s2-picker-tools { grid-template-columns: 1fr; }
+  .s2-picker-tools .s2-sort-toggle { width: 100%; box-sizing: border-box; }
+  .s2-picker-tools .s2-sort-toggle button { flex: 1; }
+  .s2-picker-list { grid-template-columns: 1fr; }
   .s2-check-list { grid-template-columns: 1fr; }
   .s2-team-assignments > div { grid-template-columns: minmax(0, 1fr) auto; }
   .s2-team-assignments > div > label:last-child { grid-column: 2; }

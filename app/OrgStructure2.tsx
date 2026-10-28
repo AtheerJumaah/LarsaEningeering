@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ChevronDown,
   Crown,
   GripVertical,
@@ -100,7 +101,61 @@ function PersonToken({ person, removable, onOpen, onRemove }: {
   );
 }
 
-function DropZone({ kind, targetId, label, people, editable, activeTarget, draggedPersonId, onTarget, onAccept, onRemove, onOpen }: {
+function PeoplePicker({ title, people, assignedIds, onSelect, onClose }: {
+  title: string;
+  people: OrgUser[];
+  assignedIds: string[];
+  onSelect: (personId: string) => void;
+  onClose: () => void;
+}) {
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<PeopleSort>("asc");
+  const assigned = useMemo(() => new Set(assignedIds), [assignedIds]);
+  const visiblePeople = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return [...people]
+      .filter((person) => !needle || [person.name, person.role, person.department]
+        .some((value) => String(value || "").toLowerCase().includes(needle)))
+      .sort((left, right) => {
+        const compared = NAME_COLLATOR.compare(String(left.name || ""), String(right.name || ""));
+        return sort === "asc" ? compared : -compared;
+      });
+  }, [people, query, sort]);
+
+  useEffect(() => {
+    searchRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="s2-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="s2-picker" role="dialog" aria-modal="true" aria-labelledby="s2-picker-title">
+        <header><div><span className="eyebrow">People directory</span><h3 id="s2-picker-title">{title}</h3><p>Search or browse every active employee, then select one name.</p></div><button type="button" aria-label="Close people directory" onClick={onClose}><X size={17} /></button></header>
+        <div className="s2-picker-tools">
+          <label className="s2-search"><Search size={15} /><input ref={searchRef} type="search" aria-label="Search all people" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name, role, or department" /></label>
+          <PeopleSortControl value={sort} onChange={setSort} />
+          <span>{visiblePeople.length} of {people.length} names</span>
+        </div>
+        <div className="s2-picker-list" aria-label={`All people sorted ${sort === "asc" ? "A to Z" : "Z to A"}`}>
+          {visiblePeople.map((person) => {
+            const isAssigned = assigned.has(person.id);
+            return <button type="button" key={person.id} disabled={isAssigned} aria-label={`${isAssigned ? "Already assigned" : "Select"} ${person.name}`} onClick={() => { onSelect(person.id); onClose(); }}>
+              <span className="s2-avatar large">{initials(String(person.name || ""))}</span>
+              <span><b>{person.name}</b><small>{person.role || person.department || "Employee"}</small></span>
+              {isAssigned ? <i><Check size={13} /> Assigned</i> : <i>Select</i>}
+            </button>;
+          })}
+          {!visiblePeople.length ? <p className="s2-picker-empty">No names match this search.</p> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DropZone({ kind, targetId, label, people, directoryPeople, editable, activeTarget, draggedPersonId, onTarget, onAccept, onRemove, onOpen }: {
   kind: DropKind;
   targetId: string;
   label: string;
@@ -112,10 +167,12 @@ function DropZone({ kind, targetId, label, people, editable, activeTarget, dragg
   onAccept: (kind: DropKind, targetId: string, personId: string) => void;
   onRemove: (personId: string) => void;
   onOpen: (personId: string) => void;
+  directoryPeople: OrgUser[];
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const key = `${kind}:${targetId}`;
   return (
-    <div
+    <><div
       className={`s2-dropzone${activeTarget === key ? " is-over" : ""}`}
       onDragEnter={(event) => { if (editable && (draggedPersonId || event.dataTransfer.types.includes("application/x-larsa-person"))) { event.preventDefault(); onTarget(key); } }}
       onDragOver={(event) => { if (editable && (draggedPersonId || event.dataTransfer.types.includes("application/x-larsa-person"))) event.preventDefault(); }}
@@ -126,8 +183,9 @@ function DropZone({ kind, targetId, label, people, editable, activeTarget, dragg
       <div className="s2-token-row">
         {people.map((person) => <PersonToken key={person.id} person={person} removable={editable} onOpen={() => onOpen(person.id)} onRemove={() => onRemove(person.id)} />)}
         {!people.length ? <span className="s2-empty">None yet</span> : null}
+        {editable ? <button type="button" className="s2-pick-person" onClick={() => setPickerOpen(true)}><Plus size={12} /> Choose person</button> : null}
       </div>
-    </div>
+    </div>{pickerOpen ? <PeoplePicker title={`Choose ${label.toLowerCase()}`} people={directoryPeople} assignedIds={people.map((person) => person.id)} onSelect={(personId) => onAccept(kind, targetId, personId)} onClose={() => setPickerOpen(false)} /> : null}</>
   );
 }
 
@@ -478,7 +536,7 @@ export function OrgStructure2({
               {executivePositions.map((position) => (
                 <article className="s2-executive-position" key={position.id}>
                   <header><div><small>Executive position</small><b>{position.title}</b></div>{isOrgAdmin(viewer) ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${position.title}`} onClick={() => renameExecutivePosition(position)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${position.title}`} onClick={() => removeExecutivePosition(position)}><X size={13} /></button></span> : null}</header>
-                  <DropZone kind="executive" targetId={position.id} label="Position holder" people={peopleFor(position.personIds || [])} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("executive", position.id, personId)} onOpen={setSelectedPersonId} />
+                  <DropZone kind="executive" targetId={position.id} label="Position holder" people={peopleFor(position.personIds || [])} directoryPeople={sortedActive} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("executive", position.id, personId)} onOpen={setSelectedPersonId} />
                 </article>
               ))}
               {!executivePositions.length ? <div className="s2-executive-empty"><Crown size={22} /><span><b>No executive positions yet</b><small>Add only the company-level positions your organization needs.</small></span>{isOrgAdmin(viewer) ? <button type="button" onClick={addExecutivePosition}><Plus size={14} /> Add position</button> : null}</div> : null}
@@ -487,7 +545,7 @@ export function OrgStructure2({
 
           <div className="s2-workspace">
           <aside className="s2-people-palette">
-            <header><div><span className="eyebrow">People</span><h4>People directory</h4><p>Drag a name to assign it</p></div><span>{active.length}</span></header>
+            <header><div><span className="eyebrow">People</span><h4>People directory</h4><p>Click a name to review it, or drag it to assign it</p></div><span>{active.length}</span></header>
             <button type="button" className="s2-directory-toggle" aria-expanded={peopleOpen} onClick={() => setPeopleOpen((open) => !open)}><span>{peopleOpen ? "Hide names" : `Show all ${active.length} names`}</span><ChevronDown size={15} /></button>
             {peopleOpen ? <>
               <label className="s2-search"><Search size={15} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" /></label>
@@ -534,7 +592,7 @@ export function OrgStructure2({
                     <div><span className="eyebrow">Department</span><h4>{department.name}</h4><p>{teams.length} {teams.length === 1 ? "team" : "teams"} · {unique(teams.flatMap(teamPeople)).length} people</p></div>
                     {editable ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${department.name}`} onClick={() => renameDepartment(department)}><Pencil size={13} /></button>{isOrgAdmin(viewer) ? null : null}<button type="button" onClick={() => addTeam(department.id)}><Plus size={13} /> Team</button></span> : null}
                   </header>
-                  <DropZone kind="head" targetId={department.id} label="Department head" people={peopleFor(department.headIds || [])} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("head", department.id, personId)} onOpen={setSelectedPersonId} />
+                  <DropZone kind="head" targetId={department.id} label="Department head" people={peopleFor(department.headIds || [])} directoryPeople={sortedActive} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("head", department.id, personId)} onOpen={setSelectedPersonId} />
                   <div className="s2-team-grid">
                     {teams.map((team) => (
                       <article
@@ -542,8 +600,8 @@ export function OrgStructure2({
                         key={team.id}
                       >
                         <header><span className="s2-team-drag" draggable={editable} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-larsa-team", team.id); setDragTeamId(team.id); }} onDragEnd={() => { setDragTeamId(""); setDropTarget(""); }} aria-label={`Move ${team.name}`}><GripVertical size={14} className="s2-grip" /></span><div><b>{team.name}</b><small>{teamPeople(team).length} people</small></div>{editable ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${team.name}`} onClick={() => renameTeam(team)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${team.name}`} onClick={() => removeTeam(team)}><X size={13} /></button></span> : null}</header>
-                        <DropZone kind="lead" targetId={team.id} label="Team lead" people={peopleFor(team.leadIds || [])} editable={editable} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("lead", team.id, personId)} onOpen={setSelectedPersonId} />
-                        <DropZone kind="member" targetId={team.id} label="Members" people={peopleFor(team.memberIds || [])} editable={editable} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("member", team.id, personId)} onOpen={setSelectedPersonId} />
+                        <DropZone kind="lead" targetId={team.id} label="Team lead" people={peopleFor(team.leadIds || [])} directoryPeople={sortedActive} editable={editable} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("lead", team.id, personId)} onOpen={setSelectedPersonId} />
+                        <DropZone kind="member" targetId={team.id} label="Members" people={peopleFor(team.memberIds || [])} directoryPeople={sortedActive} editable={editable} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("member", team.id, personId)} onOpen={setSelectedPersonId} />
                       </article>
                     ))}
                     {!teams.length ? <button type="button" className="s2-empty-team" disabled={!editable} onClick={() => addTeam(department.id)}><Plus size={16} /> Create the first team</button> : null}

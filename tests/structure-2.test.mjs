@@ -25,6 +25,9 @@ test("Organization Chart supports overlapping roles, drag assignment, matrix rev
   assert.match(structure2, /Executive positions/);
   assert.match(structure2, /addExecutivePosition/);
   assert.match(structure2, /function PeopleSortControl/);
+  assert.match(structure2, /function PeoplePicker/);
+  assert.match(structure2, /Choose person/);
+  assert.match(structure2, /Search all people/);
   assert.match(structure2, />A–Z<\/button>/);
   assert.match(structure2, />Z–A<\/button>/);
   assert.match(structure2, /aria-expanded=\{peopleOpen\}/);
