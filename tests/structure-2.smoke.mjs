@@ -199,6 +199,12 @@ try {
   assert.equal(await panel.getByRole("button", { name: "Save changes", exact: true }).isEnabled(), true, "diagram moves must join the explicit save workflow");
   await panel.getByRole("button", { name: "Discard", exact: true }).click();
   assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Management", "Architecture"], "Discard must restore diagram order");
+  const reverseDepartmentDragData = await page.evaluateHandle(() => new DataTransfer());
+  await managementNode.getByLabel("Move Management", { exact: true }).dispatchEvent("dragstart", { dataTransfer: reverseDepartmentDragData });
+  await architectureNode.dispatchEvent("dragover", { dataTransfer: reverseDepartmentDragData });
+  await architectureNode.dispatchEvent("drop", { dataTransfer: reverseDepartmentDragData });
+  assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Architecture", "Management"], "department cards must switch positions in either drag direction");
+  await panel.getByRole("button", { name: "Discard", exact: true }).click();
 
   const operationsNode = diagram.locator(".s2-diagram-node.team").filter({ hasText: "Operations" });
   const architectureTeamNode = diagram.locator(".s2-diagram-node.team").filter({ hasText: "Architecture A" });

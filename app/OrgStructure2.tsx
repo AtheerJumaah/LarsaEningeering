@@ -82,11 +82,11 @@ function unique(ids: string[]): string[] {
 
 function reorderById<T extends { id: string }>(rows: T[], sourceId: string, targetId: string): T[] {
   if (!sourceId || sourceId === targetId) return rows;
-  const source = rows.find((row) => row.id === sourceId);
+  const sourceIndex = rows.findIndex((row) => row.id === sourceId);
   const targetIndex = rows.findIndex((row) => row.id === targetId);
-  if (!source || targetIndex < 0) return rows;
-  const next = rows.filter((row) => row.id !== sourceId);
-  next.splice(Math.max(0, next.findIndex((row) => row.id === targetId)), 0, source);
+  if (sourceIndex < 0 || targetIndex < 0) return rows;
+  const next = [...rows];
+  [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
   return next;
 }
 
