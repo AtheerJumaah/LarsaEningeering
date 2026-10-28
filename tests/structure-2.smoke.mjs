@@ -171,13 +171,54 @@ try {
   assert.ok(writes.length > 0, "save must reach the synchronized company document");
   assert.ok(staff.org.teams.find((team) => team.id === "team-operations").leadIds.includes(coo.id), "saved overlapping lead role missing");
 
-  await panel.getByRole("tab", { name: "Organization chart", exact: true }).click();
+  await panel.getByRole("tab", { name: "Visual chart", exact: true }).click();
+  await panel.getByText("Company reporting structure", { exact: true }).waitFor();
+  const diagram = panel.locator(".s2-diagram-card");
+  assert.equal(await diagram.getByText("Management", { exact: true }).isVisible(), true);
+  assert.equal(await diagram.getByText("Architecture", { exact: true }).isVisible(), true);
+  assert.equal(await diagram.getByText("Operations", { exact: true }).isVisible(), true);
+  assert.equal(await diagram.getByText("Architecture A", { exact: true }).isVisible(), true);
+  assert.equal(await diagram.getByText("Casey Operations", { exact: true }).first().isVisible(), true);
+  await diagram.getByRole("button", { name: "Hide employee names", exact: true }).click();
+  assert.equal(await diagram.getByText("Casey Operations", { exact: true }).count(), 0, "visual chart must optionally hide employee names");
+  assert.ok(await diagram.locator(".s2-diagram-count").count() > 0, "hidden names must leave useful employee counts");
+  await diagram.getByRole("button", { name: "Show employee names", exact: true }).click();
+  await diagram.getByText("Casey Operations", { exact: true }).first().click();
+  await inspector.getByText("Casey Operations", { exact: true }).waitFor();
+  await inspector.getByRole("button", { name: "Close assignments", exact: true }).click();
+
+  const departmentNodes = diagram.locator(".s2-diagram-node.department");
+  assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Management", "Architecture"]);
+  const managementNode = departmentNodes.filter({ hasText: "Management" });
+  const architectureNode = departmentNodes.filter({ hasText: "Architecture" });
+  const departmentDragData = await page.evaluateHandle(() => new DataTransfer());
+  await architectureNode.getByLabel("Move Architecture", { exact: true }).dispatchEvent("dragstart", { dataTransfer: departmentDragData });
+  await managementNode.dispatchEvent("dragover", { dataTransfer: departmentDragData });
+  await managementNode.dispatchEvent("drop", { dataTransfer: departmentDragData });
+  assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Architecture", "Management"], "department cards must reorder by drag and drop");
+  assert.equal(await panel.getByRole("button", { name: "Save changes", exact: true }).isEnabled(), true, "diagram moves must join the explicit save workflow");
+  await panel.getByRole("button", { name: "Discard", exact: true }).click();
+  assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Management", "Architecture"], "Discard must restore diagram order");
+
+  const operationsNode = diagram.locator(".s2-diagram-node.team").filter({ hasText: "Operations" });
+  const architectureTeamNode = diagram.locator(".s2-diagram-node.team").filter({ hasText: "Architecture A" });
+  const teamDragData = await page.evaluateHandle(() => new DataTransfer());
+  await operationsNode.getByLabel("Move Operations", { exact: true }).dispatchEvent("dragstart", { dataTransfer: teamDragData });
+  await architectureTeamNode.dispatchEvent("dragover", { dataTransfer: teamDragData });
+  await architectureTeamNode.dispatchEvent("drop", { dataTransfer: teamDragData });
+  const architectureBranch = diagram.locator(".s2-diagram-branch").nth(1);
+  assert.equal(await architectureBranch.locator(".s2-diagram-node.team").count(), 2, "a team must move between departments from the visual chart");
+  await panel.getByRole("button", { name: "Discard", exact: true }).click();
+  assert.equal(await architectureBranch.locator(".s2-diagram-node.team").count(), 1, "Discard must restore a moved team");
+  await page.screenshot({ path: ".organization-diagram-desktop.png", fullPage: false });
+
+  await panel.getByRole("tab", { name: "Build chart", exact: true }).click();
   await page.screenshot({ path: ".organization-chart-desktop.png", fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });
   const closeNavigation = page.getByRole("button", { name: "Close navigation", exact: true });
   if (await closeNavigation.isVisible().catch(() => false)) { await closeNavigation.evaluate((button) => button.click()); await page.waitForTimeout(350); }
-  await panel.getByRole("tab", { name: "Organization chart", exact: true }).click();
-  for (const name of ["Organization chart", "Matrix"]) {
+  await panel.getByRole("tab", { name: "Build chart", exact: true }).click();
+  for (const name of ["Build chart", "Visual chart", "Matrix"]) {
     const locator = panel.getByRole("tab", { name, exact: true });
     const box = await locator.boundingBox();
     const geometry = await locator.evaluate((node) => {
@@ -194,6 +235,10 @@ try {
     const box = await panel.getByRole("button", { name, exact: true }).boundingBox();
     assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name} must remain inside the mobile viewport`);
   }
+  await panel.getByRole("tab", { name: "Visual chart", exact: true }).click();
+  const mobileDiagramScroll = panel.locator(".s2-diagram-scroll");
+  assert.equal(await mobileDiagramScroll.evaluate((node) => node.scrollWidth > node.clientWidth), true, "the figurative chart must provide its own horizontal navigation on mobile");
+  await panel.getByRole("tab", { name: "Build chart", exact: true }).click();
   await panel.getByRole("button", { name: "Choose person", exact: true }).first().click();
   const mobilePicker = page.locator(".s2-picker");
   await mobilePicker.waitFor();
@@ -204,7 +249,7 @@ try {
   await page.screenshot({ path: ".organization-chart-mobile.png", fullPage: false });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Organization Chart must not overflow the page on mobile");
   assert.deepEqual(errors, []);
-  console.log("PASS Organization Chart: people drawer/sort, executive tier, drag/discard, matrix, overlapping roles, reporting, save/sync, mobile");
+  console.log("PASS Organization Chart: people drawer/sort, builder, movable visual diagram, matrix, overlapping roles, reporting, save/sync, mobile");
 } catch (error) {
   console.error("ORGANIZATION CHART UI DIAGNOSTIC", (await page.locator("body").innerText()).slice(-3000));
   throw error;

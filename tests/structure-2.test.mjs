@@ -15,7 +15,7 @@ test("the approved Organization Chart replaces both Structure entries", async ()
   assert.match(structure2, /pushSyncedKeyNow\("larsaStaffV8"\)/);
 });
 
-test("Organization Chart supports overlapping roles, drag assignment, matrix review, and explicit saving", async () => {
+test("Organization Chart supports overlapping roles, drag assignment, a movable visual chart, matrix review, and explicit saving", async () => {
   const structure2 = await read("app/OrgStructure2.tsx");
   assert.match(structure2, /Drag the same person into several teams or leadership roles/);
   assert.match(structure2, /kind="head"/);
@@ -35,6 +35,15 @@ test("Organization Chart supports overlapping roles, drag assignment, matrix rev
   assert.match(structure2, /requestAnimationFrame\(scrollAtEdge\)/);
   assert.match(structure2, /surface\.scrollTop \+= speed/);
   assert.match(structure2, /Assignment matrix/);
+  assert.match(structure2, /Visual organization chart/);
+  assert.match(structure2, /function DiagramPeople/);
+  assert.match(structure2, /diagramNamesVisible/);
+  assert.match(structure2, /Hide employee names/);
+  assert.match(structure2, /function reorderExecutive/);
+  assert.match(structure2, /function reorderDepartment/);
+  assert.match(structure2, /function reorderTeam/);
+  assert.match(structure2, /acceptDiagramDrop/);
+  assert.match(structure2, /application\/x-larsa-organization/);
   assert.match(structure2, /Additional reporting lines/);
   assert.match(structure2, /Save changes/);
   assert.match(structure2, /disabled=\{!draft \|\| saving\}/);

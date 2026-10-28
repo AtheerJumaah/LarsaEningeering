@@ -409,6 +409,46 @@ button[aria-label="Back to home"] svg {
 .s2-empty-team:disabled { cursor: default; opacity: .6; }
 .s2-blank { display: grid; justify-items: center; gap: 7px; padding: 50px 20px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); text-align: center; }
 .s2-blank h4, .s2-blank p { margin: 0; }
+.s2-diagram-card { display: grid; gap: 14px; min-width: 0; padding: 15px; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+.s2-diagram-card > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.s2-diagram-card h4 { margin: 3px 0; font-size: 17px; }
+.s2-diagram-card > header p { margin: 0; max-width: 760px; color: var(--muted); font-size: 11px; }
+.s2-diagram-names { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 6px; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 10.5px; font-weight: 800; cursor: pointer; }
+.s2-diagram-names:hover { background: var(--soft); }
+.s2-diagram-scroll { overflow: auto; padding: 14px; border: 1px solid #dbe1ea; border-radius: 13px; background: linear-gradient(#f8fafc 1px, transparent 1px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), #fff; background-size: 22px 22px; scrollbar-color: #8d99aa #edf0f4; }
+.s2-diagram { display: grid; justify-items: stretch; min-width: max(760px, 100%); padding: 5px 4px 18px; }
+.s2-diagram-tier-label { justify-self: center; margin-bottom: 8px; padding: 4px 9px; border-radius: 999px; background: #263f77; color: #fff; font-size: 9px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.s2-diagram-executives { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.s2-diagram-node { position: relative; display: grid; align-content: start; gap: 6px; min-width: 0; padding: 11px 38px 11px 11px; border: 1px solid #cfd6e2; border-top: 4px solid #60779f; border-radius: 10px; background: #fff; box-shadow: 0 4px 14px rgb(15 23 42 / 7%); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.s2-diagram-node.executive { width: min(260px, 100%); border-top-color: #a67d2f; background: linear-gradient(145deg, #fffdf7, #fff); }
+.s2-diagram-node.department { border-top-color: #315b91; }
+.s2-diagram-node.team { border-top-color: #6f9d82; }
+.s2-diagram-node.team.empty { opacity: .7; }
+.s2-diagram-node.is-over { border-color: #244a91; box-shadow: 0 0 0 3px rgb(36 74 145 / 16%), 0 8px 22px rgb(15 23 42 / 12%); transform: translateY(-2px); }
+.s2-diagram-move { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; border: 1px solid #d4dae4; border-radius: 7px; background: #f7f9fc; color: #68758a; cursor: grab; touch-action: none; }
+.s2-diagram-move:hover { border-color: #8798b4; background: #edf2fa; color: #263f77; }
+.s2-diagram-move:active { cursor: grabbing; }
+.s2-diagram-node > small { color: var(--muted); font-size: 8px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+.s2-diagram-node h5 { margin: 0; font-size: 13px; line-height: 1.3; }
+.s2-diagram-role { margin-top: 2px; color: #526074; font-size: 8px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+.s2-diagram-role.members { margin-top: 7px; }
+.s2-diagram-people { display: flex; flex-wrap: wrap; gap: 4px; }
+.s2-diagram-people button { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 7px 3px 3px; border: 1px solid #d9dee7; border-radius: 999px; background: #f9fafc; color: var(--ink); font: inherit; cursor: pointer; }
+.s2-diagram-people button:hover { border-color: #7f91b1; background: #eef3fb; }
+.s2-diagram-people button > span { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 21px; height: 21px; border-radius: 50%; background: #263f77; color: #fff; font-size: 7.5px; font-weight: 850; }
+.s2-diagram-people b { overflow: hidden; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.s2-diagram-count { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: #eef1f5; color: #536071; font-size: 9.5px; font-weight: 750; }
+.s2-diagram-empty { color: var(--muted); font-size: 9.5px; font-style: italic; }
+.s2-diagram-trunk { justify-self: center; width: 1px; height: 34px; background: #8e9aab; }
+.s2-diagram-departments { position: relative; display: grid; gap: 30px; min-width: 100%; padding-top: 26px; }
+.s2-diagram-departments::before { content: ""; position: absolute; top: 0; right: 4%; left: 4%; height: 1px; background: #8e9aab; }
+.s2-diagram-branch { position: relative; display: grid; align-content: start; gap: 0; min-width: 285px; }
+.s2-diagram-branch::before { content: ""; position: absolute; top: -26px; left: 50%; width: 1px; height: 26px; background: #8e9aab; }
+.s2-diagram-team-line { justify-self: center; width: 1px; height: 22px; background: #a8b0bd; }
+.s2-diagram-teams { position: relative; display: grid; gap: 10px; }
+.s2-diagram-teams::before { content: ""; position: absolute; top: -1px; bottom: 50%; left: 9px; width: 1px; background: #c1c7d0; }
+.s2-diagram-teams > .s2-diagram-node { margin-left: 18px; }
+.s2-diagram-teams > .s2-diagram-node::before { content: ""; position: absolute; top: 22px; left: -19px; width: 18px; height: 1px; background: #c1c7d0; }
 .s2-matrix-card { display: grid; gap: 13px; min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
 .s2-matrix-card > header { display: flex; align-items: end; justify-content: space-between; gap: 14px; }
 .s2-matrix-card h4 { margin: 2px 0; font-size: 16px; }
@@ -469,15 +509,17 @@ button[aria-label="Back to home"] svg {
   .s2-palette-list { grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); }
 }
 @media (max-width: 680px) {
-  .structure2, .s2-intro, .s2-savebar, .s2-matrix-card { min-width: 0; }
-  .s2-intro, .s2-matrix-card > header { align-items: stretch; flex-direction: column; overflow: hidden; }
+  .structure2, .s2-intro, .s2-savebar, .s2-diagram-card, .s2-matrix-card { min-width: 0; }
+  .s2-intro, .s2-diagram-card > header, .s2-matrix-card > header { align-items: stretch; flex-direction: column; overflow: hidden; }
   .s2-executive-board > header { align-items: stretch; flex-direction: column; }
   .s2-executive-board > header > button { justify-content: center; width: 100%; }
   .s2-executive-grid { grid-template-columns: 1fr; }
   .s2-executive-empty { align-items: flex-start; flex-wrap: wrap; }
   .s2-executive-empty button { width: 100%; justify-content: center; }
-  .s2-view-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
-  .s2-view-toggle button { flex: 1; justify-content: center; }
+  .s2-view-toggle { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
+  .s2-view-toggle button { flex: 1; justify-content: center; padding-inline: 5px; font-size: 10.5px; }
+  .s2-diagram-names { width: 100%; }
+  .s2-diagram-scroll { padding: 9px; }
   .s2-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .s2-stats > span { min-width: 0; }
   .s2-stats > button { grid-column: 1 / -1; width: 100%; margin-left: 0; justify-content: center; }
