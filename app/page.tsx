@@ -21,7 +21,7 @@ import {
   EMPTY_COUNTS,
 } from "../lib/supabase/notify";
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
-import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { OrgStructure } from "./OrgStructure"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
+import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { OrgStructure2 } from "./OrgStructure2";
 import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
 import { APPROVAL_FLOW_TYPES, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
@@ -767,8 +767,7 @@ const GROUPS: Group[] = [
     label: "Engineering Management",
     items: [
       { id: "org-structure", label: "Engineering Dashboard", description: "Headcount, hours, and points across the structure", code: "EM", native: "orgStructure" },
-      { id: "org-chart", label: "Structure", description: "Departments, teams, and access", code: "ES", native: "orgStructure" },
-      { id: "org-chart-2", label: "Structure 2", description: "Visual team builder and assignment matrix", code: "E2", native: "orgStructure" },
+      { id: "org-chart", label: "Organization Chart", description: "Visual team builder and assignment matrix", code: "ES", native: "orgStructure" },
       { id: "org-team-time", label: "Team Timesheets", description: "Hours for everyone you are responsible for", code: "ET", native: "orgStructure" },
       { id: "org-team-points", label: "Team Performance", description: "Points and targets across your teams", code: "EP", native: "orgStructure" },
     ],
@@ -943,11 +942,10 @@ const ITEMS = [...GROUPS.flatMap((group) => group.items), SALES_ITEM, MY_POINTS_
 /* Which tab of the Engineering Management screen each sidebar entry opens.
    One place, so the nav channel, the permission check and the screen itself
    cannot disagree about what these ids mean. */
-type EngineeringTab = "dashboard" | "structure" | "structure2" | "time" | "performance";
+type EngineeringTab = "dashboard" | "organization" | "time" | "performance";
 const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = {
   "org-structure": "dashboard",
-  "org-chart": "structure",
-  "org-chart-2": "structure2",
+  "org-chart": "organization",
   "org-team-time": "time",
   "org-team-points": "performance",
 };
@@ -1204,7 +1202,6 @@ const ICONS: Record<string, LucideIcon> = {
   "performance-history": History,
   "my-points": TrendingUp,
   "org-chart": Network,
-  "org-chart-2": Network,
   "org-team-time": FileClock,
   "org-team-points": TrendingUp,
   "staff-timesheet": FileClock,
@@ -11558,14 +11555,14 @@ function EngineeringManagementPortal({
         {manages && <span className="access-pill"><Network size={16} /> Manager view</span>}
       </section>
       <div className="org-tabs" role="tablist" aria-label="Engineering management sections">
-        <button type="button" role="tab" aria-selected={tab === "dashboard"} className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>Dashboard</button>        <button type="button" role="tab" aria-selected={tab === "structure"} className={tab === "structure" ? "active" : ""} onClick={() => setTab("structure")}>Structure</button>
-        <button type="button" role="tab" aria-selected={tab === "structure2"} className={tab === "structure2" ? "active" : ""} onClick={() => setTab("structure2")}>Structure 2</button>
+        <button type="button" role="tab" aria-selected={tab === "dashboard"} className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>Dashboard</button>
+        <button type="button" role="tab" aria-selected={tab === "organization"} className={tab === "organization" ? "active" : ""} onClick={() => setTab("organization")}>Organization Chart</button>
         {manages && <button type="button" role="tab" aria-selected={tab === "time"} className={tab === "time" ? "active" : ""} onClick={() => setTab("time")}>Timesheets</button>}
         {manages && <button type="button" role="tab" aria-selected={tab === "performance"} className={tab === "performance" ? "active" : ""} onClick={() => setTab("performance")}>Performance</button>}
         {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
       </div>
-      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}      {tab === "structure" && <OrgStructure viewer={viewer} users={users} onSaved={onSaved} />}
-      {tab === "structure2" && <OrgStructure2 viewer={viewer} users={users} onSaved={onSaved} />}
+      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}
+      {tab === "organization" && <OrgStructure2 viewer={viewer} users={users} onSaved={onSaved} />}
       {manages && (tab === "time" || tab === "performance") && <><TeamCharts summaries={summaries} mode={tab} />
         <div className="period-presets" aria-label="Team report period">
           <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
@@ -16326,7 +16323,7 @@ function AccessCenter({
                   </select>
                   {orgDepartments.length
                     ? <small>From the Engineering Management structure.</small>
-                    : <small>No departments defined yet — add them in Engineering Management, under Structure.</small>}
+                    : <small>No departments defined yet — add them in Engineering Management, under Organization Chart.</small>}
                 </label>
                 <label>
                   Reports To

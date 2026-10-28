@@ -41,7 +41,7 @@ test("a department already on somebody's record is never silently dropped", () =
 });
 
 test("and an empty chart says where to go rather than offering nothing", () => {
-  assert.match(page, /No departments defined yet — add them in Engineering Management, under Structure\./);
+  assert.match(page, /No departments defined yet — add them in Engineering Management, under Organization Chart\./);
   assert.match(page, /<option value="">No department selected<\/option>/);
 });
 
@@ -49,15 +49,15 @@ test("and an empty chart says where to go rather than offering nothing", () => {
 test("all Engineering Management sections are in the sidebar", () => {
   for (const [id, label] of [
     ["org-structure", "Engineering Dashboard"],
-    ["org-chart", "Structure"],
-    ["org-chart-2", "Structure 2"],
+    ["org-chart", "Organization Chart"],
     ["org-team-time", "Team Timesheets"],
     ["org-team-points", "Team Performance"],
   ]) {
     assert.match(page, new RegExp(`\\{ id: "${id}", label: "${label}"`), `${label} is missing`);
   }
   // All entries are the same screen; only the tab differs.
-  assert.match(page, /const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = \{\s*\n\s*"org-structure": "dashboard",\s*\n\s*"org-chart": "structure",\s*\n\s*"org-chart-2": "structure2",\s*\n\s*"org-team-time": "time",\s*\n\s*"org-team-points": "performance",/);
+  assert.match(page, /const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = \{\s*\n\s*"org-structure": "dashboard",\s*\n\s*"org-chart": "organization",\s*\n\s*"org-team-time": "time",\s*\n\s*"org-team-points": "performance",/);
+  assert.doesNotMatch(page, /id: "org-chart-2"/);
 });
 
 test("org-structure keeps its id, and so keeps everything pointing at it", () => {
@@ -92,7 +92,6 @@ test("the tab is derived, not synchronised", () => {
 
 test("the tabs themselves still work on their own", () => {
   // The sidebar decides where you arrive, not where you may go next.
-  assert.match(page, /onClick=\{\(\) => setTab\("structure"\)\}/);
-  assert.match(page, /onClick=\{\(\) => setTab\("structure2"\)\}/);
+  assert.match(page, /onClick=\{\(\) => setTab\("organization"\)\}/);
   assert.match(page, /onClick=\{\(\) => setTab\("dashboard"\)\}/);
 });

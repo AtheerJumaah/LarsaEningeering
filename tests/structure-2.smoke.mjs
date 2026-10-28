@@ -1,4 +1,4 @@
-// Browser-level Structure 2 exercise with an isolated company document.
+// Browser-level Organization Chart exercise with an isolated company document.
 // Every Supabase request is intercepted; the test cannot alter production data.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -63,20 +63,21 @@ await context.addInitScript(({ staff, admin }) => {
 const page = await context.newPage();
 page.on("pageerror", (error) => errors.push(error.message));
 
-async function openStructure2() {
+async function openOrganizationChart() {
   await page.locator(".top-signout").waitFor({ timeout: 30000 });
   const module = page.getByText("Engineering Management", { exact: true }).last();
   if (await module.isVisible().catch(() => false)) await module.click();
-  await page.getByRole("tab", { name: "Structure 2", exact: true }).click();
+  await page.getByRole("tab", { name: "Organization Chart", exact: true }).click();
   await page.locator(".native.active .structure2").waitFor();
 }
 
 try {
   await page.goto(process.env.SMOKE_URL || "http://localhost:5199/", { waitUntil: "domcontentloaded" });
-  await openStructure2();
+  await openOrganizationChart();
   const panel = page.locator(".native.active .structure2");
-  assert.equal(await page.getByRole("tab", { name: "Structure", exact: true }).count(), 1, "original Structure tab must remain");
-  assert.equal(await page.getByRole("tab", { name: "Structure 2", exact: true }).getAttribute("aria-selected"), "true");
+  assert.equal(await page.getByRole("tab", { name: "Structure", exact: true }).count(), 0, "old Structure tab must be removed");
+  assert.equal(await page.getByRole("tab", { name: "Structure 2", exact: true }).count(), 0, "proposal tab must be removed");
+  assert.equal(await page.getByRole("tab", { name: "Organization Chart", exact: true }).getAttribute("aria-selected"), "true");
   assert.equal(await panel.getByText("Casey Operations", { exact: true }).first().isVisible(), true);
   assert.equal(await panel.getByText("Architecture A", { exact: true }).first().isVisible(), true);
 
@@ -115,7 +116,7 @@ try {
   assert.ok(writes.length > 0, "save must reach the synchronized company document");
   assert.ok(staff.org.teams.find((team) => team.id === "team-operations").leadIds.includes(coo.id), "saved overlapping lead role missing");
 
-  await page.screenshot({ path: ".structure-2-desktop.png", fullPage: false });
+  await page.screenshot({ path: ".organization-chart-desktop.png", fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });
   const closeNavigation = page.getByRole("button", { name: "Close navigation", exact: true });
   if (await closeNavigation.isVisible().catch(() => false)) { await closeNavigation.evaluate((button) => button.click()); await page.waitForTimeout(350); }
@@ -137,12 +138,12 @@ try {
     const box = await panel.getByRole("button", { name, exact: true }).boundingBox();
     assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name} must remain inside the mobile viewport`);
   }
-  await page.screenshot({ path: ".structure-2-mobile.png", fullPage: false });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Structure 2 must not overflow the page on mobile");
+  await page.screenshot({ path: ".organization-chart-mobile.png", fullPage: false });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Organization Chart must not overflow the page on mobile");
   assert.deepEqual(errors, []);
-  console.log("PASS Structure 2: original retained, drag/discard, matrix, overlapping roles, reporting, save/sync, mobile");
+  console.log("PASS Organization Chart: old Structure removed, drag/discard, matrix, overlapping roles, reporting, save/sync, mobile");
 } catch (error) {
-  console.error("STRUCTURE 2 UI DIAGNOSTIC", (await page.locator("body").innerText()).slice(-3000));
+  console.error("ORGANIZATION CHART UI DIAGNOSTIC", (await page.locator("body").innerText()).slice(-3000));
   throw error;
 } finally {
   await browser.close();

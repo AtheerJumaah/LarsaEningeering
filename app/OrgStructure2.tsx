@@ -1,11 +1,8 @@
 "use client";
 
-/* Structure 2 is a second, deliberately more visual editor for the same
- * organization record used by Structure. It does not fork the company's
- * data: a saved change is immediately visible in both views. The difference
- * is interaction — people are reusable objects that can be dragged into more
- * than one role, while the matrix and person inspector make those overlapping
- * assignments explicit and keyboard/touch accessible. */
+/* The visual organization editor. People are reusable objects that can be
+ * dragged into more than one role, while the matrix and person inspector make
+ * overlapping assignments explicit and keyboard/touch accessible. */
 
 import { useMemo, useState } from "react";
 import {
@@ -186,7 +183,7 @@ export function OrgStructure2({
       return;
     }
     setSaving(true);
-    setNote("Saving Structure 2 changes to the company server…");
+    setNote("Saving organization changes to the company server…");
     try {
       const synced = await pushSyncedKeyNow("larsaStaffV8");
       if (!synced) {
@@ -207,7 +204,7 @@ export function OrgStructure2({
 
   function discardChanges() {
     setDraft(null);
-    setNote("Unsaved Structure 2 changes discarded.");
+    setNote("Unsaved organization changes discarded.");
   }
 
   function editDepartment(departmentId: string, update: (department: Department) => Department, message: string) {
@@ -268,7 +265,7 @@ export function OrgStructure2({
   }
 
   async function addDepartment() {
-    const value = await dialog.prompt({ title: "New department", message: "Name the department shown in both Structure views.", placeholder: "Department name", confirmLabel: "Create department" });
+    const value = await dialog.prompt({ title: "New department", message: "Name the department shown in the Organization Chart.", placeholder: "Department name", confirmLabel: "Create department" });
     const name = String(value || "").trim();
     if (!name) return;
     stage({ ...chart, departments: [...chart.departments, { id: newId("dep"), name, headIds: [] }] }, "Department created.");
@@ -282,13 +279,13 @@ export function OrgStructure2({
   }
 
   async function renameDepartment(department: Department) {
-    const value = await dialog.prompt({ title: "Rename department", message: "Choose the department name shown in both Structure views.", defaultValue: department.name, placeholder: "Department name", confirmLabel: "Apply name" });
+    const value = await dialog.prompt({ title: "Rename department", message: "Choose the department name shown in the Organization Chart.", defaultValue: department.name, placeholder: "Department name", confirmLabel: "Apply name" });
     const name = String(value || "").trim();
     if (name && name !== department.name) editDepartment(department.id, (row) => ({ ...row, name }), "Department renamed.");
   }
 
   async function renameTeam(team: Team) {
-    const value = await dialog.prompt({ title: "Rename team", message: "Choose the team name shown in both Structure views.", defaultValue: team.name, placeholder: "Team name", confirmLabel: "Apply name" });
+    const value = await dialog.prompt({ title: "Rename team", message: "Choose the team name shown in the Organization Chart.", defaultValue: team.name, placeholder: "Team name", confirmLabel: "Apply name" });
     const name = String(value || "").trim();
     if (name && name !== team.name) editTeam(team.id, (row) => ({ ...row, name }), "Team renamed.");
   }
@@ -302,11 +299,11 @@ export function OrgStructure2({
     <div className="structure2">
       <section className="s2-intro">
         <div>
-          <span className="eyebrow"><Network size={14} /> Structure 2 proposal</span>
+          <span className="eyebrow"><Network size={14} /> Organization chart</span>
           <h3>Build the organization visually</h3>
           <p>Drag the same person into several teams or leadership roles. Use Matrix to audit every overlapping assignment.</p>
         </div>
-        <div className="s2-view-toggle" role="tablist" aria-label="Structure 2 views">
+        <div className="s2-view-toggle" role="tablist" aria-label="Organization chart views">
           <button type="button" role="tab" aria-selected={view === "chart"} className={view === "chart" ? "active" : ""} onClick={() => setView("chart")}><LayoutGrid size={15} /> Organization chart</button>
           <button type="button" role="tab" aria-selected={view === "matrix"} className={view === "matrix" ? "active" : ""} onClick={() => setView("matrix")}><TableProperties size={15} /> Matrix</button>
         </div>
@@ -321,8 +318,8 @@ export function OrgStructure2({
       </section>
 
       <div className={`s2-savebar${draft ? " is-dirty" : ""}`} role="status">
-        <span><i />{saving ? "Saving to company server" : draft ? "Unsaved organization changes" : "Structure 2 is synchronized"}</span>
-        <p>{draft ? "Nothing changes for other users until Save changes succeeds." : "Structure and Structure 2 show the same saved organization."}</p>
+        <span><i />{saving ? "Saving to company server" : draft ? "Unsaved organization changes" : "Organization chart is synchronized"}</span>
+        <p>{draft ? "Nothing changes for other users until Save changes succeeds." : "This is the saved company organization."}</p>
         <button type="button" className="struct-discard" disabled={!draft || saving} onClick={discardChanges}><Undo2 size={14} /> Discard</button>
         <button type="button" className="struct-save" disabled={!draft || saving} onClick={commitChanges}><Save size={15} /> {saving ? "Saving…" : "Save changes"}</button>
       </div>

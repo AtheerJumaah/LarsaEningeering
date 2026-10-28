@@ -29,11 +29,11 @@ test("home, clocks, presence, and notifications keep the simplified contracts", 
 
 test("management and history expose scoped, separate time and performance reports", async () => {
   const [page, org, structure] = await Promise.all([
-    read("app/page.tsx"), read("lib/org.ts"), read("app/OrgStructure.tsx"),
+    read("app/page.tsx"), read("lib/org.ts"), read("app/OrgStructure2.tsx"),
   ]);
   assert.match(page, /function EngineeringManagementPortal/);
   assert.match(page, /staffIdsVisibleTo\(org, viewer, users\)/);
-  assert.match(page, /"structure" \| "structure2" \| "time" \| "performance"/);
+  assert.match(page, /"organization" \| "time" \| "performance"/);
   assert.match(page, />Today<\/button>.*>7 days<\/button>.*>30 days<\/button>.*>6 months<\/button>.*>Year<\/button>/s);
   assert.match(org, /directReportsOf\(users, user, org\)/);
   /* The structure page was rewritten as cards; the old inline-create field
@@ -42,7 +42,7 @@ test("management and history expose scoped, separate time and performance report
      ships today, not a preference. */
   assert.match(structure, /function addDepartment\(\)/);
   assert.match(structure, /function addTeam\(departmentId: string\)/);
-  assert.match(structure, /className="org-add struct-add"/);
+  assert.match(structure, /className="org-add"/);
 });
 
 test("the service worker still carries every engine a release can change", async () => {

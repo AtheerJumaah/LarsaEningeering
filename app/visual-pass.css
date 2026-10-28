@@ -274,8 +274,8 @@ button[aria-label="Back to home"] svg {
 .struct-discard:not(:disabled):hover { color: var(--ink); background: var(--soft); }
 .struct-save:not(:disabled):hover { filter: brightness(.94); }
 
-/* Structure 2 -----------------------------------------------------------
-   A visual and matrix editor over the same organization data as Structure.
+/* Organization Chart ----------------------------------------------------
+   A visual and matrix editor over the saved organization data.
    People deliberately look reusable: dragging adds another assignment instead
    of pulling them out of the role they already hold. */
 .structure2 { display: grid; gap: 14px; padding-bottom: 32px; }
