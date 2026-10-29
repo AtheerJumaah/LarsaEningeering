@@ -314,6 +314,20 @@ button[aria-label="Back to home"] svg {
 .s2-executive-position > header > div { display: grid; gap: 2px; min-width: 0; }
 .s2-executive-position > header small { color: #7a6331; font-size: 8.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .s2-executive-position > header b { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.s2-executive-reporting { padding-top: 7px; border-top: 1px solid #e5e9f0; }
+.s2-executive-reporting > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 1px; color: #263f77; font-size: 10.5px; font-weight: 800; cursor: pointer; }
+.s2-executive-reporting > summary small { color: var(--muted); font-size: 9px; font-weight: 700; }
+.s2-executive-report-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.s2-executive-report-grid > section { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 8px; border: 1px solid #e0e5ed; border-radius: 10px; background: #fafbfd; }
+.s2-executive-report-grid > section > b { font-size: 10px; }
+.s2-executive-report-grid > section > p { margin: -2px 0 1px; color: var(--muted); font-size: 8.5px; }
+.s2-executive-report-grid select { width: 100%; min-width: 0; height: 31px; padding: 4px 25px 4px 7px; border: 1px solid #ccd4e1; border-radius: 8px; background: #fff; color: var(--ink); font: inherit; font-size: 9.5px; cursor: pointer; }
+.s2-executive-report-grid select:disabled { cursor: default; opacity: .55; }
+.s2-position-links { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px; min-height: 21px; }
+.s2-position-links > span { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 3px 4px 3px 7px; border: 1px solid #d5dce7; border-radius: 999px; background: #fff; font-size: 8.5px; font-weight: 750; }
+.s2-position-links > span > button { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; padding: 0; border: 0; border-radius: 50%; background: #edf1f6; color: #657185; cursor: pointer; }
+.s2-position-links > span > button:hover { background: #fee8e6; color: #a62f27; }
+.s2-position-links > i { color: var(--muted); font-size: 8.5px; }
 .s2-executive-empty { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-height: 66px; padding: 11px; border: 1px dashed #c5ccda; border-radius: 12px; color: var(--muted); }
 .s2-executive-empty > span { display: grid; flex: 1; gap: 2px; }
 .s2-executive-empty b { color: var(--ink); font-size: 12px; }
@@ -454,6 +468,10 @@ button[aria-label="Back to home"] svg {
 .s2-diagram-people b { overflow: hidden; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .s2-diagram-count { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: #eef1f5; color: #536071; font-size: 9.5px; font-weight: 750; }
 .s2-diagram-empty { color: var(--muted); font-size: 9.5px; font-style: italic; }
+.s2-diagram-reporting { display: grid; gap: 5px; margin-top: 4px; padding-top: 7px; border-top: 1px solid #e5e0d4; }
+.s2-diagram-reporting > span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.s2-diagram-reporting b { width: 100%; color: #75602e; font-size: 7.5px; letter-spacing: .05em; text-transform: uppercase; }
+.s2-diagram-reporting i { padding: 2px 5px; border-radius: 999px; background: #f3eee1; color: #4e4633; font-size: 8px; font-style: normal; font-weight: 700; }
 .s2-diagram-trunk { justify-self: center; width: 1px; height: 34px; background: #8e9aab; }
 .s2-diagram-departments { position: relative; display: grid; gap: 30px; min-width: 100%; padding-top: 26px; }
 .s2-diagram-departments::before { content: ""; position: absolute; top: 0; right: 4%; left: 4%; height: 1px; background: #8e9aab; }
@@ -529,6 +547,7 @@ button[aria-label="Back to home"] svg {
   .s2-executive-board > header { align-items: stretch; flex-direction: column; }
   .s2-executive-board > header > button { justify-content: center; width: 100%; }
   .s2-executive-grid { grid-template-columns: 1fr; }
+  .s2-executive-report-grid { grid-template-columns: 1fr; }
   .s2-executive-empty { align-items: flex-start; flex-wrap: wrap; }
   .s2-executive-empty button { width: 100%; justify-content: center; }
   .s2-view-toggle { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }

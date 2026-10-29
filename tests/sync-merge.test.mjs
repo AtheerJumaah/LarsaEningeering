@@ -118,6 +118,19 @@ test("executive positions have the same stale-device and deletion protection as 
   assert.deepEqual(protectedWrite.org.removedExecutivePositionIds, ["exec-ceo"]);
 });
 
+test("an older open tab cannot erase executive position reporting links", () => {
+  const ceo = { id: "exec-ceo", title: "CEO", personIds: ["u1"] };
+  const oldCoo = { id: "exec-coo", title: "COO", personIds: ["u2"] };
+  const serverCoo = { ...oldCoo, reportsToPositionIds: ["exec-ceo"] };
+  const server = { org: { departments: [], teams: [], executivePositions: [ceo, serverCoo] } };
+  const local = { org: { departments: [], teams: [], executivePositions: [ceo, oldCoo] } };
+  const protectedWrite = protectOutgoing(local, server);
+  assert.deepEqual(
+    protectedWrite.org.executivePositions.find((row) => row.id === "exec-coo").reportsToPositionIds,
+    ["exec-ceo"],
+  );
+});
+
 test("an older chart without an executive layer keeps title inference available", () => {
   const chart = { org: { departments: [], teams: [] } };
   const protectedWrite = protectOutgoing(chart, chart);

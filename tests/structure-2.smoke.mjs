@@ -126,7 +126,7 @@ try {
   await panel.getByRole("button", { name: "Discard", exact: true }).click();
   assert.equal(await architectureBuildDepartment.locator(".s2-team").count(), 1, "Discard must restore Build chart team placement");
 
-  const cooPosition = panel.locator(".s2-executive-position").filter({ hasText: "Chief Operating Officer (COO)" });
+  const cooPosition = panel.locator(".s2-executive-position").filter({ has: page.locator("header b", { hasText: /^Chief Operating Officer \(COO\)$/ }) });
   assert.equal(await cooPosition.getByText("Casey Operations", { exact: true }).isVisible(), true, "existing executive titles must be recognized");
   const executiveZone = cooPosition.locator(".s2-dropzone");
   await executiveZone.getByRole("button", { name: "Choose person", exact: true }).click();
@@ -165,6 +165,20 @@ try {
   await panel.getByRole("button", { name: "Save changes", exact: true }).click();
   await panel.getByText("Organization changes saved to the company server.", { exact: true }).waitFor();
   assert.ok(staff.org.executivePositions.find((position) => position.title.includes("COO")).personIds.includes(engineer.id), "executive assignment must save");
+
+  const managingPosition = panel.locator(".s2-executive-position").filter({ has: page.locator("header b", { hasText: /^Managing Director$/ }) });
+  await cooPosition.getByText("Reporting lines", { exact: true }).click();
+  await managingPosition.getByText("Reporting lines", { exact: true }).click();
+  await cooPosition.getByLabel("Add who Chief Operating Officer (COO) reports to", { exact: true }).selectOption({ label: "Managing Director — Admin Owner" });
+  assert.equal(await cooPosition.getByText("Managing Director — Admin Owner", { exact: true }).isVisible(), true, "an executive position must show who it reports to");
+  assert.equal(await managingPosition.getByText("Chief Operating Officer (COO) — Casey Operations, Erin Engineer", { exact: true }).isVisible(), true, "the reverse direct-report relationship must update immediately");
+  const managingReportsTo = managingPosition.getByLabel("Add who Managing Director reports to", { exact: true });
+  assert.equal(await managingReportsTo.locator("option").filter({ hasText: "Chief Operating Officer (COO)" }).count(), 0, "a reporting cycle must not be offered");
+  await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+  await panel.getByText("Organization changes saved to the company server.", { exact: true }).waitFor();
+  const savedCooPosition = staff.org.executivePositions.find((position) => position.title.includes("COO"));
+  const savedManagingPosition = staff.org.executivePositions.find((position) => position.title === "Managing Director");
+  assert.deepEqual(savedCooPosition.reportsToPositionIds, [savedManagingPosition.id], "executive reporting must persist to the company document");
 
   const architectureTeam = panel.locator(".s2-team").filter({ hasText: "Architecture A" });
   const leadZone = architectureTeam.locator(".s2-dropzone").filter({ hasText: "Team lead" });
@@ -234,6 +248,10 @@ try {
   assert.equal(await diagram.getByText("Operations", { exact: true }).isVisible(), true);
   assert.equal(await diagram.getByText("Architecture A", { exact: true }).isVisible(), true);
   assert.equal(await diagram.getByText("Casey Operations", { exact: true }).first().isVisible(), true);
+  const cooDiagramNode = diagram.locator(".s2-diagram-node.executive").filter({ has: page.locator("h5", { hasText: /^Chief Operating Officer \(COO\)$/ }) });
+  const managingDiagramNode = diagram.locator(".s2-diagram-node.executive").filter({ has: page.locator("h5", { hasText: /^Managing Director$/ }) });
+  assert.match(await cooDiagramNode.innerText(), /REPORTS TO[\s\S]*Managing Director/, "visual chart must show the executive manager");
+  assert.match(await managingDiagramNode.innerText(), /DIRECT REPORTS[\s\S]*Chief Operating Officer \(COO\)/, "visual chart must show derived direct reports");
   await diagram.getByRole("button", { name: "Hide employee names", exact: true }).click();
   assert.equal(await diagram.getByText("Casey Operations", { exact: true }).count(), 0, "visual chart must optionally hide employee names");
   assert.ok(await diagram.locator(".s2-diagram-count").count() > 0, "hidden names must leave useful employee counts");

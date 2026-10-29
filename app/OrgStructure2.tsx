@@ -216,6 +216,50 @@ function DropZone({ kind, targetId, label, people, directoryPeople, editable, ac
   );
 }
 
+function ExecutiveReportingEditor({ position, positions, editable, labelFor, canReportTo, onAddParent, onRemoveParent, onAddChild, onRemoveChild }: {
+  position: ExecutivePosition;
+  positions: ExecutivePosition[];
+  editable: boolean;
+  labelFor: (position: ExecutivePosition) => string;
+  canReportTo: (positionId: string, managerPositionId: string) => boolean;
+  onAddParent: (positionId: string, managerPositionId: string) => void;
+  onRemoveParent: (positionId: string, managerPositionId: string) => void;
+  onAddChild: (managerPositionId: string, childPositionId: string) => void;
+  onRemoveChild: (managerPositionId: string, childPositionId: string) => void;
+}) {
+  const parentIds = unique(position.reportsToPositionIds || []);
+  const parents = positions.filter((candidate) => parentIds.includes(candidate.id));
+  const children = positions.filter((candidate) => (candidate.reportsToPositionIds || []).includes(position.id));
+  const parentCandidates = positions.filter((candidate) => !parentIds.includes(candidate.id) && canReportTo(position.id, candidate.id));
+  const childCandidates = positions.filter((candidate) => !children.some((child) => child.id === candidate.id) && canReportTo(candidate.id, position.id));
+
+  return (
+    <details className="s2-executive-reporting">
+      <summary><span>Reporting lines</span><small>{parents.length} reports to · {children.length} direct</small></summary>
+      <div className="s2-executive-report-grid">
+        <section>
+          <b>Reports to</b>
+          <p>Position(s) above this role</p>
+          <div className="s2-position-links">
+            {parents.map((parent) => <span key={parent.id}>{labelFor(parent)}{editable ? <button type="button" aria-label={`Remove ${position.title} reporting to ${parent.title}`} onClick={() => onRemoveParent(position.id, parent.id)}><X size={11} /></button> : null}</span>)}
+            {!parents.length ? <i>No executive manager assigned</i> : null}
+          </div>
+          {editable ? <select aria-label={`Add who ${position.title} reports to`} defaultValue="" disabled={!parentCandidates.length} onChange={(event) => { const id = event.target.value; event.target.value = ""; if (id) onAddParent(position.id, id); }}><option value="">{parentCandidates.length ? "Choose a manager position…" : "No available position"}</option>{parentCandidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{labelFor(candidate)}</option>)}</select> : null}
+        </section>
+        <section>
+          <b>Direct reports</b>
+          <p>Position(s) reporting to this role</p>
+          <div className="s2-position-links">
+            {children.map((child) => <span key={child.id}>{labelFor(child)}{editable ? <button type="button" aria-label={`Remove ${child.title} reporting to ${position.title}`} onClick={() => onRemoveChild(position.id, child.id)}><X size={11} /></button> : null}</span>)}
+            {!children.length ? <i>No direct-report position assigned</i> : null}
+          </div>
+          {editable ? <select aria-label={`Add who reports to ${position.title}`} defaultValue="" disabled={!childCandidates.length} onChange={(event) => { const id = event.target.value; event.target.value = ""; if (id) onAddChild(position.id, id); }}><option value="">{childCandidates.length ? "Choose a direct-report position…" : "No available position"}</option>{childCandidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{labelFor(candidate)}</option>)}</select> : null}
+        </section>
+      </div>
+    </details>
+  );
+}
+
 export function OrgStructure2({
   viewer,
   users,
@@ -303,6 +347,7 @@ export function OrgStructure2({
     () => chart.executivePositions || inferredExecutivePositions(active),
     [active, chart.executivePositions],
   );
+  const executiveById = useMemo(() => new Map(executivePositions.map((position) => [position.id, position])), [executivePositions]);
   const sortedActive = useMemo(() => [...active].sort((left, right) => {
     const compared = NAME_COLLATOR.compare(String(left.name || ""), String(right.name || ""));
     return peopleSort === "asc" ? compared : -compared;
@@ -327,6 +372,55 @@ export function OrgStructure2({
 
   function peopleFor(ids: string[]): OrgUser[] {
     return ids.map((id) => byId.get(id)).filter((person): person is OrgUser => Boolean(person));
+  }
+
+  function executivePositionLabel(position: ExecutivePosition): string {
+    const holders = peopleFor(position.personIds || []).map((person) => String(person.name || "").trim()).filter(Boolean);
+    return holders.length ? `${position.title} — ${holders.join(", ")}` : position.title;
+  }
+
+  function executiveParents(position: ExecutivePosition): ExecutivePosition[] {
+    return unique(position.reportsToPositionIds || []).map((id) => executiveById.get(id)).filter((row): row is ExecutivePosition => Boolean(row));
+  }
+
+  function executiveChildren(positionId: string): ExecutivePosition[] {
+    return executivePositions.filter((position) => (position.reportsToPositionIds || []).includes(positionId));
+  }
+
+  function canExecutiveReportTo(positionId: string, managerPositionId: string): boolean {
+    if (!positionId || !managerPositionId || positionId === managerPositionId || !executiveById.has(positionId) || !executiveById.has(managerPositionId)) return false;
+    const pending = [managerPositionId];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const currentId = pending.pop() || "";
+      if (currentId === positionId) return false;
+      if (!currentId || visited.has(currentId)) continue;
+      visited.add(currentId);
+      pending.push(...(executiveById.get(currentId)?.reportsToPositionIds || []));
+    }
+    return true;
+  }
+
+  function setExecutiveParents(positionId: string, parentIds: string[], message: string) {
+    const validParents = unique(parentIds).filter((parentId) => canExecutiveReportTo(positionId, parentId));
+    editExecutivePositions(
+      executivePositions.map((position) => position.id === positionId ? { ...position, reportsToPositionIds: validParents } : position),
+      message,
+    );
+  }
+
+  function addExecutiveParent(positionId: string, parentId: string) {
+    const position = executiveById.get(positionId);
+    const parent = executiveById.get(parentId);
+    if (!position || !parent || !canExecutiveReportTo(positionId, parentId)) return;
+    setExecutiveParents(positionId, [...(position.reportsToPositionIds || []), parentId], `${position.title} now reports to ${parent.title}.`);
+  }
+
+  function removeExecutiveParent(positionId: string, parentId: string) {
+    const position = executiveById.get(positionId);
+    const parent = executiveById.get(parentId);
+    if (!position || !parent) return;
+    setExecutiveParents(positionId, (position.reportsToPositionIds || []).filter((id) => id !== parentId), `${position.title} no longer reports to ${parent.title}.`);
   }
 
   const placedIds = new Set(chart.teams.flatMap(teamPeople));
@@ -578,7 +672,7 @@ export function OrgStructure2({
     const value = await dialog.prompt({ title: "New executive position", message: "Add any company-level leadership position needed in the Organization Chart.", placeholder: "CEO, President, COO, VP…", confirmLabel: "Add position" });
     const title = String(value || "").trim();
     if (!title) return;
-    editExecutivePositions([...executivePositions, { id: newId("executive"), title, personIds: [] }], "Executive position created.");
+    editExecutivePositions([...executivePositions, { id: newId("executive"), title, personIds: [], reportsToPositionIds: [] }], "Executive position created.");
   }
 
   async function renameExecutivePosition(position: ExecutivePosition) {
@@ -593,7 +687,12 @@ export function OrgStructure2({
     if (!(await dialog.confirm(`Remove ${position.title}? People keep their department and team assignments.`))) return;
     stage({
       ...chart,
-      executivePositions: executivePositions.filter((row) => row.id !== position.id),
+      executivePositions: executivePositions
+        .filter((row) => row.id !== position.id)
+        .map((row) => ({
+          ...row,
+          reportsToPositionIds: (row.reportsToPositionIds || []).filter((id) => id !== position.id),
+        })),
       removedExecutivePositionIds: unique([...(chart.removedExecutivePositionIds || []), position.id]),
     }, "Executive position removed.");
   }
@@ -672,6 +771,17 @@ export function OrgStructure2({
                 >
                   <header>{isOrgAdmin(viewer) ? <span className="s2-card-drag" draggable aria-label={`Move executive position ${position.title}`} title="Drag to reorder this position" onDragStart={(event) => startDiagramDrag(event, { kind: "executive", id: position.id })} onDragEnd={clearDiagramDrag}><GripVertical size={15} /></span> : null}<div><small>Executive position</small><b>{position.title}</b></div>{isOrgAdmin(viewer) ? <span className="s2-card-actions"><button type="button" aria-label={`Rename ${position.title}`} onClick={() => renameExecutivePosition(position)}><Pencil size={12} /></button><button type="button" aria-label={`Remove ${position.title}`} onClick={() => removeExecutivePosition(position)}><X size={13} /></button></span> : null}</header>
                   <DropZone kind="executive" targetId={position.id} label="Position holder" people={peopleFor(position.personIds || [])} directoryPeople={sortedActive} editable={isOrgAdmin(viewer)} activeTarget={dropTarget} draggedPersonId={dragPersonId} onTarget={setDropTarget} onAccept={acceptPerson} onRemove={(personId) => removePersonRole("executive", position.id, personId)} onOpen={setSelectedPersonId} />
+                  <ExecutiveReportingEditor
+                    position={position}
+                    positions={executivePositions}
+                    editable={isOrgAdmin(viewer)}
+                    labelFor={executivePositionLabel}
+                    canReportTo={canExecutiveReportTo}
+                    onAddParent={addExecutiveParent}
+                    onRemoveParent={removeExecutiveParent}
+                    onAddChild={(managerPositionId, childPositionId) => addExecutiveParent(childPositionId, managerPositionId)}
+                    onRemoveChild={(managerPositionId, childPositionId) => removeExecutiveParent(childPositionId, managerPositionId)}
+                  />
                 </article>
               ))}
               {!executivePositions.length ? <div className="s2-executive-empty"><Crown size={22} /><span><b>No executive positions yet</b><small>Add only the company-level positions your organization needs.</small></span>{isOrgAdmin(viewer) ? <button type="button" onClick={addExecutivePosition}><Plus size={14} /> Add position</button> : null}</div> : null}
@@ -801,8 +911,10 @@ export function OrgStructure2({
             <div className="s2-diagram" style={{ zoom: diagramZoom }}>
               <div className="s2-diagram-tier-label">Company leadership</div>
               <div className="s2-diagram-executives">
-                {executivePositions.length ? executivePositions.map((position) => (
-                  <article
+                {executivePositions.length ? executivePositions.map((position) => {
+                  const parents = executiveParents(position);
+                  const children = executiveChildren(position.id);
+                  return <article
                     className={`s2-diagram-node executive ${diagramDropTarget === `executive:${position.id}` ? "is-over" : ""}`}
                     key={position.id}
                     onDragOver={(event) => { if (diagramDragItem?.kind === "executive" && isOrgAdmin(viewer)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDiagramDropTarget(`executive:${position.id}`); } }}
@@ -810,8 +922,12 @@ export function OrgStructure2({
                   >
                     {isOrgAdmin(viewer) ? <span className="s2-diagram-move" draggable aria-label={`Move ${position.title}`} title="Drag to reorder executive positions" onDragStart={(event) => startDiagramDrag(event, { kind: "executive", id: position.id })} onDragEnd={clearDiagramDrag}><GripVertical size={14} /></span> : null}
                     <small>Executive position</small><h5>{position.title}</h5><DiagramPeople people={peopleFor(position.personIds || [])} namesVisible={diagramNamesVisible} emptyLabel="Position open" onOpen={setSelectedPersonId} />
+                    {parents.length || children.length ? <div className="s2-diagram-reporting">
+                      {parents.length ? <span><b>Reports to</b>{parents.map((row) => <i key={row.id}>{row.title}</i>)}</span> : null}
+                      {children.length ? <span><b>Direct reports</b>{children.map((row) => <i key={row.id}>{row.title}</i>)}</span> : null}
+                    </div> : null}
                   </article>
-                )) : <article className="s2-diagram-node executive"><small>Company leadership</small><h5>No executive positions</h5><span className="s2-diagram-empty">Add positions in Build chart</span></article>}
+                }) : <article className="s2-diagram-node executive"><small>Company leadership</small><h5>No executive positions</h5><span className="s2-diagram-empty">Add positions in Build chart</span></article>}
               </div>
               <div className="s2-diagram-trunk" aria-hidden="true" />
               {departments.length ? <div className="s2-diagram-departments" style={{ gridTemplateColumns: `repeat(${Math.max(departments.length, 1)}, minmax(285px, 1fr))` }}>

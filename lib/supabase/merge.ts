@@ -325,6 +325,8 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
             if (key === "executivePositions" && !hasExecutiveLayer) continue;
             const ours = Array.isArray(org[key]) ? org[key] as Json[] : [];
             const theirs = Array.isArray(serverOrg[key]) ? serverOrg[key] as Json[] : [];
+            const oursById = indexById(ours.filter((row): row is JsonObject => row !== null && !Array.isArray(row) && typeof row === "object"));
+            const theirsById = indexById(theirs.filter((row): row is JsonObject => row !== null && !Array.isArray(row) && typeof row === "object"));
             const seen = new Set<string>();
             const rows: Json[] = [];
             [...ours, ...theirs].forEach((row) => {
@@ -332,7 +334,13 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
                 if (id === null) { if (rows.indexOf(row) < 0) rows.push(row); return; }
                 if (seen.has(id) || removed.has(id)) return;
                 seen.add(id);
-                rows.push(row);
+                const oursRow = oursById.get(id);
+                const theirsRow = theirsById.get(id);
+                /* A previous app version knows the position id/title/holder,
+                   but not newer optional fields such as executive reporting.
+                   Merge those records field-by-field so an old open tab
+                   cannot erase a relationship simply by omitting the field. */
+                rows.push(oursRow && theirsRow ? mergeValues(undefined, oursRow, theirsRow) : row);
             });
             org[key] = rows;
         }

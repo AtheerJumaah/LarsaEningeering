@@ -44,6 +44,12 @@ export type ExecutivePosition = {
   title: string;
   /* A position normally has one holder, but co-leadership stays possible. */
   personIds: string[];
+  /**
+   * Position-level reporting stays separate from the people who currently
+   * hold each position. Direct reports are derived by reversing these links,
+   * so the two sides of the chart can never disagree.
+   */
+  reportsToPositionIds?: string[];
 };
 
 export type OrgChart = {
@@ -111,6 +117,9 @@ export function readStoredOrg(): OrgChart | null {
         personIds: Array.isArray(row.personIds)
           ? row.personIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
           : [],
+        ...(Array.isArray(row.reportsToPositionIds) ? {
+          reportsToPositionIds: row.reportsToPositionIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0 && value !== id),
+        } : {}),
       }];
     })
     : undefined;

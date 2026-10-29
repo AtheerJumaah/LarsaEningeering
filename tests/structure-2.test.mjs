@@ -24,6 +24,10 @@ test("Organization Chart supports overlapping roles, drag assignment, a movable 
   assert.match(structure2, /kind="executive"/);
   assert.match(structure2, /Executive positions/);
   assert.match(structure2, /addExecutivePosition/);
+  assert.match(structure2, /function ExecutiveReportingEditor/);
+  assert.match(structure2, /Reports to/);
+  assert.match(structure2, /Direct reports/);
+  assert.match(structure2, /canExecutiveReportTo/);
   assert.match(structure2, /function PeopleSortControl/);
   assert.match(structure2, /function PeoplePicker/);
   assert.match(structure2, /Choose person/);
@@ -61,5 +65,7 @@ test("Organization Chart persists executive positions without breaking older sav
   assert.match(org, /export type ExecutivePosition/);
   assert.match(org, /executivePositions\?: ExecutivePosition\[\]/);
   assert.match(org, /Array\.isArray\(org\.executivePositions\)/);
+  assert.match(org, /reportsToPositionIds\?: string\[\]/);
+  assert.match(org, /Array\.isArray\(row\.reportsToPositionIds\)/);
   assert.match(org, /\.\.\.\(executivePositions \? \{ executivePositions \} : \{\}\)/);
 });
