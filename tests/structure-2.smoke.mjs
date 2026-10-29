@@ -260,6 +260,29 @@ try {
   await inspector.getByText("Casey Operations", { exact: true }).waitFor();
   await inspector.getByRole("button", { name: "Close assignments", exact: true }).click();
 
+  assert.equal(await diagram.getByRole("button", { name: "Freeform canvas", exact: true }).getAttribute("aria-pressed"), "true", "the visual chart should open as a Visio-style freeform canvas");
+  assert.ok(await diagram.locator(".s2-freeform-link").count() >= 3, "the freeform canvas must draw reporting and department-to-team connectors");
+  const cooBeforeMove = await cooDiagramNode.boundingBox();
+  const cooMoveHandle = cooDiagramNode.getByRole("button", { name: "Move Chief Operating Officer (COO) freely", exact: true });
+  const cooMoveBox = await cooMoveHandle.boundingBox();
+  assert.ok(cooBeforeMove && cooMoveBox, "the COO freeform card must have a usable move handle");
+  await page.mouse.move(cooMoveBox.x + cooMoveBox.width / 2, cooMoveBox.y + cooMoveBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(cooMoveBox.x + cooMoveBox.width / 2 + 90, cooMoveBox.y + cooMoveBox.height / 2 + 50, { steps: 6 });
+  await page.mouse.up();
+  const cooAfterMove = await cooDiagramNode.boundingBox();
+  assert.ok(cooAfterMove && Math.abs(cooAfterMove.x - cooBeforeMove.x) >= 70 && Math.abs(cooAfterMove.y - cooBeforeMove.y) >= 35, "a freeform card must move independently on both axes");
+  assert.equal(await panel.getByRole("button", { name: "Save changes", exact: true }).isEnabled(), true, "a freeform move must join the explicit save workflow");
+  await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+  await panel.getByText("Organization changes saved to the company server.", { exact: true }).waitFor();
+  assert.ok(staff.org.diagramPositions?.[`executive:${savedCooPosition.id}`], "saved freeform position must persist in the synchronized organization document");
+  await page.screenshot({ path: ".organization-diagram-desktop.png", fullPage: false });
+  await diagram.getByRole("button", { name: "Auto arrange", exact: true }).click();
+  assert.equal(await panel.getByRole("button", { name: "Save changes", exact: true }).isEnabled(), true, "Auto arrange must remain part of the explicit save workflow");
+  await panel.getByRole("button", { name: "Discard", exact: true }).click();
+  await diagram.getByRole("button", { name: "Auto hierarchy", exact: true }).click();
+  assert.equal(await diagram.getByRole("button", { name: "Auto hierarchy", exact: true }).getAttribute("aria-pressed"), "true", "the generated hierarchy must remain available as an alternate layout");
+
   const departmentNodes = diagram.locator(".s2-diagram-node.department");
   assert.deepEqual(await departmentNodes.locator("h5").allTextContents(), ["Management", "Architecture"]);
   const managementNode = departmentNodes.filter({ hasText: "Management" });
@@ -289,8 +312,6 @@ try {
   assert.equal(await architectureBranch.locator(".s2-diagram-node.team").count(), 2, "a team must move between departments from the visual chart");
   await panel.getByRole("button", { name: "Discard", exact: true }).click();
   assert.equal(await architectureBranch.locator(".s2-diagram-node.team").count(), 1, "Discard must restore a moved team");
-  await page.screenshot({ path: ".organization-diagram-desktop.png", fullPage: false });
-
   await panel.getByRole("tab", { name: "Build chart", exact: true }).click();
   await page.screenshot({ path: ".organization-chart-desktop.png", fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });

@@ -53,6 +53,13 @@ test("Organization Chart supports overlapping roles, drag assignment, a movable 
   assert.match(structure2, /acceptDiagramDrop/);
   assert.match(structure2, /beginDiagramPan/);
   assert.match(structure2, /fitDiagramView/);
+  assert.match(structure2, /Freeform canvas/);
+  assert.match(structure2, /Auto hierarchy/);
+  assert.match(structure2, /automaticDiagramPositions/);
+  assert.match(structure2, /beginFreeformMove/);
+  assert.match(structure2, /autoArrangeDiagram/);
+  assert.match(structure2, /s2-freeform-links/);
+  assert.match(structure2, /diagramPositions/);
   assert.match(structure2, /aria-label="Zoom out"/);
   assert.match(structure2, /application\/x-larsa-organization/);
   assert.match(structure2, /Additional reporting lines/);
@@ -66,6 +73,8 @@ test("Organization Chart persists executive positions without breaking older sav
   assert.match(org, /executivePositions\?: ExecutivePosition\[\]/);
   assert.match(org, /Array\.isArray\(org\.executivePositions\)/);
   assert.match(org, /reportsToPositionIds\?: string\[\]/);
+  assert.match(org, /diagramPositions\?: Record<string, OrgDiagramPosition>/);
+  assert.match(org, /Number\.isFinite\(x\)/);
   assert.match(org, /Array\.isArray\(row\.reportsToPositionIds\)/);
   assert.match(org, /\.\.\.\(executivePositions \? \{ executivePositions \} : \{\}\)/);
 });

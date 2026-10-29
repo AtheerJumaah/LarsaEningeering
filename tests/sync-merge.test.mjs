@@ -153,6 +153,13 @@ test("a stale structure snapshot cannot erase reporting assignments", () => {
   assert.deepEqual(mergeValues(server, local, server).org.reporting, { u2: ["u1"] });
 });
 
+test("a stale structure snapshot cannot erase saved freeform card positions", () => {
+  const server = { org: { departments: [], teams: [], diagramPositions: { "department:dep-a": { x: 420, y: 360 } } } };
+  const local = { org: { departments: [], teams: [], diagramPositions: {} } };
+  assert.deepEqual(protectOutgoing(local, server).org.diagramPositions, server.org.diagramPositions);
+  assert.deepEqual(mergeValues(server, local, server).org.diagramPositions, server.org.diagramPositions);
+});
+
 test("bootstrap preserves a locally saved chart when the server snapshot predates the structure edit", () => {
   const dep = { id: "dep-a", name: "Architecture", headIds: [] };
   const team = { id: "team-a", departmentId: "dep-a", name: "Design", leadIds: [], memberIds: [] };
