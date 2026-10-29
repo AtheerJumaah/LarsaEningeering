@@ -89,7 +89,7 @@ const TOMBSTONE_KEYS = new Set(Object.values(GUARDED_COLLECTIONS));
    editor rewrites `flowConfig[employeeId]`, so clearing one chain is a change
    to a key both sides have and merges normally. Only the disappearance of a
    whole person is refused, and no screen in the app does that. */
-export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule", "reporting", "diagramPositions"]);
+export const ADD_ONLY_MAPS = new Set(["flowConfig", "schedule", "reporting"]);
 
 /* Org structure needs the same stale-copy protection as the staff directory,
    but it has explicit delete actions. These tombstones let a deliberate
@@ -309,9 +309,6 @@ export function protectOutgoing(outgoing: Json, server: Json): Json {
                 if (!Object.prototype.hasOwnProperty.call(reporting, personId)) reporting[personId] = (serverOrg.reporting as JsonObject)[personId];
             });
             org.reporting = reporting;
-        }
-        if (isPlainObject(org.diagramPositions) && isPlainObject(serverOrg.diagramPositions)) {
-            org.diagramPositions = { ...(serverOrg.diagramPositions as JsonObject), ...(org.diagramPositions as JsonObject) };
         }
         const removedDepartments = new Set(unionIds(org[ORG_DEPARTMENT_TOMBSTONES], serverOrg[ORG_DEPARTMENT_TOMBSTONES]));
         const removedTeams = new Set(unionIds(org[ORG_TEAM_TOMBSTONES], serverOrg[ORG_TEAM_TOMBSTONES]));

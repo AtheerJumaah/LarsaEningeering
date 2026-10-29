@@ -3121,6 +3121,21 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* Trim / reset panel on the clock screen. */
 .trim-open { margin-top: 10px; }
 .trim-panel { margin-top: 12px; }
+.hours-attention { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; margin: 14px 0 0; padding: 16px 18px; border: 1px solid #efc778; border-radius: 16px; background: linear-gradient(135deg, #fffaf0, #fff 62%); box-shadow: 0 8px 24px rgb(126 82 17 / 8%); }
+.hours-attention-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: #fff0c9; color: #9a5a00; }
+.hours-attention h3 { margin: 3px 0 4px; font-size: 16px; }
+.hours-attention p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.hours-attention > button { min-height: 40px; padding: 9px 14px; border: 0; border-radius: 10px; background: #263f77; color: #fff; font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; white-space: nowrap; }
+.hours-attention > button:hover { background: #1f3566; }
+.trim-review-choice { display: flex; align-items: flex-start; gap: 8px; flex-basis: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid #d8e0ec; border-radius: 9px; background: #f7f9fc; cursor: pointer; }
+.trim-review-choice input { margin-top: 2px; }
+.trim-review-choice span { display: grid; gap: 2px; }
+.trim-review-choice b { font-size: 11px; }
+.trim-review-choice small { color: var(--muted); font-size: 10px; }
+@media (max-width: 720px) {
+  .hours-attention { grid-template-columns: auto minmax(0, 1fr); }
+  .hours-attention > button { grid-column: 1 / -1; width: 100%; }
+}
 .trim-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   padding: 11px 0; border-bottom: 1px solid #eef0f3; }
 .trim-row:last-of-type { border-bottom: 0; }

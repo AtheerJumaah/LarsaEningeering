@@ -37,42 +37,12 @@ import {
   teamsVisibleTo,
   writeOrg,
 } from "../lib/org";
-import type { Department, ExecutivePosition, OrgChart, OrgDiagramPosition, OrgUser, Team } from "../lib/org";
+import type { Department, ExecutivePosition, OrgChart, OrgUser, Team } from "../lib/org";
 
 type Structure2View = "chart" | "diagram" | "matrix";
 type DropKind = "executive" | "head" | "lead" | "member";
 type PeopleSort = "asc" | "desc";
 type DiagramDragItem = { kind: "executive" | "department" | "team"; id: string };
-type DiagramMode = "freeform" | "hierarchy";
-type FreeformDrag = DiagramDragItem & { key: string; pointerId: number; startX: number; startY: number; origin: OrgDiagramPosition };
-
-const FREEFORM_NODE_WIDTH = 240;
-const FREEFORM_EXECUTIVE_HEIGHT = 210;
-const FREEFORM_DEPARTMENT_HEIGHT = 150;
-const FREEFORM_TEAM_HEIGHT = 215;
-
-function diagramNodeKey(kind: DiagramDragItem["kind"], id: string): string {
-  return `${kind}:${id}`;
-}
-
-function automaticDiagramPositions(executives: ExecutivePosition[], departments: Department[], teams: Team[]): Record<string, OrgDiagramPosition> {
-  const departmentWidth = Math.max(1, departments.length) * 300;
-  const executiveWidth = Math.max(1, executives.length) * 270;
-  const canvasWidth = Math.max(1080, departmentWidth, executiveWidth);
-  const positions: Record<string, OrgDiagramPosition> = {};
-  executives.forEach((position, index) => {
-    const rowWidth = executives.length * 270;
-    positions[diagramNodeKey("executive", position.id)] = { x: Math.round((canvasWidth - rowWidth) / 2 + index * 270 + 15), y: 55 };
-  });
-  departments.forEach((department, departmentIndex) => {
-    const x = Math.round((canvasWidth - departmentWidth) / 2 + departmentIndex * 300 + 30);
-    positions[diagramNodeKey("department", department.id)] = { x, y: 340 };
-    teams.filter((team) => team.departmentId === department.id).forEach((team, teamIndex) => {
-      positions[diagramNodeKey("team", team.id)] = { x, y: 555 + teamIndex * 220 };
-    });
-  });
-  return positions;
-}
 
 const NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 const EXECUTIVE_TITLES = [
@@ -303,12 +273,10 @@ export function OrgStructure2({
   const structureRef = useRef<HTMLDivElement | null>(null);
   const diagramScrollRef = useRef<HTMLDivElement | null>(null);
   const diagramPanRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
-  const freeformDragRef = useRef<FreeformDrag | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [draft, setDraft] = useState<OrgChart | null>(null);
   const [view, setView] = useState<Structure2View>("chart");
-  const [diagramMode, setDiagramMode] = useState<DiagramMode>("freeform");
   const [diagramNamesVisible, setDiagramNamesVisible] = useState(true);
   const [diagramZoom, setDiagramZoom] = useState(1);
   const [diagramPanning, setDiagramPanning] = useState(false);
@@ -320,8 +288,6 @@ export function OrgStructure2({
   const [dragTeamId, setDragTeamId] = useState("");
   const [dragDepartmentId, setDragDepartmentId] = useState("");
   const [diagramDragItem, setDiagramDragItem] = useState<DiagramDragItem | null>(null);
-  const [freeformDrag, setFreeformDrag] = useState<FreeformDrag | null>(null);
-  const [freeformPreview, setFreeformPreview] = useState<Record<string, OrgDiagramPosition>>({});
   const [diagramDropTarget, setDiagramDropTarget] = useState("");
   const [dropTarget, setDropTarget] = useState("");
   const [managerChoice, setManagerChoice] = useState("");
@@ -371,32 +337,17 @@ export function OrgStructure2({
   const chart = draft || savedChart;
   const active = useMemo(() => users.filter((row) => row.enabled !== false && String(row.name || "").trim()), [users]);
   const byId = useMemo(() => new Map(active.map((row) => [row.id, row])), [active]);
-  const visibleTeams = useMemo(() => teamsVisibleTo(chart, viewer), [chart, viewer]);
-  const visibleTeamIds = useMemo(() => new Set(visibleTeams.map((row) => row.id)), [visibleTeams]);
-  const departments = useMemo(() => chart.departments.filter(
+  const visibleTeams = teamsVisibleTo(chart, viewer);
+  const visibleTeamIds = new Set(visibleTeams.map((row) => row.id));
+  const departments = chart.departments.filter(
     (department) => isOrgAdmin(viewer) || visibleTeams.some((team) => team.departmentId === department.id),
-  ), [chart.departments, visibleTeams, viewer]);
+  );
   const selectedPerson = byId.get(selectedPersonId) || null;
   const executivePositions = useMemo(
     () => chart.executivePositions || inferredExecutivePositions(active),
     [active, chart.executivePositions],
   );
   const executiveById = useMemo(() => new Map(executivePositions.map((position) => [position.id, position])), [executivePositions]);
-  const automaticPositions = useMemo(
-    () => automaticDiagramPositions(executivePositions, departments, visibleTeams),
-    [departments, executivePositions, visibleTeams],
-  );
-  const diagramPositions = useMemo(
-    () => ({ ...automaticPositions, ...(chart.diagramPositions || {}), ...freeformPreview }),
-    [automaticPositions, chart.diagramPositions, freeformPreview],
-  );
-  const freeformCanvasSize = useMemo(() => {
-    const entries = Object.entries(diagramPositions);
-    return {
-      width: Math.max(1080, ...entries.map(([, position]) => position.x + FREEFORM_NODE_WIDTH + 90)),
-      height: Math.max(760, ...entries.map(([key, position]) => position.y + (key.startsWith("executive:") ? FREEFORM_EXECUTIVE_HEIGHT : key.startsWith("department:") ? FREEFORM_DEPARTMENT_HEIGHT : FREEFORM_TEAM_HEIGHT) + 90)),
-    };
-  }, [diagramPositions]);
   const sortedActive = useMemo(() => [...active].sort((left, right) => {
     const compared = NAME_COLLATOR.compare(String(left.name || ""), String(right.name || ""));
     return peopleSort === "asc" ? compared : -compared;
@@ -534,7 +485,6 @@ export function OrgStructure2({
 
   function discardChanges() {
     setDraft(null);
-    setFreeformPreview({});
     setNote("Unsaved organization changes discarded.");
   }
 
@@ -665,75 +615,8 @@ export function OrgStructure2({
     clearDiagramDrag();
   }
 
-  function canMoveFreeformNode(item: DiagramDragItem): boolean {
-    if (item.kind === "executive" || item.kind === "department") return isOrgAdmin(viewer);
-    const team = chart.teams.find((row) => row.id === item.id);
-    return Boolean(team && canEditDepartment(chart, viewer, team.departmentId, users));
-  }
-
-  function beginFreeformMove(event: ReactPointerEvent<HTMLElement>, item: DiagramDragItem) {
-    if (event.button !== 0 || !canMoveFreeformNode(item)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const key = diagramNodeKey(item.kind, item.id);
-    const drag: FreeformDrag = {
-      ...item,
-      key,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      origin: diagramPositions[key] || { x: 0, y: 0 },
-    };
-    freeformDragRef.current = drag;
-    setFreeformDrag(drag);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function freeformPositionAt(event: ReactPointerEvent<HTMLElement>, drag: FreeformDrag): OrgDiagramPosition {
-    const x = drag.origin.x + (event.clientX - drag.startX) / diagramZoom;
-    const y = drag.origin.y + (event.clientY - drag.startY) / diagramZoom;
-    return {
-      x: Math.max(0, Math.round(x / 10) * 10),
-      y: Math.max(0, Math.round(y / 10) * 10),
-    };
-  }
-
-  function moveFreeformNode(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = freeformDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const position = freeformPositionAt(event, drag);
-    setFreeformPreview((current) => {
-      const previous = current[drag.key];
-      return previous?.x === position.x && previous?.y === position.y ? current : { [drag.key]: position };
-    });
-  }
-
-  function endFreeformMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = freeformDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const position = freeformPositionAt(event, drag);
-    const moved = position.x !== drag.origin.x || position.y !== drag.origin.y;
-    freeformDragRef.current = null;
-    setFreeformDrag(null);
-    setFreeformPreview({});
-    if (moved) {
-      stage({
-        ...chart,
-        diagramPositions: { ...(chart.diagramPositions || {}), [drag.key]: position },
-      }, "Visual chart position updated.");
-    }
-  }
-
-  function autoArrangeDiagram() {
-    if (!isOrgAdmin(viewer)) return;
-    setFreeformPreview({});
-    stage({ ...chart, diagramPositions: automaticPositions }, "Visual chart arranged automatically.");
-    diagramScrollRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" });
-  }
-
   function beginDiagramPan(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || freeformDragRef.current || (event.target as HTMLElement).closest("button, .s2-diagram-node, .s2-diagram-move, .s2-freeform-move")) return;
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button, .s2-diagram-node, .s2-diagram-move")) return;
     const surface = diagramScrollRef.current;
     if (!surface) return;
     diagramPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: surface.scrollLeft, top: surface.scrollTop };
@@ -770,7 +653,7 @@ export function OrgStructure2({
 
   function fitDiagramView() {
     const surface = diagramScrollRef.current;
-    const diagram = surface?.querySelector<HTMLElement>(".s2-freeform-canvas, .s2-diagram");
+    const diagram = surface?.querySelector<HTMLElement>(".s2-diagram");
     if (!surface || !diagram) return;
     const naturalWidth = Math.max(1, diagram.getBoundingClientRect().width / diagramZoom);
     const fitted = Math.min(1, Math.max(.6, Math.floor(((surface.clientWidth - 28) / naturalWidth) * 10) / 10));
@@ -802,8 +685,6 @@ export function OrgStructure2({
 
   async function removeExecutivePosition(position: ExecutivePosition) {
     if (!(await dialog.confirm(`Remove ${position.title}? People keep their department and team assignments.`))) return;
-    const diagramPositions = { ...(chart.diagramPositions || {}) };
-    delete diagramPositions[diagramNodeKey("executive", position.id)];
     stage({
       ...chart,
       executivePositions: executivePositions
@@ -813,7 +694,6 @@ export function OrgStructure2({
           reportsToPositionIds: (row.reportsToPositionIds || []).filter((id) => id !== position.id),
         })),
       removedExecutivePositionIds: unique([...(chart.removedExecutivePositionIds || []), position.id]),
-      diagramPositions,
     }, "Executive position removed.");
   }
 
@@ -838,9 +718,7 @@ export function OrgStructure2({
 
   async function removeTeam(team: Team) {
     if (!(await dialog.confirm(`Remove ${team.name}? People keep their other assignments.`))) return;
-    const diagramPositions = { ...(chart.diagramPositions || {}) };
-    delete diagramPositions[diagramNodeKey("team", team.id)];
-    stage({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id), removedTeamIds: unique([...(chart.removedTeamIds || []), team.id]), diagramPositions }, "Team removed.");
+    stage({ ...chart, teams: chart.teams.filter((row) => row.id !== team.id), removedTeamIds: unique([...(chart.removedTeamIds || []), team.id]) }, "Team removed.");
   }
 
   return (
@@ -1008,13 +886,8 @@ export function OrgStructure2({
       ) : view === "diagram" ? (
         <section className="s2-diagram-card">
           <header>
-            <div><span className="eyebrow"><Network size={13} /> Interactive visual organization chart</span><h4>Company reporting structure</h4><p>Use Freeform canvas like a Visio workspace: move every card anywhere, pan, zoom, and save the layout. Auto hierarchy remains available for a clean generated view.</p></div>
+            <div><span className="eyebrow"><Network size={13} /> Interactive visual organization chart</span><h4>Company reporting structure</h4><p>Drag the canvas to move around. Drag card handles to switch positions, reorder departments and teams, or move a team into another department.</p></div>
             <div className="s2-diagram-actions">
-              <div className="s2-diagram-mode" role="group" aria-label="Visual chart layout mode">
-                <button type="button" aria-pressed={diagramMode === "freeform"} className={diagramMode === "freeform" ? "active" : ""} onClick={() => setDiagramMode("freeform")}>Freeform canvas</button>
-                <button type="button" aria-pressed={diagramMode === "hierarchy"} className={diagramMode === "hierarchy" ? "active" : ""} onClick={() => setDiagramMode("hierarchy")}>Auto hierarchy</button>
-              </div>
-              {diagramMode === "freeform" && isOrgAdmin(viewer) ? <button type="button" className="s2-auto-arrange" onClick={autoArrangeDiagram}><LayoutGrid size={14} /> Auto arrange</button> : null}
               <span className="s2-diagram-pan-help">Drag background to pan</span>
               <div className="s2-diagram-zoom" role="group" aria-label="Visual chart zoom controls">
                 <button type="button" aria-label="Zoom out" disabled={diagramZoom <= .6} onClick={() => changeDiagramZoom(-.1)}><Minus size={14} /></button>
@@ -1031,69 +904,11 @@ export function OrgStructure2({
             className={`s2-diagram-scroll${diagramPanning ? " is-panning" : ""}`}
             aria-label="Interactive visual organization chart. Drag the background to pan."
             onPointerDown={beginDiagramPan}
-            onPointerMove={(event) => { moveDiagramPan(event); moveFreeformNode(event); }}
-            onPointerUp={(event) => { endDiagramPan(event); endFreeformMove(event); }}
-            onPointerCancel={(event) => { endDiagramPan(event); freeformDragRef.current = null; setFreeformDrag(null); setFreeformPreview({}); }}
+            onPointerMove={moveDiagramPan}
+            onPointerUp={endDiagramPan}
+            onPointerCancel={endDiagramPan}
           >
-            {diagramMode === "freeform" ? <div
-              className="s2-freeform-canvas"
-              style={{ width: freeformCanvasSize.width, height: freeformCanvasSize.height, zoom: diagramZoom }}
-            >
-              <svg className="s2-freeform-links" width={freeformCanvasSize.width} height={freeformCanvasSize.height} aria-hidden="true">
-                <defs><marker id="s2-freeform-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>
-                {executivePositions.flatMap((position) => (position.reportsToPositionIds || []).map((managerId) => {
-                  const from = diagramPositions[diagramNodeKey("executive", managerId)];
-                  const to = diagramPositions[diagramNodeKey("executive", position.id)];
-                  if (!from || !to) return null;
-                  const fromX = from.x + FREEFORM_NODE_WIDTH / 2;
-                  const fromY = from.y + FREEFORM_EXECUTIVE_HEIGHT;
-                  const toX = to.x + FREEFORM_NODE_WIDTH / 2;
-                  const toY = to.y;
-                  const bendY = (fromY + toY) / 2;
-                  return <path className="s2-freeform-link executive" key={`executive:${managerId}:${position.id}`} d={`M ${fromX} ${fromY} C ${fromX} ${bendY}, ${toX} ${bendY}, ${toX} ${toY}`} markerEnd="url(#s2-freeform-arrow)" />;
-                }))}
-                {departments.flatMap((department) => departmentTeams(department.id).map((team) => {
-                  const from = diagramPositions[diagramNodeKey("department", department.id)];
-                  const to = diagramPositions[diagramNodeKey("team", team.id)];
-                  if (!from || !to) return null;
-                  const fromX = from.x + FREEFORM_NODE_WIDTH / 2;
-                  const fromY = from.y + FREEFORM_DEPARTMENT_HEIGHT;
-                  const toX = to.x + FREEFORM_NODE_WIDTH / 2;
-                  const toY = to.y;
-                  const bendY = (fromY + toY) / 2;
-                  return <path className="s2-freeform-link structure" key={`department:${department.id}:${team.id}`} d={`M ${fromX} ${fromY} C ${fromX} ${bendY}, ${toX} ${bendY}, ${toX} ${toY}`} markerEnd="url(#s2-freeform-arrow)" />;
-                }))}
-              </svg>
-              {executivePositions.map((position) => {
-                const key = diagramNodeKey("executive", position.id);
-                const location = diagramPositions[key] || { x: 0, y: 0 };
-                const parents = executiveParents(position);
-                const children = executiveChildren(position.id);
-                return <article className={`s2-diagram-node s2-freeform-node executive${freeformDrag?.key === key ? " is-moving" : ""}`} key={key} style={{ left: location.x, top: location.y, width: FREEFORM_NODE_WIDTH, height: FREEFORM_EXECUTIVE_HEIGHT }}>
-                  {isOrgAdmin(viewer) ? <button type="button" className="s2-freeform-move" aria-label={`Move ${position.title} freely`} title="Drag this card anywhere" onPointerDown={(event) => beginFreeformMove(event, { kind: "executive", id: position.id })}><GripVertical size={14} /></button> : null}
-                  <small>Executive position</small><h5>{position.title}</h5><DiagramPeople people={peopleFor(position.personIds || [])} namesVisible={diagramNamesVisible} emptyLabel="Position open" onOpen={setSelectedPersonId} />
-                  {parents.length || children.length ? <div className="s2-diagram-reporting">{parents.length ? <span><b>Reports to</b>{parents.map((row) => <i key={row.id}>{row.title}</i>)}</span> : null}{children.length ? <span><b>Direct reports</b>{children.map((row) => <i key={row.id}>{row.title}</i>)}</span> : null}</div> : null}
-                </article>;
-              })}
-              {departments.map((department) => {
-                const key = diagramNodeKey("department", department.id);
-                const location = diagramPositions[key] || { x: 0, y: 0 };
-                return <article className={`s2-diagram-node s2-freeform-node department${freeformDrag?.key === key ? " is-moving" : ""}`} key={key} style={{ left: location.x, top: location.y, width: FREEFORM_NODE_WIDTH, height: FREEFORM_DEPARTMENT_HEIGHT }}>
-                  {isOrgAdmin(viewer) ? <button type="button" className="s2-freeform-move" aria-label={`Move ${department.name} freely`} title="Drag this card anywhere" onPointerDown={(event) => beginFreeformMove(event, { kind: "department", id: department.id })}><GripVertical size={14} /></button> : null}
-                  <small>Department</small><h5>{department.name}</h5><span className="s2-diagram-role">Department head</span><DiagramPeople people={peopleFor(department.headIds || [])} namesVisible={diagramNamesVisible} emptyLabel="No head assigned" onOpen={setSelectedPersonId} />
-                </article>;
-              })}
-              {visibleTeams.map((team) => {
-                const key = diagramNodeKey("team", team.id);
-                const location = diagramPositions[key] || { x: 0, y: 0 };
-                const movable = canEditDepartment(chart, viewer, team.departmentId, users);
-                return <article className={`s2-diagram-node s2-freeform-node team${freeformDrag?.key === key ? " is-moving" : ""}`} key={key} style={{ left: location.x, top: location.y, width: FREEFORM_NODE_WIDTH, height: FREEFORM_TEAM_HEIGHT }}>
-                  {movable ? <button type="button" className="s2-freeform-move" aria-label={`Move ${team.name} freely`} title="Drag this card anywhere" onPointerDown={(event) => beginFreeformMove(event, { kind: "team", id: team.id })}><GripVertical size={14} /></button> : null}
-                  <small>Team</small><h5>{team.name}</h5><span className="s2-diagram-role">Team lead</span><DiagramPeople people={peopleFor(team.leadIds || [])} namesVisible={diagramNamesVisible} emptyLabel="No lead assigned" onOpen={setSelectedPersonId} /><span className="s2-diagram-role members">Members</span><DiagramPeople people={peopleFor(team.memberIds || [])} namesVisible={diagramNamesVisible} emptyLabel="No members assigned" onOpen={setSelectedPersonId} />
-                </article>;
-              })}
-              {!executivePositions.length && !departments.length ? <div className="s2-blank s2-freeform-blank"><Network size={28} /><h4>No structure to display</h4><p>Create executive positions, departments, and teams in Build chart.</p></div> : null}
-            </div> : <div className="s2-diagram" style={{ zoom: diagramZoom }}>
+            <div className="s2-diagram" style={{ zoom: diagramZoom }}>
               <div className="s2-diagram-tier-label">Company leadership</div>
               <div className="s2-diagram-executives">
                 {executivePositions.length ? executivePositions.map((position) => {
@@ -1162,7 +977,7 @@ export function OrgStructure2({
                   </section>;
                 })}
               </div> : <div className="s2-blank"><Network size={28} /><h4>No departments to display</h4><p>Create the structure in Build chart, then return here to view it.</p></div>}
-            </div>}
+            </div>
           </div>
         </section>
       ) : (

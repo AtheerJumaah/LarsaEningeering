@@ -435,11 +435,6 @@ button[aria-label="Back to home"] svg {
 .s2-diagram-card h4 { margin: 3px 0; font-size: 17px; }
 .s2-diagram-card > header p { margin: 0; max-width: 760px; color: var(--muted); font-size: 11px; }
 .s2-diagram-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
-.s2-diagram-mode { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid #ccd5e2; border-radius: 10px; background: #eef2f7; }
-.s2-diagram-mode button { min-height: 29px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: #5c6879; font: inherit; font-size: 9.5px; font-weight: 850; cursor: pointer; }
-.s2-diagram-mode button.active { background: #263f77; color: #fff; box-shadow: 0 2px 7px rgb(38 63 119 / 22%); }
-.s2-auto-arrange { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 7px 10px; border: 1px solid #b9c7dc; border-radius: 9px; background: #f2f6fc; color: #263f77; font: inherit; font-size: 9.5px; font-weight: 850; cursor: pointer; }
-.s2-auto-arrange:hover { border-color: #7188ae; background: #e8eff9; }
 .s2-diagram-pan-help { color: var(--muted); font-size: 9.5px; font-weight: 750; white-space: nowrap; }
 .s2-diagram-zoom { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 .s2-diagram-zoom button { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 9.5px; font-weight: 800; cursor: pointer; }
@@ -450,20 +445,6 @@ button[aria-label="Back to home"] svg {
 .s2-diagram-names:hover { background: var(--soft); }
 .s2-diagram-scroll { min-height: 430px; max-height: 72dvh; overflow: auto; padding: 14px; border: 1px solid #dbe1ea; border-radius: 13px; background: linear-gradient(#f8fafc 1px, transparent 1px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), #fff; background-size: 22px 22px; scrollbar-color: #8d99aa #edf0f4; cursor: grab; touch-action: pan-x pan-y; user-select: none; }
 .s2-diagram-scroll.is-panning { cursor: grabbing; }
-.s2-freeform-canvas { position: relative; min-width: 100%; transform-origin: top left; background-image: radial-gradient(circle, rgb(95 112 140 / 18%) 1px, transparent 1.2px); background-size: 22px 22px; }
-.s2-freeform-links { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
-.s2-freeform-links marker path { fill: #76849a; }
-.s2-freeform-link { fill: none; stroke: #8390a4; stroke-width: 2; opacity: .85; }
-.s2-freeform-link.executive { stroke: #9a7839; }
-.s2-freeform-link.structure { stroke: #5d789e; }
-.s2-freeform-node { position: absolute; z-index: 2; overflow: auto; cursor: default; resize: none; transition: border-color .15s ease, box-shadow .15s ease; }
-.s2-freeform-node.is-moving { z-index: 8; border-color: #244a91; box-shadow: 0 0 0 4px rgb(36 74 145 / 14%), 0 18px 36px rgb(15 23 42 / 20%); transition: none; }
-.s2-freeform-node .s2-diagram-people { max-height: 62px; overflow: auto; scrollbar-width: thin; }
-.s2-freeform-node.executive .s2-diagram-reporting { max-height: 76px; overflow: auto; }
-.s2-freeform-move { position: absolute; top: 8px; right: 8px; z-index: 3; display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 27px; padding: 0; border: 1px solid #c6d0de; border-radius: 7px; background: #f4f7fb; color: #52647f; cursor: grab; touch-action: none; }
-.s2-freeform-move:hover { border-color: #7188ae; background: #e8eff9; color: #263f77; }
-.s2-freeform-move:active { cursor: grabbing; }
-.s2-freeform-blank { position: absolute; top: 160px; left: 50%; width: min(460px, calc(100% - 40px)); transform: translateX(-50%); }
 .s2-diagram { display: grid; justify-items: stretch; min-width: max(760px, 100%); padding: 5px 4px 18px; }
 .s2-diagram-tier-label { justify-self: center; margin-bottom: 8px; padding: 4px 9px; border-radius: 999px; background: #263f77; color: #fff; font-size: 9px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
 .s2-diagram-executives { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
@@ -572,9 +553,6 @@ button[aria-label="Back to home"] svg {
   .s2-view-toggle { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
   .s2-view-toggle button { flex: 1; justify-content: center; padding-inline: 5px; font-size: 10.5px; }
   .s2-diagram-actions { align-items: stretch; flex-direction: column; }
-  .s2-diagram-mode { justify-content: center; }
-  .s2-diagram-mode button { flex: 1; }
-  .s2-auto-arrange { width: 100%; }
   .s2-diagram-pan-help { text-align: center; }
   .s2-diagram-zoom { justify-content: center; }
   .s2-diagram-names { width: 100%; }

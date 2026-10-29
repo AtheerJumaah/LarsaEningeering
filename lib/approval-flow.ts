@@ -42,6 +42,7 @@ export const APPROVAL_FLOW_TYPES = [
   "Missed Clock",
   "Missed Break",
   "Extra Hours",
+  "Hours Review",
 ] as const;
 
 function sameId(value: unknown, user: ApprovalFlowUser): boolean {

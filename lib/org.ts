@@ -52,11 +52,6 @@ export type ExecutivePosition = {
   reportsToPositionIds?: string[];
 };
 
-export type OrgDiagramPosition = {
-  x: number;
-  y: number;
-};
-
 export type OrgChart = {
   departments: Department[];
   teams: Team[];
@@ -73,8 +68,6 @@ export type OrgChart = {
    * their functional role in the chart.
    */
   reporting?: Record<string, string[]>;
-  /** Optional Visio-style positions for executive, department, and team cards. */
-  diagramPositions?: Record<string, OrgDiagramPosition>;
 };
 
 export type OrgUser = {
@@ -130,16 +123,6 @@ export function readStoredOrg(): OrgChart | null {
       }];
     })
     : undefined;
-  const diagramPositions = org.diagramPositions && typeof org.diagramPositions === "object"
-    ? Object.fromEntries(Object.entries(org.diagramPositions).flatMap(([key, value]) => {
-      const row = value as Partial<OrgDiagramPosition> | null;
-      const x = Number(row?.x);
-      const y = Number(row?.y);
-      return key && Number.isFinite(x) && Number.isFinite(y)
-        ? [[key, { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) }]]
-        : [];
-    }))
-    : undefined;
   return {
     departments: org.departments,
     teams: Array.isArray(org.teams) ? org.teams : [],
@@ -150,7 +133,6 @@ export function readStoredOrg(): OrgChart | null {
     removedDepartmentIds: Array.isArray(org.removedDepartmentIds) ? org.removedDepartmentIds.filter((id): id is string => typeof id === "string") : [],
     removedTeamIds: Array.isArray(org.removedTeamIds) ? org.removedTeamIds.filter((id): id is string => typeof id === "string") : [],
     ...(reporting ? { reporting } : {}),
-    ...(diagramPositions ? { diagramPositions } : {}),
   };
 }
 

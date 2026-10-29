@@ -28,6 +28,7 @@ import { APPROVAL_FLOW_TYPES, defaultApprovalChain, ensureDefaultApprovalFlows, 
 import {
   ArrowLeft,
   ArrowRight,
+  AlertTriangle,
   Archive,
   Award,
   BadgeDollarSign,
@@ -8303,7 +8304,7 @@ export default function Home() {
      recorded time but never manufacture it. Adding hours stays behind the
      correction request and its approval chain, which is the whole point --
      nobody can quietly inflate their own attendance. */
-  const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string) => {
+  const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string, requestReview = false) => {
     const actor = sessionUserRef.current;
     const clockItem = ITEMS.find((item) => item.id === "staff-clock");
     /* Two doors in. A clock manager — the staff-clock "manage" capability
@@ -8393,6 +8394,53 @@ export default function Home() {
         closedOpenSession: !outLog,
         self: uid === actor.id,
       });
+    /* A self-trim is safe to apply immediately because it can only remove
+       time. The employee may still want a leader to confirm that the result
+       is sensible. That is a separate, auditable Hours Review request: it
+       does not write attendance again, so approval can never duplicate or
+       inflate hours. It follows the same editable team-lead -> department-
+       head route as every other attendance request. */
+    let reviewRequested = false;
+    if (requestReview && uid === actor.id) {
+      if (!Array.isArray(store.approvals)) store.approvals = [];
+      ensureStoreApprovalFlows(store);
+      const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+      const configured = chainFor(store, actor.id, "Hours Review");
+      const eligible = (store.users as StaffUser[]).filter((row) =>
+        row.enabled !== false && row.id !== actor.id && approvalsGate
+        && hasItemPermission(row, approvalsGate, "approve") && rankOf(row) >= rankOf(actor));
+      const flow = configured.length ? configured : [];
+      const approvers = flow.length
+        ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
+        : eligible;
+      const review: LeaveRequest = {
+        id: `hours-review:${actor.id}:${Date.now()}`,
+        type: "Hours Review",
+        uid: actor.id,
+        requestType: "Trimmed attendance",
+        date: attendanceDateKey(new Date(inLog.time || clockIn)),
+        from: attendanceTime(inLog.time || clockIn),
+        to: attendanceTime(nextOutIso),
+        fromAt: inLog.time || clockIn,
+        toAt: nextOutIso,
+        reason: previousOut
+          ? `Please review my shortened clock-out (${attendanceTime(previousOut)} to ${attendanceTime(nextOutIso)}).`
+          : `Please review the clock-out I added at ${attendanceTime(nextOutIso)} for an unclosed session.`,
+        status: "Pending",
+        flow,
+        step: 0,
+        history: [],
+        createdAt: new Date().toISOString(),
+      };
+      store.approvals.unshift(review);
+      raiseNotification({
+        event: "clock.correction",
+        title: `Hours review requested by ${actor.name}`,
+        body: `${review.date} · ${review.reason}`,
+        itemId: "my-requests", fromName: actor.name, recipients: approvers,
+      });
+      reviewRequested = true;
+    }
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     /* Same urgency as a punch: the adjusted record must reach the server
        before this tab can be closed, or a refresh inside the sync debounce
@@ -8400,7 +8448,9 @@ export default function Home() {
     pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
-    notify("Attendance record adjusted.");
+    notify(reviewRequested
+      ? "Attendance record adjusted and sent to your leader for review."
+      : "Attendance record adjusted.");
     return true;
   }, [notify, refreshStaffEngine, accessUsers]);
 
@@ -19194,7 +19244,7 @@ function QuickClock({
     date: string; from: string; to: string; reason: string; mode: string;
   }) => boolean;
   users: StaffUser[];
-  trimSession: (uid: string, clockIn: string, newClockOut: string) => boolean;
+  trimSession: (uid: string, clockIn: string, newClockOut: string, requestReview?: boolean) => boolean;
   resetSession: (uid: string, clockIn: string) => boolean;
   go: (id: string) => void;
   method: SignInMethod | null;
@@ -19220,6 +19270,7 @@ function QuickClock({
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
+  const [trimAskReview, setTrimAskReview] = useState(false);
   /* datetime-local is a canonical attendance wall-clock value; convert its
      displayed UTC instant using the same policy as correction requests. */
   const toLocalInput = (iso: string) => {
@@ -19349,6 +19400,20 @@ function QuickClock({
   }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo]);
   /* Only the "Recent" window is capped; a chosen period shows everything. */
   const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
+  /* These are the records the attendance engine already excludes from totals:
+     an abandoned open session or a closed session lasting 16+ hours. Surface
+     them prominently to the employee instead of hiding the warning inside a
+     manager-oriented list. De-duplicate midnight-split display segments by
+     the punch identity used by the trim handler. */
+  const attentionSessions = useMemo(() => {
+    const unique = new Map<string, ClockSession>();
+    sessions.forEach((session) => {
+      if (session.uid !== user?.id || isActiveClockSession(session)) return;
+      if (!(session.stale || session.unclosed || session.long)) return;
+      if (!unique.has(session.clockIn)) unique.set(session.clockIn, session);
+    });
+    return [...unique.values()].sort((left, right) => Date.parse(right.clockIn) - Date.parse(left.clockIn));
+  }, [sessions, user?.id]);
   /* A one-second React state tick used to re-render this entire root page.
      That page owns the embedded engines, large reports, and attendance data,
      so every clock second could compete with a punch/navigation and make the
@@ -19558,6 +19623,29 @@ function QuickClock({
         )}
       </section>
 
+      {attentionSessions.length > 0 && (mayTrimOthers || maySelfTrim) && (
+        <section className="hours-attention" role="alert">
+          <div className="hours-attention-icon"><AlertTriangle size={20} /></div>
+          <div>
+            <span className="eyebrow">Hours need attention</span>
+            <h3>{attentionSessions.length === 1 ? "One shift looks illogical" : `${attentionSessions.length} shifts look illogical`}</h3>
+            <p>
+              {attentionSessions.some((session) => session.stale || session.unclosed)
+                ? "A shift has no usable clock-out"
+                : "A shift is longer than 16 hours"}. It is not counted until you correct it. Trim your own record now, and optionally ask your leader or department head to review the result.
+            </p>
+          </div>
+          <button type="button" onClick={() => {
+            setShowCorrection(false);
+            setShowTrim(true);
+            setTrimUser("");
+            pickTrimPreset("all");
+            setTrimming(null);
+            setTrimAskReview(false);
+          }}>Review and trim my hours</button>
+        </section>
+      )}
+
       {/* Breaks belong inside a shift, so the option only appears once the
           person is actually clocked in. An open break still shows its End
           button even if the shift somehow closed, so nobody gets stuck. */}
@@ -19623,7 +19711,7 @@ function QuickClock({
           <div className="report-panel trim-panel">
             <div className="section-head">
               <div><span className="eyebrow">{mayTrimOthers ? "Direct change · no approval" : "Your sessions · only ever shorter"}</span><h3>{mayTrimOthers ? "Clock sessions" : "Your recent sessions"}</h3></div>
-              <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); }}>Close</button>
+              <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); setTrimAskReview(false); }}>Close</button>
             </div>
             {/* The flow the correction rules ask managers to follow: choose
                 the employee first, then the exact session — never guess a
@@ -19720,9 +19808,18 @@ function QuickClock({
                       <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
                       <button type="button" className="primary" onClick={() => {
                         const corrected = attendanceWallDateTimeUtc(trimValue, ATTENDANCE_TIME_ZONE);
-                        if (corrected && trimSession(session.uid, session.clockIn, corrected)) setTrimming(null);
+                        if (corrected && trimSession(session.uid, session.clockIn, corrected, session.uid === user?.id && trimAskReview)) {
+                          setTrimming(null);
+                          setTrimAskReview(false);
+                        }
                       }}>Save</button>
                       <button type="button" onClick={() => setTrimming(null)}>Cancel</button>
+                      {session.uid === user?.id && (
+                        <label className="trim-review-choice">
+                          <input type="checkbox" checked={trimAskReview} onChange={(event) => setTrimAskReview(event.target.checked)} />
+                          <span><b>Ask my leader to review</b><small>Sends this corrected record through your normal approval chain.</small></span>
+                        </label>
+                      )}
                       {(session.open || session.stale || session.unclosed) && (
                         <small className="trim-close-note">
                           {liveOpen
@@ -19735,6 +19832,7 @@ function QuickClock({
                     <div className="session-edit">
                       <button type="button" onClick={() => {
                         setTrimming({ uid: session.uid, clockIn: session.clockIn });
+                        setTrimAskReview(false);
                         /* A sensible starting value: a live shift closes "now",
                            a closed session starts from its own clock-out, and
                            an abandoned one starts a minute inside its hard
@@ -19768,7 +19866,7 @@ function QuickClock({
               </button>
             )}
             <p className="panel-footnote">
-              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval. Every trim is recorded in the audit trail with the before and after times.
+              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval. Every trim is recorded in the audit trail with the before and after times; you can also ask your normal leader chain to review your correction.
             </p>
           </div>
         )}
