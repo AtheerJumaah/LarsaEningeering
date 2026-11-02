@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Database, DownloadCloud, KeyRound, Save, ShieldCheck, UserCog } from "lucide-react";
+import { BellRing, Database, DownloadCloud, KeyRound, Mail, Save, ShieldCheck, Smartphone, UserCog } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { registerBackCloser } from "./backstack";
 
@@ -30,6 +30,26 @@ type Policy = {
   pin_verification_required: boolean;
   pin_hours: number;
   interval_unit?: "hours" | "days" | "business_days";
+  attendance_notifications: AttendanceNotificationPolicy;
+};
+
+type AttendanceNotificationPolicy = {
+  enabled: boolean;
+  push_enabled: boolean;
+  email_enabled: boolean;
+  email_hourly: boolean;
+  milestone_interval_hours: number;
+  milestone_max_hours: number;
+  missing_clock_in: boolean;
+  missing_grace_minutes: number;
+  use_schedule: boolean;
+  use_work_pattern: boolean;
+  pattern_lookback_days: number;
+  pattern_min_days: number;
+  active_from_hour: number;
+  active_to_hour: number;
+  critical_shift_hours: number;
+  notify_manager_on_critical: boolean;
 };
 
 type AuditRow = { at: string; actor: string | null; action: string; target: string | null };
@@ -452,10 +472,10 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
 
   return (
     <div className="platform-settings">
-      <div className="ps-savebar" aria-label="Save sign-in and signup settings">
+      <div className="ps-savebar" aria-label="Save platform settings">
         <div className="ps-savebar-main">
           <div className="ps-save-summary">
-            <b>Sign-in &amp; signup settings</b>
+            <b>Platform settings</b>
             <span className={dirty ? "ps-save-state is-dirty" : "ps-save-state"} role="status">{dirty ? "Unsaved changes" : "All changes saved"}</span>
           </div>
           <div className="ps-actions">
@@ -553,6 +573,143 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           <input type="checkbox" checked={draft.initial_verification_required} onChange={(e) => setDraft({ ...draft, initial_verification_required: e.target.checked })} />
           <span><b>Require email verification at signup</b><small>Off skips the code for new signups; periodic verification still applies.</small></span>
         </label>
+      </section>
+
+      <section className="org-card">
+        <span className="org-eyebrow"><BellRing size={14} /> Notification settings</span>
+        <h3>Attendance encouragement</h3>
+        <p className="ps-note" style={{ marginTop: -4 }}>
+          Company-managed reminders continue when the app is closed. Employees cannot turn this attendance category off; operating-system notification permission still has to be enabled on each device.
+        </p>
+
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_notifications.enabled}
+            onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, enabled: e.target.checked } })} />
+          <span><b>Use attendance encouragement</b><small>Server-side checks every 15 minutes. No live browser polling is added.</small></span>
+        </label>
+
+        <div className="ps-grid">
+          <label className="ps-row">
+            <input type="checkbox" checked={draft.attendance_notifications.push_enabled}
+              disabled={!draft.attendance_notifications.enabled}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, push_enabled: e.target.checked } })} />
+            <span><b><Smartphone size={14} /> Device push</b><small>Progress and clock reminders on subscribed phones and computers.</small></span>
+          </label>
+          <label className="ps-row">
+            <input type="checkbox" checked={draft.attendance_notifications.email_enabled}
+              disabled={!draft.attendance_notifications.enabled}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, email_enabled: e.target.checked } })} />
+            <span><b><Mail size={14} /> Email</b><small>Missing clock-ins, nine-hour notes, and critical long shifts.</small></span>
+          </label>
+        </div>
+
+        <div className="ps-grid">
+          <label className="ps-field">
+            <span>Progress note frequency</span>
+            <select className="org-select" disabled={!draft.attendance_notifications.enabled}
+              value={draft.attendance_notifications.milestone_interval_hours}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, milestone_interval_hours: Number(e.target.value) } })}>
+              <option value={1}>Every hour</option>
+              <option value={2}>Every 2 hours</option>
+              <option value={3}>Every 3 hours</option>
+              <option value={4}>Every 4 hours</option>
+            </select>
+          </label>
+          <label className="ps-field">
+            <span>Progress notes through</span>
+            <span className="ps-inline"><input type="number" min={1} max={16}
+              disabled={!draft.attendance_notifications.enabled}
+              value={draft.attendance_notifications.milestone_max_hours}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, milestone_max_hours: Math.max(1, Math.min(16, Number(e.target.value) || 9)) } })} /><small>hours</small></span>
+          </label>
+        </div>
+
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_notifications.email_hourly}
+            disabled={!draft.attendance_notifications.enabled || !draft.attendance_notifications.email_enabled}
+            onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, email_hourly: e.target.checked } })} />
+          <span><b>Email every progress milestone</b><small>Off keeps hourly encouragement as push and bell only; email is reserved for important moments.</small></span>
+        </label>
+
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_notifications.missing_clock_in}
+            disabled={!draft.attendance_notifications.enabled}
+            onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, missing_clock_in: e.target.checked } })} />
+          <span><b>Gently notice a missing clock-in</b><small>Uses the saved schedule first, then a repeated personal weekday pattern. It does not assume Friday or Saturday is off.</small></span>
+        </label>
+
+        <div className="ps-grid">
+          <label className="ps-field">
+            <span>Grace after expected start</span>
+            <span className="ps-inline"><input type="number" min={15} max={360} step={15}
+              disabled={!draft.attendance_notifications.enabled || !draft.attendance_notifications.missing_clock_in}
+              value={draft.attendance_notifications.missing_grace_minutes}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, missing_grace_minutes: Math.max(15, Math.min(360, Number(e.target.value) || 90)) } })} /><small>minutes</small></span>
+          </label>
+          <label className="ps-field">
+            <span>Learn behavior from</span>
+            <select className="org-select" disabled={!draft.attendance_notifications.enabled || !draft.attendance_notifications.use_work_pattern}
+              value={draft.attendance_notifications.pattern_lookback_days}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, pattern_lookback_days: Number(e.target.value) } })}>
+              <option value={28}>Last 4 weeks</option>
+              <option value={42}>Last 6 weeks</option>
+              <option value={56}>Last 8 weeks</option>
+              <option value={84}>Last 12 weeks</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="ps-grid">
+          <label className="ps-row">
+            <input type="checkbox" checked={draft.attendance_notifications.use_schedule}
+              disabled={!draft.attendance_notifications.enabled || !draft.attendance_notifications.missing_clock_in}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, use_schedule: e.target.checked } })} />
+            <span><b>Use saved schedules</b><small>A saved shift is the strongest signal.</small></span>
+          </label>
+          <label className="ps-row">
+            <input type="checkbox" checked={draft.attendance_notifications.use_work_pattern}
+              disabled={!draft.attendance_notifications.enabled || !draft.attendance_notifications.missing_clock_in}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, use_work_pattern: e.target.checked } })} />
+            <span><b>Use repeated work patterns</b><small>Only after the same weekday has been worked at least twice.</small></span>
+          </label>
+        </div>
+
+        <div className="ps-grid">
+          <label className="ps-field">
+            <span>Send only from</span>
+            <select className="org-select" value={draft.attendance_notifications.active_from_hour}
+              disabled={!draft.attendance_notifications.enabled}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, active_from_hour: Number(e.target.value) } })}>
+              {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00 local</option>)}
+            </select>
+          </label>
+          <label className="ps-field">
+            <span>Stop sending at</span>
+            <select className="org-select" value={draft.attendance_notifications.active_to_hour}
+              disabled={!draft.attendance_notifications.enabled}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, active_to_hour: Number(e.target.value) } })}>
+              {Array.from({ length: 24 }, (_, h) => h + 1).map((h) => <option key={h} value={h}>{String(h % 24).padStart(2, "0")}:00 local</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="ps-grid">
+          <label className="ps-field">
+            <span>Critical open shift</span>
+            <span className="ps-inline"><input type="number" min={9} max={24}
+              disabled={!draft.attendance_notifications.enabled}
+              value={draft.attendance_notifications.critical_shift_hours}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, critical_shift_hours: Math.max(9, Math.min(24, Number(e.target.value) || 12)) } })} /><small>hours</small></span>
+          </label>
+          <label className="ps-row">
+            <input type="checkbox" checked={draft.attendance_notifications.notify_manager_on_critical}
+              disabled={!draft.attendance_notifications.enabled}
+              onChange={(e) => setDraft({ ...draft, attendance_notifications: { ...draft.attendance_notifications, notify_manager_on_critical: e.target.checked } })} />
+            <span><b>Ask the direct manager to review</b><small>Only for a critical open shift, not ordinary progress.</small></span>
+          </label>
+        </div>
+
+        <p className="ps-note">Example: “You have been clocked in for two hours. Nice progress.” At nine hours: “Great work—if you are finished, remember to clock out.” All timing uses the employee&apos;s notification timezone.</p>
       </section>
 
       </fieldset>

@@ -33,7 +33,7 @@ export type NotifyFeed = { items: NotifyRow[]; total: number; offset: number; li
 export type NotifyCounts = { unread: number; all: number; archived: number; byCategory: Record<string, number> };
 export type NotifyCategory = {
   id: string; label: string; description: string;
-  sensitive: boolean; push: boolean; mail: boolean;
+  sensitive: boolean; push: boolean; mail: boolean; managed?: boolean;
 };
 export type NotifyDevice = {
   id: string; label: string; platform: string | null;

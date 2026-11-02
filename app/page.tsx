@@ -18149,6 +18149,7 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
      of the directory signs in by username. Saying so up front beats leaving
      somebody to wonder why a switch they turned on changed nothing. */
   const viewerHasEmail = Boolean(user?.email && user.email.includes("@"));
+  const hasManagedChannels = Boolean(setup?.categories.some((row) => row.managed));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -18306,7 +18307,9 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
             </span>
             <div className="notify-state-actions">
               {subscribed
-                ? <button type="button" className="secondary" disabled={busy} onClick={disable}>Turn off here</button>
+                ? hasManagedChannels
+                  ? <span className="notify-hint">Company-managed attendance alerts stay on</span>
+                  : <button type="button" className="secondary" disabled={busy} onClick={disable}>Turn off here</button>
                 : <button type="button" className="primary" disabled={busy} onClick={enable}>Turn on here</button>}
               {subscribed && <button type="button" className="secondary" disabled={busy} onClick={testAlert}>Send a test</button>}
             </div>
@@ -18331,6 +18334,11 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
                       Alerts for this never show figures on a lock screen
                     </em>
                   )}
+                  {category.managed && (
+                    <em title="Controlled in Platform Settings">
+                      Company managed — employees cannot turn this category off
+                    </em>
+                  )}
                 </span>
                 {/* Two channels, side by side on a wide screen and stacked on a
                     narrow one. They are genuinely independent: each sends only
@@ -18341,6 +18349,7 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
                     <input
                       type="checkbox"
                       checked={category.push}
+                      disabled={category.managed}
                       aria-label={`Push notifications for ${category.label}`}
                       onChange={(event) => setPref(category.id, event.target.checked, category.mail)}
                     />
@@ -18351,6 +18360,7 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
                     <input
                       type="checkbox"
                       checked={category.mail}
+                      disabled={category.managed}
                       aria-label={`Email notifications for ${category.label}`}
                       onChange={(event) => setPref(category.id, category.push, event.target.checked)}
                     />
@@ -18436,6 +18446,7 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
                     <input
                       type="checkbox"
                       checked={device.enabled}
+                      disabled={hasManagedChannels}
                       aria-label={`Alerts on ${device.label}`}
                       onChange={(event) => deviceAction(device.id, { enabled: event.target.checked })}
                     />

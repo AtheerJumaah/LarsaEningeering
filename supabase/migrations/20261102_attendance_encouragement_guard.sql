@@ -1,0 +1,4 @@
+-- Production received the idempotent attendance_encouragement migration once
+-- more under this migration name after the 36-hour stale-open-session guard was
+-- added.  The complete, final definition remains in
+-- 20261102_attendance_encouragement.sql so fresh databases install it once.

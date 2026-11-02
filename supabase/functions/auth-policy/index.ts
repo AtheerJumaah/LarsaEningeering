@@ -44,6 +44,45 @@ type Policy = {
   /* The unit the numbers above are counted in: 'hours', 'days' (calendar) or
      'business_days' (Iraqi working week, Sunday–Thursday). */
   interval_unit: "hours" | "days" | "business_days";
+  attendance_notifications: AttendanceNotificationPolicy;
+};
+
+type AttendanceNotificationPolicy = {
+  enabled: boolean;
+  push_enabled: boolean;
+  email_enabled: boolean;
+  email_hourly: boolean;
+  milestone_interval_hours: number;
+  milestone_max_hours: number;
+  missing_clock_in: boolean;
+  missing_grace_minutes: number;
+  use_schedule: boolean;
+  use_work_pattern: boolean;
+  pattern_lookback_days: number;
+  pattern_min_days: number;
+  active_from_hour: number;
+  active_to_hour: number;
+  critical_shift_hours: number;
+  notify_manager_on_critical: boolean;
+};
+
+const ATTENDANCE_FALLBACK: AttendanceNotificationPolicy = {
+  enabled: true,
+  push_enabled: true,
+  email_enabled: true,
+  email_hourly: false,
+  milestone_interval_hours: 1,
+  milestone_max_hours: 9,
+  missing_clock_in: true,
+  missing_grace_minutes: 90,
+  use_schedule: true,
+  use_work_pattern: true,
+  pattern_lookback_days: 56,
+  pattern_min_days: 2,
+  active_from_hour: 7,
+  active_to_hour: 21,
+  critical_shift_hours: 12,
+  notify_manager_on_critical: true,
 };
 
 const FALLBACK: Policy = {
@@ -57,17 +96,43 @@ const FALLBACK: Policy = {
   pin_verification_required: true,
   pin_hours: 168,
   interval_unit: "hours",
+  attendance_notifications: ATTENDANCE_FALLBACK,
 };
+
+function normalizeAttendance(value: unknown): AttendanceNotificationPolicy {
+  const row = value && typeof value === "object" ? value as Partial<AttendanceNotificationPolicy> : {};
+  const number = (input: unknown, fallback: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, Number(input) || fallback));
+  return {
+    enabled: row.enabled !== false,
+    push_enabled: row.push_enabled !== false,
+    email_enabled: row.email_enabled !== false,
+    email_hourly: row.email_hourly === true,
+    milestone_interval_hours: number(row.milestone_interval_hours, 1, 1, 8),
+    milestone_max_hours: number(row.milestone_max_hours, 9, 1, 16),
+    missing_clock_in: row.missing_clock_in !== false,
+    missing_grace_minutes: number(row.missing_grace_minutes, 90, 15, 360),
+    use_schedule: row.use_schedule !== false,
+    use_work_pattern: row.use_work_pattern !== false,
+    pattern_lookback_days: number(row.pattern_lookback_days, 56, 14, 120),
+    pattern_min_days: number(row.pattern_min_days, 2, 2, 8),
+    active_from_hour: number(row.active_from_hour, 7, 0, 23),
+    active_to_hour: number(row.active_to_hour, 21, 1, 24),
+    critical_shift_hours: number(row.critical_shift_hours, 12, 9, 24),
+    notify_manager_on_critical: row.notify_manager_on_critical !== false,
+  };
+}
 
 async function readPolicy(): Promise<Policy> {
   const { data, error } = await db
     .from("auth_policy")
-    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit")
+    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit, attendance_notifications")
     .eq("id", 1)
     .maybeSingle();
   if (error) throw new Error("Could not read verification settings.");
   const policy = (data as Policy) || FALLBACK;
   if (policy.interval_unit !== "days" && policy.interval_unit !== "business_days") policy.interval_unit = "hours";
+  policy.attendance_notifications = normalizeAttendance(policy.attendance_notifications);
   return policy;
 }
 
@@ -337,6 +402,8 @@ Deno.serve(async (req: Request) => {
         && (policy.privileged_hours === null ? before.privileged_hours !== null : Number(policy.privileged_hours) !== before.privileged_hours)) touched.push("privileged_hours");
       if (policy.pin_hours !== undefined && Math.max(1, Number(policy.pin_hours) || 168) !== before.pin_hours) touched.push("pin_hours");
       if (policy.interval_unit !== undefined && policy.interval_unit !== before.interval_unit) touched.push("interval_unit");
+      if (policy.attendance_notifications !== undefined
+        && JSON.stringify(normalizeAttendance(policy.attendance_notifications)) !== JSON.stringify(before.attendance_notifications)) touched.push("attendance_notifications");
       if (touched.length) {
         return json({ ok: false, error: "A Super Admin can only switch Email Verification for PIN Login on or off. Other platform settings need a platform owner. Nothing has been changed." });
       }
@@ -370,6 +437,9 @@ Deno.serve(async (req: Request) => {
     if (policy.pin_hours !== undefined) next.pin_hours = Math.max(1, Number(policy.pin_hours) || 168);
     if (policy.interval_unit === "hours" || policy.interval_unit === "days" || policy.interval_unit === "business_days") {
       next.interval_unit = policy.interval_unit;
+    }
+    if (policy.attendance_notifications !== undefined) {
+      next.attendance_notifications = normalizeAttendance(policy.attendance_notifications);
     }
 
     const { error } = await db.from("auth_policy").upsert(next, { onConflict: "id" });
