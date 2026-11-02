@@ -155,11 +155,24 @@ test("illogical sessions are moved to the top and visibly marked for review", as
   // applied indiscriminately to old entries.
   assert.match(page, /const leftNeedsAttention = !isActiveClockSession\(left\) && Boolean\(left\.stale \|\| left\.unclosed \|\| left\.long\);/);
   assert.match(page, /if \(leftNeedsAttention !== rightNeedsAttention\) return rightNeedsAttention \? 1 : -1;/);
-  assert.match(page, /unusual time \{trimRows\.filter/);
+  assert.match(page, /const visibleTrimAttentionCount = visibleTrimRows\.filter/);
+  assert.match(page, /\{visibleTrimAttentionCount\} unusual time/);
+  assert.match(page, /across all history/);
   assert.match(page, /"trim-row needs-attention"/);
   assert.match(page, /Review first/);
   assert.match(css, /\.trim-row\.needs-attention/);
   assert.match(css, /#fff1ef/);
+});
+
+test("the attention banner counts this month only and opens that same month", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /const monthStart = `\$\{attendanceDateKey\(new Date\(\)\)\.slice\(0, 7\)\}-01`;/);
+  assert.match(page, /const startedOn = attendanceDateKey\(session\.clockIn\);/);
+  assert.match(page, /if \(startedOn < monthStart \|\| startedOn > today\) return;/);
+  assert.match(page, /const key = `\$\{session\.uid\}\|\$\{session\.clockIn\}`;/);
+  assert.match(page, /shifts this month look illogical/);
+  assert.match(page, /pickTrimPreset\("this-month"\);/);
+  assert.match(page, />Review this month<\/button>/);
 });
 
 test("the trim window alone can show and edit Baghdad or U.S. Central time without changing stored instants", async () => {

@@ -9,7 +9,8 @@ test("employees are visibly prompted to correct implausible attendance", () => {
   assert.match(page, /const attentionSessions = useMemo/);
   assert.match(page, /session\.stale \|\| session\.unclosed \|\| session\.long/);
   assert.match(page, /Hours need attention/);
-  assert.match(page, /Review and trim my hours/);
+  assert.match(page, /Review this month/);
+  assert.match(page, /shifts this month look illogical/);
   assert.match(page, /It is not counted until you correct it/);
 });
 
