@@ -6,11 +6,13 @@ const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8")
 const flows = await readFile(new URL("../lib/approval-flow.ts", import.meta.url), "utf8");
 
 test("employees are visibly prompted to correct implausible attendance", () => {
+  assert.match(page, /const allAttentionSessions = useMemo/);
   assert.match(page, /const attentionSessions = useMemo/);
   assert.match(page, /session\.stale \|\| session\.unclosed \|\| session\.long/);
   assert.match(page, /Hours need attention/);
-  assert.match(page, /Review this month/);
-  assert.match(page, /shifts this month look illogical/);
+  assert.match(page, /Illogical hours period/);
+  assert.match(page, /Nothing was deleted/);
+  assert.match(page, /All history/);
   assert.match(page, /It is not counted until you correct it/);
 });
 

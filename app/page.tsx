@@ -19282,6 +19282,7 @@ function QuickClock({
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
   const [trimAskReview, setTrimAskReview] = useState(false);
+  const [attentionPeriod, setAttentionPeriod] = useState<"week" | "month" | "all">("month");
   const [trimTimeZone, setTrimTimeZone] = useState<"America/Chicago" | "Asia/Baghdad">(ATTENDANCE_TIME_ZONE);
   const trimTimeFormatter = useMemo(() => new Intl.DateTimeFormat(undefined, {
     hour: "2-digit", minute: "2-digit", timeZone: trimTimeZone,
@@ -19448,22 +19449,30 @@ function QuickClock({
      them prominently to the employee instead of hiding the warning inside a
      manager-oriented list. De-duplicate midnight-split display segments by
      the punch identity used by the trim handler. */
-  const attentionSessions = useMemo(() => {
+  const attentionToday = attendanceDateKey(new Date());
+  const attentionMonthStart = `${attentionToday.slice(0, 7)}-01`;
+  const attentionWeekday = attendanceWeekdayIndex(new Date());
+  const attentionWeekStart = attendanceDateOffset(attentionToday, attentionWeekday === 0 ? -6 : 1 - attentionWeekday);
+  const allAttentionSessions = useMemo(() => {
     const unique = new Map<string, ClockSession>();
-    const monthStart = `${attendanceDateKey(new Date()).slice(0, 7)}-01`;
-    const today = attendanceDateKey(new Date());
     sessions.forEach((session) => {
       if (session.uid !== user?.id || isActiveClockSession(session)) return;
       if (!(session.stale || session.unclosed || session.long)) return;
       /* Sessions can be split into one display segment per day. Count the
-         actual punch once, on the day it started, and only for this month. */
-      const startedOn = attendanceDateKey(session.clockIn);
-      if (startedOn < monthStart || startedOn > today) return;
+         actual punch once, on the day it started. Period filtering happens
+         after this one truthful all-history collection is built. */
       const key = `${session.uid}|${session.clockIn}`;
       if (!unique.has(key)) unique.set(key, session);
     });
     return [...unique.values()].sort((left, right) => Date.parse(right.clockIn) - Date.parse(left.clockIn));
   }, [sessions, user?.id]);
+  const attentionSessions = useMemo(() => allAttentionSessions.filter((session) => {
+    const startedOn = attendanceDateKey(session.clockIn);
+    if (attentionPeriod === "week") return startedOn >= attentionWeekStart && startedOn <= attentionToday;
+    if (attentionPeriod === "month") return startedOn >= attentionMonthStart && startedOn <= attentionToday;
+    return true;
+  }), [allAttentionSessions, attentionPeriod, attentionMonthStart, attentionToday, attentionWeekStart]);
+  const attentionPeriodLabel = attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "across all history";
   /* A one-second React state tick used to re-render this entire root page.
      That page owns the embedded engines, large reports, and attendance data,
      so every clock second could compete with a punch/navigation and make the
@@ -19673,26 +19682,41 @@ function QuickClock({
         )}
       </section>
 
-      {attentionSessions.length > 0 && (mayTrimOthers || maySelfTrim) && (
+      {allAttentionSessions.length > 0 && (mayTrimOthers || maySelfTrim) && (
         <section className="hours-attention" role="alert">
           <div className="hours-attention-icon"><AlertTriangle size={20} /></div>
           <div>
             <span className="eyebrow">Hours need attention</span>
-            <h3>{attentionSessions.length === 1 ? "One shift this month looks illogical" : `${attentionSessions.length} shifts this month look illogical`}</h3>
+            <h3>{attentionSessions.length === 0
+              ? `No illogical shifts ${attentionPeriodLabel}`
+              : attentionSessions.length === 1
+                ? `One shift ${attentionPeriodLabel} looks illogical`
+                : `${attentionSessions.length} shifts ${attentionPeriodLabel} look illogical`}</h3>
             <p>
-              {attentionSessions.some((session) => session.stale || session.unclosed)
-                ? "A shift has no usable clock-out"
-                : "A shift is longer than 16 hours"}. It is not counted until you correct it. Trim your own record now, and optionally ask your leader or department head to review the result.
+              {attentionSessions.length > 0
+                ? `${attentionSessions.some((session) => session.stale || session.unclosed) ? "A shift has no usable clock-out" : "A shift is longer than 16 hours"}. It is not counted until you correct it. Trim your own record now, and optionally ask your leader or department head to review the result.`
+                : "Nothing was deleted. Choose another period to find older unusual shifts."}
             </p>
+            <div className="hours-attention-period" role="group" aria-label="Illogical hours period">
+              {([['week', 'This week'], ['month', 'This month'], ['all', 'All history']] as const).map(([id, label]) => (
+                <button type="button" key={id} className={attentionPeriod === id ? "on" : ""} onClick={() => setAttentionPeriod(id)}>{label}</button>
+              ))}
+            </div>
           </div>
-          <button type="button" onClick={() => {
+          {attentionSessions.length > 0 && <button type="button" onClick={() => {
             setShowCorrection(false);
             setShowTrim(true);
             setTrimUser("");
-            pickTrimPreset("this-month");
+            if (attentionPeriod === "week") {
+              setTrimPreset("custom");
+              setTrimFrom(attentionWeekStart);
+              setTrimTo(attentionToday);
+            } else {
+              pickTrimPreset(attentionPeriod === "month" ? "this-month" : "all");
+            }
             setTrimming(null);
             setTrimAskReview(false);
-          }}>Review this month</button>
+          }}>Review {attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "all history"}</button>}
         </section>
       )}
 

@@ -164,15 +164,16 @@ test("illogical sessions are moved to the top and visibly marked for review", as
   assert.match(css, /#fff1ef/);
 });
 
-test("the attention banner counts this month only and opens that same month", async () => {
+test("the attention banner remains visible and counts the explicitly selected week, month, or all history", async () => {
   const page = await read("app/page.tsx");
-  assert.match(page, /const monthStart = `\$\{attendanceDateKey\(new Date\(\)\)\.slice\(0, 7\)\}-01`;/);
+  assert.match(page, /useState<"week" \| "month" \| "all">\("month"\)/);
   assert.match(page, /const startedOn = attendanceDateKey\(session\.clockIn\);/);
-  assert.match(page, /if \(startedOn < monthStart \|\| startedOn > today\) return;/);
   assert.match(page, /const key = `\$\{session\.uid\}\|\$\{session\.clockIn\}`;/);
-  assert.match(page, /shifts this month look illogical/);
-  assert.match(page, /pickTrimPreset\("this-month"\);/);
-  assert.match(page, />Review this month<\/button>/);
+  assert.match(page, /attentionPeriod === "week"/);
+  assert.match(page, /attentionPeriod === "month"/);
+  assert.match(page, /allAttentionSessions\.length > 0/);
+  assert.match(page, /Nothing was deleted\. Choose another period/);
+  assert.match(page, /\['week', 'This week'\], \['month', 'This month'\], \['all', 'All history'\]/);
 });
 
 test("the trim window alone can show and edit Baghdad or U.S. Central time without changing stored instants", async () => {
