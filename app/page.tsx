@@ -19282,10 +19282,26 @@ function QuickClock({
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
   const [trimAskReview, setTrimAskReview] = useState(false);
-  /* datetime-local is a canonical attendance wall-clock value; convert its
-     displayed UTC instant using the same policy as correction requests. */
+  const [trimTimeZone, setTrimTimeZone] = useState<"America/Chicago" | "Asia/Baghdad">(ATTENDANCE_TIME_ZONE);
+  const trimTimeFormatter = useMemo(() => new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit", minute: "2-digit", timeZone: trimTimeZone,
+  }), [trimTimeZone]);
+  const trimDateTimeFormatter = useMemo(() => new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", timeZone: trimTimeZone,
+  }), [trimTimeZone]);
+  /* datetime-local is a wall-clock value in the timezone the employee chose
+     inside this window. Storage stays UTC, so two devices still save the same
+     instant and no historical record is rewritten merely by changing view. */
   const toLocalInput = (iso: string) => {
-    return attendanceDateTimeInput(iso, ATTENDANCE_TIME_ZONE);
+    return attendanceDateTimeInput(iso, trimTimeZone);
+  };
+  const trimTime = (iso: string) => {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? "" : trimTimeFormatter.format(date);
+  };
+  const trimDateTime = (iso: string) => {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? "" : trimDateTimeFormatter.format(date);
   };
 
   // Break state is read from the same log stream, so it survives a reload and
@@ -19404,11 +19420,20 @@ function QuickClock({
       if (session.date < kept.date) kept.date = session.date;
     });
     return [...folded.values()]
+      /* The chosen timezone is a viewing/editing concern only. Re-keying the
+         displayed day here makes a late-night Central session appear on its
+         correct Baghdad calendar day without touching the saved punches. */
+      .map((session) => ({ ...session, date: attendanceDateKey(session.clockIn, trimTimeZone) }))
       /* A session belongs to the day it started; a chosen period keeps every
          session whose clock-in day falls inside it. */
       .filter((session) => (!trimFrom || session.date >= trimFrom) && (!trimTo || session.date <= trimTo))
-      .sort((left, right) => new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime());
-  }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo]);
+      .sort((left, right) => {
+        const leftNeedsAttention = !isActiveClockSession(left) && Boolean(left.stale || left.unclosed || left.long);
+        const rightNeedsAttention = !isActiveClockSession(right) && Boolean(right.stale || right.unclosed || right.long);
+        if (leftNeedsAttention !== rightNeedsAttention) return rightNeedsAttention ? 1 : -1;
+        return new Date(right.clockIn).getTime() - new Date(left.clockIn).getTime();
+      });
+  }, [sessions, mayTrimOthers, trimUser, trimScopeIds, user, trimFrom, trimTo, trimTimeZone]);
   /* Only the "Recent" window is capped; a chosen period shows everything. */
   const visibleTrimRows = trimPreset === "recent" ? trimRows.slice(0, trimShown) : trimRows;
   /* These are the records the attendance engine already excludes from totals:
@@ -19743,6 +19768,17 @@ function QuickClock({
                 </select>
               </label>
             )}
+            <label className="trim-timezone">
+              Time shown in
+              <select value={trimTimeZone} onChange={(event) => {
+                setTrimTimeZone(event.target.value as "America/Chicago" | "Asia/Baghdad");
+                setTrimming(null);
+              }} aria-label="Timezone for trimming recorded hours">
+                <option value="Asia/Baghdad">Baghdad, Iraq</option>
+                <option value="America/Chicago">U.S. Central</option>
+              </select>
+              <small>This changes only how this window shows and edits times. Saved attendance remains the same exact moment.</small>
+            </label>
             {/* Which sessions to lay out: the compact recent window, a whole
                 month, all history, or any range of days — so the exact old
                 session can be found by when it happened, then picked. */}
@@ -19764,6 +19800,12 @@ function QuickClock({
                 {trimFrom ? ` from ${attendanceDateLabel(trimFrom)}` : ""}
                 {trimTo ? ` to ${attendanceDateLabel(trimTo)}` : ""}
                 {" · "}{formatHours(trimRows.reduce((sum, row) => sum + row.hours, 0))} worked — all shown, pick any to trim.
+              </p>
+            )}
+            {trimRows.some((session) => !isActiveClockSession(session) && Boolean(session.stale || session.unclosed || session.long)) && (
+              <p className="trim-attention-summary" role="status">
+                <AlertTriangle size={15} />
+                {trimRows.filter((session) => !isActiveClockSession(session) && Boolean(session.stale || session.unclosed || session.long)).length} unusual time {trimRows.filter((session) => !isActiveClockSession(session) && Boolean(session.stale || session.unclosed || session.long)).length === 1 ? "period is" : "periods are"} shown first for review.
               </p>
             )}
             {(() => {
@@ -19788,21 +19830,23 @@ function QuickClock({
                   {day.rows.map((session) => {
               const active = trimming && trimming.uid === session.uid && trimming.clockIn === session.clockIn;
               const liveOpen = isActiveClockSession(session);
+              const needsAttention = !liveOpen && Boolean(session.stale || session.unclosed || session.long);
               return (
-                <div className="trim-row" key={`${session.uid}-${session.clockIn}`}>
+                <div className={needsAttention ? "trim-row needs-attention" : "trim-row"} key={`${session.uid}-${session.clockIn}`}>
                   <div className="trim-who">
                     {/* In the deliberate team view every row is named; a
                         single person's list (mine, or a picked employee) is
                         already named by the picker, so rows stay clean. */}
                     {trimUser === "__team__" && <b>{session.employee}</b>}
+                    {needsAttention && <span className="trim-attention-badge"><AlertTriangle size={12} /> Review first</span>}
                     <small>
-                      {attendanceTime(session.clockIn)}
+                      {trimTime(session.clockIn)}
                       {" – "}
                       {liveOpen
                         ? "clocked in — active session"
                         : session.open || session.stale || session.unclosed
                           ? "no clock-out"
-                          : attendanceTime(session.clockOut)}
+                          : trimTime(session.clockOut)}
                       {session.spanDays > 1 ? ` (${session.spanDays} days)` : ""}
                       {" · "}{session.stale || session.unclosed
                         ? `open ${formatHours(session.openHours || 0)} — needs correction, not counted`
@@ -19818,7 +19862,7 @@ function QuickClock({
                     <div className="session-edit">
                       <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
                       <button type="button" className="primary" onClick={() => {
-                        const corrected = attendanceWallDateTimeUtc(trimValue, ATTENDANCE_TIME_ZONE);
+                        const corrected = attendanceWallDateTimeUtc(trimValue, trimTimeZone);
                         if (corrected && trimSession(session.uid, session.clockIn, corrected, session.uid === user?.id && trimAskReview)) {
                           setTrimming(null);
                           setTrimAskReview(false);
@@ -19860,7 +19904,7 @@ function QuickClock({
                           the one-way trim alone. */}
                       {mayAdjustHours && (
                         <button type="button" className="danger" onClick={async () => {
-                          if (await dialog.confirm(`Remove ${session.employee}'s session starting ${attendanceDateTime(session.clockIn)}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
+                          if (await dialog.confirm(`Remove ${session.employee}'s session starting ${trimDateTime(session.clockIn)}? This cannot be undone.`)) resetSession(session.uid, session.clockIn);
                         }}>Reset</button>
                       )}
                     </div>

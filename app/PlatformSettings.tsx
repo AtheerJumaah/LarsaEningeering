@@ -231,6 +231,54 @@ async function call(body: Record<string, unknown>): Promise<Record<string, unkno
   }
 }
 
+/* Read-only settings calls must never hold the whole page on an endless
+   spinner. A slow Edge Function may still finish in the background, but the
+   screen gets its control back and can retry or show a useful error. Writes
+   deliberately keep using call() above: timing out a save that later commits
+   would invite a dangerous double-submit. */
+async function readCall(body: Record<string, unknown>, timeoutMs = 6500): Promise<Record<string, unknown> | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      call(body),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const DEFAULT_ATTENDANCE_NOTIFICATIONS: AttendanceNotificationPolicy = {
+  enabled: true,
+  push_enabled: true,
+  email_enabled: true,
+  email_hourly: false,
+  milestone_interval_hours: 1,
+  milestone_max_hours: 9,
+  missing_clock_in: true,
+  missing_grace_minutes: 90,
+  use_schedule: true,
+  use_work_pattern: true,
+  pattern_lookback_days: 56,
+  pattern_min_days: 2,
+  active_from_hour: 7,
+  active_to_hour: 21,
+  critical_shift_hours: 12,
+  notify_manager_on_critical: true,
+};
+
+function normalizePolicy(value: unknown): Policy | null {
+  if (!value || typeof value !== "object") return null;
+  const policy = value as Policy;
+  return {
+    ...policy,
+    attendance_notifications: {
+      ...DEFAULT_ATTENDANCE_NOTIFICATIONS,
+      ...(policy.attendance_notifications || {}),
+    },
+  };
+}
+
 async function sendStepUpCode(email: string, name?: string): Promise<boolean> {
   if (!supabaseConfigured()) return false;
   const client = getSupabaseClient();
@@ -269,6 +317,8 @@ function VerificationInterval({ id, title, description, enabled, value, unit, di
 export function PlatformSettings({ viewer, users }: { viewer: Person | null; users: Person[] }) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(true);
+  const [policyError, setPolicyError] = useState("");
   const intervalValues = useRef({ engineer: 72, privileged: 24 });
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [exemptions, setExemptions] = useState<ExemptionRow[]>([]);
@@ -302,25 +352,44 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     return (id: string) => map.get(id) || id;
   }, [users]);
 
-  async function refresh() {
-    const p = await call({ op: "policy" });
-    if (p && p.ok) {
-      setPolicy(p.policy as Policy);
-      setDraft(p.policy as Policy);
-      const next = p.policy as Policy;
-      if (next.engineer_hours !== null) intervalValues.current.engineer = next.engineer_hours;
-      if (next.privileged_hours !== null) intervalValues.current.privileged = next.privileged_hours;
-    }
-    /* These three are admin-only on the server now, so they carry the actor.
-       The policy read above stays open — sign-in needs it before anyone has
-       an identity to assert. */
+  async function loadPlatformLists() {
+    /* These reads are independent. Running them in series made a single slow
+       audit query delay everything behind it and multiplied the apparent load
+       time. They are secondary data, so none of them blocks the settings form. */
     const who = viewer?.email || "";
-    const a = await call({ op: "platformAdmins", actorEmail: who });
-    if (a && a.ok) setAdmins((a.rows as AdminRow[]) || []);
-    const e = await call({ op: "exemptions", actorEmail: who });
-    if (e && e.ok) setExemptions((e.rows as ExemptionRow[]) || []);
-    const l = await call({ op: "audit", actorEmail: who });
-    if (l && l.ok) setAuditRows((l.rows as AuditRow[]) || []);
+    const [a, e, l] = await Promise.all([
+      readCall({ op: "platformAdmins", actorEmail: who }, 8000),
+      readCall({ op: "exemptions", actorEmail: who }, 8000),
+      readCall({ op: "audit", actorEmail: who }, 8000),
+    ]);
+    if (a?.ok) setAdmins((a.rows as AdminRow[]) || []);
+    if (e?.ok) setExemptions((e.rows as ExemptionRow[]) || []);
+    if (l?.ok) setAuditRows((l.rows as AuditRow[]) || []);
+  }
+
+  async function refresh(attempt = 0) {
+    if (attempt === 0) {
+      setPolicyLoading(true);
+      setPolicyError("");
+    }
+    const p = await readCall({ op: "policy" });
+    const next = p?.ok ? normalizePolicy(p.policy) : null;
+    if (!next) {
+      if (attempt === 0) {
+        const client = getSupabaseClient();
+        try { await client?.auth.refreshSession(); } catch { /* retry regardless */ }
+        return refresh(1);
+      }
+      setPolicyLoading(false);
+      setPolicyError("Platform Settings did not respond. Your other work is safe; check the connection and try again.");
+      return;
+    }
+    setPolicy(next);
+    setDraft(next);
+    setPolicyLoading(false);
+    if (next.engineer_hours !== null) intervalValues.current.engineer = next.engineer_hours;
+    if (next.privileged_hours !== null) intervalValues.current.privileged = next.privileged_hours;
+    void loadPlatformLists();
   }
 
   /* Loading the backup settings used to fail silently, and the panel then sat
@@ -463,7 +532,18 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
   }
 
   if (!policy || !draft) {
-    return <div className="platform-settings"><p className="org-none">Loading platform settings...</p></div>;
+    return (
+      <div className="platform-settings">
+        <section className="org-card ps-load-state" aria-live="polite">
+          <span className="org-eyebrow"><ShieldCheck size={14} /> Platform settings</span>
+          <h3>{policyLoading ? "Loading settings…" : "Settings could not load"}</h3>
+          <p className="ps-note">{policyLoading
+            ? "This should take only a few seconds."
+            : policyError || "The settings service did not respond."}</p>
+          {!policyLoading ? <button type="button" className="org-add" onClick={() => refresh()}>Try again</button> : null}
+        </section>
+      </div>
+    );
   }
 
   const intervalUnit = draft.interval_unit === "days" ? "days" : draft.interval_unit === "business_days" ? "business days" : "hours";

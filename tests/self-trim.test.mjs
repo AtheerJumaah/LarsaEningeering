@@ -147,3 +147,29 @@ test("any period's sessions can be laid out in full — a month, all history, or
   // An empty period says so honestly instead of "no sessions recorded yet".
   assert.match(page, /No sessions in this period\./);
 });
+
+test("illogical sessions are moved to the top and visibly marked for review", async () => {
+  const page = await read("app/page.tsx");
+  const css = await read("app/globals.css");
+  // The ordering is based on the engine's real exclusion flags, not a color
+  // applied indiscriminately to old entries.
+  assert.match(page, /const leftNeedsAttention = !isActiveClockSession\(left\) && Boolean\(left\.stale \|\| left\.unclosed \|\| left\.long\);/);
+  assert.match(page, /if \(leftNeedsAttention !== rightNeedsAttention\) return rightNeedsAttention \? 1 : -1;/);
+  assert.match(page, /unusual time \{trimRows\.filter/);
+  assert.match(page, /"trim-row needs-attention"/);
+  assert.match(page, /Review first/);
+  assert.match(css, /\.trim-row\.needs-attention/);
+  assert.match(css, /#fff1ef/);
+});
+
+test("the trim window alone can show and edit Baghdad or U.S. Central time without changing stored instants", async () => {
+  const page = await read("app/page.tsx");
+  assert.match(page, /useState<"America\/Chicago" \| "Asia\/Baghdad">\(ATTENDANCE_TIME_ZONE\)/);
+  assert.match(page, /aria-label="Timezone for trimming recorded hours"/);
+  assert.match(page, /<option value="Asia\/Baghdad">Baghdad, Iraq<\/option>/);
+  assert.match(page, /<option value="America\/Chicago">U\.S\. Central<\/option>/);
+  assert.match(page, /attendanceDateTimeInput\(iso, trimTimeZone\)/);
+  assert.match(page, /attendanceWallDateTimeUtc\(trimValue, trimTimeZone\)/);
+  assert.match(page, /date: attendanceDateKey\(session\.clockIn, trimTimeZone\)/);
+  assert.match(page, /Saved attendance remains the same exact moment\./);
+});

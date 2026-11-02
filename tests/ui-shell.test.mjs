@@ -461,3 +461,20 @@ test("Platform Settings says when backups will not load instead of loading for e
     assert.ok(panel.includes(control), `the backup panel must still offer ${control}`);
   }
 });
+
+test("Platform Settings cannot remain on an endless loader when its service is slow", () => {
+  const panel = read("app/PlatformSettings.tsx");
+  // Read calls have a deadline, while write calls deliberately do not use it
+  // because a timed-out write might still commit on the server.
+  assert.match(panel, /async function readCall\(body: Record<string, unknown>, timeoutMs = 6500\)/);
+  assert.match(panel, /Promise\.race\(\[/);
+  assert.match(panel, /return refresh\(1\);/);
+  assert.match(panel, /Platform Settings did not respond\./);
+  assert.match(panel, /onClick=\{\(\) => refresh\(\)\}>Try again<\/button>/);
+  // Secondary admin lists load concurrently and cannot block the main form.
+  assert.match(panel, /const \[a, e, l\] = await Promise\.all\(\[/);
+  assert.match(panel, /void loadPlatformLists\(\);/);
+  // An older/cached policy response cannot crash the new notification panel.
+  assert.match(panel, /DEFAULT_ATTENDANCE_NOTIFICATIONS/);
+  assert.match(panel, /\.\.\.\(policy\.attendance_notifications \|\| \{\}\)/);
+});
