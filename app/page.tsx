@@ -7345,32 +7345,15 @@ export default function Home() {
 
     /* Keeping the installed app on the current version. The worker already
        takes over the moment it activates, but the PAGE went on running the
-       old code until somebody happened to close and reopen it — which is why
-       a shipped fix could sit unseen on a phone for days. Now the app asks
-       whether a newer worker exists (on load, and whenever it comes back to
-       the foreground) and reloads once when one takes over, so the new
-       version replaces the old one by itself. */
-    let updateCheck: (() => void) | null = null;
-    let versionTimer: number | null = null;
-    navigator.serviceWorker?.register("/sw.js").then((registration) => {
-      registration.update().catch(() => undefined);
-      updateCheck = () => { if (!document.hidden) registration.update().catch(() => undefined); };
-      document.addEventListener("visibilitychange", updateCheck);
-      // Keep an open tab close to the deployed version. Fifteen seconds is
-      // short enough that a UI fix becomes visible promptly, but infrequent
-      // enough to avoid turning the service-worker update check into polling
-      // traffic. The worker still reloads the page only after a replacement
-      // has actually activated.
-      versionTimer = window.setInterval(updateCheck, 15_000);
-    }).catch(() => undefined);
-    /* Only a REPLACEMENT is worth a reload. On a first install there was no
-       controller, and reloading then would restart the app under somebody's
-       hands for no reason — and could loop. */
+       old code until somebody happened to close and reopen it. A generated
+       release marker catches ordinary app/engine deployments even when sw.js
+       itself did not change; controllerchange remains the fast path when it
+       did. Both paths share the same safe reload gate below. */
     const hadController = Boolean(navigator.serviceWorker?.controller);
     let reloading = false;
     let safeReloadTimer: number | null = null;
-    const onControllerChange = () => {
-      if (!hadController || reloading) return;
+    const requestSafeReload = () => {
+      if (reloading) return;
       reloading = true;
       const reloadWhenIdle = () => {
         const editing = document.activeElement?.matches("input, textarea, [contenteditable=true]");
@@ -7380,6 +7363,55 @@ export default function Home() {
         window.location.reload();
       };
       reloadWhenIdle();
+    };
+
+    let loadedRelease: string | null = null;
+    try { loadedRelease = localStorage.getItem("larsa-control-release"); } catch { /* private mode */ }
+    const checkRelease = async () => {
+      if (document.hidden || reloading) return;
+      try {
+        const response = await fetch(`/larsa-release.json?check=${Date.now()}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json() as { release?: string };
+        const remoteRelease = String(data.release || "");
+        if (!remoteRelease) return;
+        if (!loadedRelease) {
+          loadedRelease = remoteRelease;
+          try { localStorage.setItem("larsa-control-release", remoteRelease); } catch { /* private mode */ }
+          return;
+        }
+        if (remoteRelease !== loadedRelease) {
+          loadedRelease = remoteRelease;
+          try { localStorage.setItem("larsa-control-release", remoteRelease); } catch { /* private mode */ }
+          requestSafeReload();
+        }
+      } catch { /* offline: keep the working version until the network returns */ }
+    };
+
+    let updateCheck: (() => void) | null = null;
+    let versionTimer: number | null = null;
+    navigator.serviceWorker?.register("/sw.js").then((registration) => {
+      registration.update().catch(() => undefined);
+      void checkRelease();
+      updateCheck = () => {
+        if (document.hidden) return;
+        registration.update().catch(() => undefined);
+        void checkRelease();
+      };
+      document.addEventListener("visibilitychange", updateCheck);
+      // Keep an open tab close to the deployed version. Fifteen seconds is
+      // short enough that a UI fix becomes visible promptly, but infrequent
+      // enough to avoid turning the service-worker update check into polling
+      // traffic. The worker still reloads the page only after a replacement
+      // has actually activated.
+      versionTimer = window.setInterval(updateCheck, 15_000);
+    }).catch(() => undefined);
+    /* Only a REPLACEMENT worker is worth a controller-change reload. On a
+       first install there was no previous controller, and reloading then
+       would restart the app under somebody's hands for no reason. */
+    const onControllerChange = () => {
+      if (!hadController || reloading) return;
+      requestSafeReload();
     };
     navigator.serviceWorker?.addEventListener("controllerchange", onControllerChange);
 

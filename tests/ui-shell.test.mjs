@@ -432,12 +432,20 @@ test("the installed app replaces itself when a new version ships", () => {
      on load and whenever it returns to the foreground, and reloads once when
      one takes over. */
   assert.match(page, /registration\.update\(\)\.catch\(\(\) => undefined\);/);
+  assert.match(page, /fetch\(`\/larsa-release\.json\?check=\$\{Date\.now\(\)\}`/);
+  assert.match(page, /remoteRelease !== loadedRelease/);
+  assert.match(page, /requestSafeReload\(\);/);
   assert.match(page, /document\.addEventListener\("visibilitychange", updateCheck\);/);
   assert.match(page, /navigator\.serviceWorker\?\.addEventListener\("controllerchange", onControllerChange\);/);
   /* A first install has no previous controller; reloading then would restart
      the app under the person's hands, and could loop. */
   assert.match(page, /const hadController = Boolean\(navigator\.serviceWorker\?\.controller\);/);
   assert.match(page, /if \(!hadController \|\| reloading\) return;/);
+  /* An update never interrupts a clock write or somebody typing. It waits and
+     then performs one ordinary reload — no hard refresh and no recurring UI
+     delay. */
+  assert.match(page, /if \(punchLock\.current \|\| editing\)/);
+  assert.match(page, /safeReloadTimer = window\.setTimeout\(reloadWhenIdle, 15_000\)/);
   // And every listener it adds is removed again.
   assert.match(page, /navigator\.serviceWorker\?\.removeEventListener\("controllerchange", onControllerChange\);/);
   assert.match(page, /if \(updateCheck\) document\.removeEventListener\("visibilitychange", updateCheck\);/);
