@@ -29,7 +29,8 @@ test("the chain is read from one place, by both the handler and the screen", () 
 });
 
 test("somebody who is not the current approver is refused", () => {
-  assert.match(body, /const overriding = Boolean\(waitingOn && waitingOn !== actor\.id\);/);
+  assert.match(body, /const executiveDelegate = Boolean\(waitingOn && waitingOn !== actor\.id[\s\S]*?canActForApprovalHolder/);
+  assert.match(body, /const overriding = Boolean\(waitingOn && waitingOn !== actor\.id && !executiveDelegate\);/);
   assert.match(body, /if \(overriding && !isAdmin\(actor\)\) \{/);
   assert.match(body, /This request is with \$\{holder\.name\} at the moment\./);
   // Refused, not silently ignored.
@@ -85,7 +86,8 @@ test("every step is recorded, including which step it was", () => {
 test("an administrator can still act, and it is written down as an override", () => {
   /* A chain containing somebody who has left the company would otherwise block
      for ever. The escape hatch is real, so it is audited rather than hidden. */
-  assert.match(body, /note: overriding \? `\$\{note \? `\$\{note\} · ` : ""\}Decided by an administrator out of turn` : note,/);
+  assert.match(body, /Decided by an administrator out of turn/);
+  assert.match(body, /Decided by the COO under CEO approval authority/);
 });
 
 // ------------------------------------------------------- existing requests
@@ -95,7 +97,7 @@ test("a request with no chain stays decidable — by rank, not by anybody", () =
      at or above the requester's rank, Super Admin always), and the screen
      mirrors that rule instead of offering everyone a button. */
   assert.match(page, /if \(!flow\.length\) return \{ holder: null, step: 0, total: 0 \};/);
-  assert.match(page, /const mine = holder\s*\n\s*\? holder === viewer\?\.id\s*\n\s*: Boolean\(viewer && \(!person \|\| rankOf\(viewer\) >= rankOf\(person\)\)\);/);
+  assert.match(page, /const mine = holder\s*\n\s*\? canActForApprovalHolder\(users, approvalOrg, viewer\?\.id, holder\)\s*\n\s*: Boolean\(viewer && \(!person \|\| rankOf\(viewer\) >= rankOf\(person\)\)\);/);
   // And the handler itself refuses a decision from below the requester's rank.
   const decideBody = page.slice(page.indexOf("const decideRequest = useCallback"), page.indexOf("const saveGrowthStore"));
   assert.match(decideBody, /if \(!waitingOn && !isAdmin\(actor\)\) \{/);
@@ -152,7 +154,7 @@ test('"need attention" counts only what is genuinely waiting on this person', ()
   const summary = page.slice(page.indexOf("const queue = !mayApprove"), page.indexOf("const queue = !mayApprove") + 700);
   assert.match(summary, /if \(request\.status !== "Pending" \|\| request\.uid === viewer\.id\) return false;/);
   assert.match(summary, /if \(!chain\.length\) \{\s*\n\s*const requester = users\.find\(\(user\) => user\.id === request\.uid\);\s*\n\s*return !requester \|\| rankOf\(viewer\) >= rankOf\(requester\);/);
-  assert.match(summary, /return chain\[at\] === viewer\.id;/);
+  assert.match(summary, /return canActForApprovalHolder\(users, approvalOrg, viewer\.id, chain\[at\]\);/);
   assert.match(page, /const mayApprove = Boolean\(approvalsGate && hasItemPermission\(viewer, approvalsGate, "approve"\)\);/);
   // The old "anywhere in the chain" test is gone for good.
   assert.doesNotMatch(page, /&& request\.flow\.includes\(viewer\.id\)\)\.length;/);

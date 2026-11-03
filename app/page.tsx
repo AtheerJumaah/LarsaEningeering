@@ -24,7 +24,7 @@ import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notif
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { OrgStructure2 } from "./OrgStructure2";
 import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
-import { APPROVAL_FLOW_TYPES, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
+import { APPROVAL_FLOW_TYPES, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
   ArrowRight,
@@ -1730,8 +1730,9 @@ function rankOf(user: Pick<StaffUser, "access"> | null | undefined): number {
 /* One person's configured approval chain for one request type, read from the
    same flowConfig both the native screens and the Timeclock engine write.
    Missing configuration is now a real default: team leader → department
-   head, department head alone when there is no team leader, and a named
-   direct manager as the safe fallback when the chart is not built yet. An
+   head, department head alone when there is no team leader, department head
+   → CEO, and a named direct manager as the safe fallback when the chart is not
+   built yet. COO may act for a CEO-held approval without adding a second step. An
    empty chain is only chainless when somebody explicitly cleared it in the
    Approval Flow editor. */
 function chainFor(
@@ -2692,6 +2693,9 @@ function buildHomeSummary(
      so it is only counted for them. */
   const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
   const mayApprove = Boolean(approvalsGate && hasItemPermission(viewer, approvalsGate, "approve"));
+  const approvalOrg = (store?.org && typeof store.org === "object")
+    ? store.org as ApprovalFlowOrg
+    : effectiveOrg(users);
   const queue = !mayApprove ? 0 : approvals.filter((request) => {
     if (request.status !== "Pending" || request.uid === viewer.id) return false;
     const chain = Array.isArray(request.flow) ? request.flow.filter(Boolean) : [];
@@ -2700,7 +2704,7 @@ function buildHomeSummary(
       return !requester || rankOf(viewer) >= rankOf(requester);
     }
     const at = Math.max(0, Math.min(Number(request.step) || 0, chain.length - 1));
-    return chain[at] === viewer.id;
+    return canActForApprovalHolder(users, approvalOrg, viewer.id, chain[at]);
   }).length;
   if (queue) {
     reminders.push({
@@ -8553,7 +8557,8 @@ export default function Home() {
      already part-made (Corrections can reroute an individual one).
 
      The generated default is team leader → department head (or department
-     head alone). Saving here is an explicit override; an empty save is also
+     head alone), and department head → CEO with COO delegation. Saving here is
+     an explicit override; an empty save is also
      remembered as an explicit override so a later team/member edit cannot
      silently recreate a route the administrator intentionally cleared. */
   const saveApprovalFlow = useCallback((employeeId: string, type: string, steps: string[]) => {
@@ -9135,8 +9140,8 @@ export default function Home() {
     if (!Array.isArray(store.approvals)) store.approvals = [];
     ensureStoreApprovalFlows(store);
     /* Corrections are requests too. They use the same default route as leave,
-       schedule, and points: team leader first, then department head. Existing
-       records with no route remain compatible through the rank-authorized
+       schedule, and points: team leader, department head, then the CEO layer
+       for a department head's own request. Existing records with no route remain compatible through the rank-authorized
        fallback below, but every new correction gets the standing route. */
     const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
     const configured = chainFor(store, actor.id, draft.kind);
@@ -9257,7 +9262,12 @@ export default function Home() {
        block for ever, so a Super Admin can still act -- but it is recorded as
        an override in the history rather than passed off as a normal decision,
        because somebody reading that trail later needs to see it happened. */
-    const overriding = Boolean(waitingOn && waitingOn !== actor.id);
+    const approvalOrg = (store.org && typeof store.org === "object")
+      ? store.org as ApprovalFlowOrg
+      : effectiveOrg(store.users as StaffUser[]);
+    const executiveDelegate = Boolean(waitingOn && waitingOn !== actor.id
+      && canActForApprovalHolder(store.users as StaffUser[], approvalOrg, actor.id, waitingOn));
+    const overriding = Boolean(waitingOn && waitingOn !== actor.id && !executiveDelegate);
     if (overriding && !isAdmin(actor)) {
       const holder = (store.users as StaffUser[]).find((row) => row.id === waitingOn);
       notify(holder
@@ -9300,7 +9310,11 @@ export default function Home() {
         by: actor.name,
         action: advancing ? `Approved (step ${step + 1} of ${flow.length})` : status,
         at: stamp,
-        note: overriding ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn` : note,
+        note: overriding
+          ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn`
+          : executiveDelegate
+            ? `${note ? `${note} · ` : ""}Decided by the COO under CEO approval authority`
+            : note,
       }],
     };
 
@@ -17308,10 +17322,16 @@ function RequestsCentre({
   const scopeIds = new Set(scope.map((user) => user.id));
   const approvalsItem = ITEMS.find((item) => item.id === "staff-approvals");
   const canApprove = Boolean(viewer && approvalsItem && hasItemPermission(viewer, approvalsItem, "approve"));
+  const approvalOrg = (store?.org && typeof store.org === "object")
+    ? store.org as ApprovalFlowOrg
+    : effectiveOrg(users);
 
   const mine = all.filter((row) => row.uid === viewer?.id);
   const queue = !viewer ? [] : all.filter((row) => row.status === "Pending" && row.uid !== viewer.id
-    && (isAdmin(viewer) || (row.flow || []).includes(viewer.id) || scopeIds.has(row.uid)));
+    && (isAdmin(viewer)
+      || (requestStage(row).holder ? canActForApprovalHolder(users, approvalOrg, viewer.id, requestStage(row).holder || undefined) : false)
+      || (row.flow || []).includes(viewer.id)
+      || scopeIds.has(row.uid)));
   const inPeriod = all.filter((row) => withinDates(row.from || row.date || "", from, to));
   const reportUsers = (canApprove ? scope : scope.filter((user) => user.id === viewer?.id));
   const report = reportUsers.map((user) => {
@@ -17493,7 +17513,7 @@ function RequestsCentre({
                            enforces: open to approvers at or above the
                            requester's rank, not to everybody. */
                         const mine = holder
-                          ? holder === viewer?.id
+                          ? canActForApprovalHolder(users, approvalOrg, viewer?.id, holder)
                           : Boolean(viewer && (!person || rankOf(viewer) >= rankOf(person)));
                         if (!mine && !(viewer && isAdmin(viewer))) {
                           if (!holder) {
@@ -17567,7 +17587,9 @@ function RequestsCentre({
  *
  * Every request type is editable here. New people inherit the structure route:
  * team leader → department head, department head alone when there is no team
- * leader, and a named direct manager when the chart is not yet configured.
+ * leader, and department head → CEO. COO may act for a CEO-held step without
+ * becoming another sequential approval. A named direct manager is the fallback
+ * when the chart is not yet configured.
  * Clearing and saving is an explicit override, so later structure edits never
  * silently recreate a route an administrator intentionally cleared. */
 const FLOW_TYPES = [...APPROVAL_FLOW_TYPES] as const;
@@ -17731,11 +17753,12 @@ function ApprovalFlowCentre({
           )}
           <p className="builder-note">
             New people inherit the structure route automatically: team leader → department head,
-            or department head alone. A direct manager is used when the structure has not been
-            formed yet. Up to three approvers can be arranged here; clearing and saving is an
-            explicit override. Nobody approves their own request, and the same person cannot
-            appear twice. Changing this affects requests raised from now on — anything already
-            waiting keeps its own chain, which Corrections can reroute.
+            or department head alone; department heads route to the CEO, and the COO can act with
+            CEO approval authority. A direct manager is used when the structure has not been formed
+            yet. Up to three approvers can be arranged here; clearing and saving is an explicit
+            override. Nobody approves their own request, and the same person cannot appear twice.
+            Changing this affects requests raised from now on — anything already waiting keeps its
+            own chain, which Corrections can reroute.
           </p>
         </section>
       )}

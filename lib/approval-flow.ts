@@ -31,6 +31,12 @@ export type ApprovalFlowOrg = {
     leadIds?: string[];
     memberIds?: string[];
   }>;
+  executivePositions?: Array<{
+    id: string;
+    title?: string;
+    personIds?: string[];
+    reportsToPositionIds?: string[];
+  }>;
   reporting?: Record<string, string[]>;
 };
 
@@ -61,6 +67,37 @@ function pushUnique(target: string[], candidate: string | undefined, users: Appr
   target.push(candidate);
 }
 
+function executiveHolders(org: ApprovalFlowOrg | null | undefined, pattern: RegExp): string[] {
+  const positions = Array.isArray(org?.executivePositions) ? org!.executivePositions! : [];
+  return positions
+    .filter((position) => pattern.test(String(position.title || "")))
+    .flatMap((position) => Array.isArray(position.personIds) ? position.personIds : [])
+    .filter(Boolean);
+}
+
+const CEO_TITLE = /\b(ceo|chief executive officer)\b/i;
+const CEO_FALLBACK_TITLE = /\b(president|managing director)\b/i;
+const COO_TITLE = /\b(coo|chief operating officer)\b/i;
+
+function ceoHolders(org: ApprovalFlowOrg | null | undefined): string[] {
+  const primary = executiveHolders(org, CEO_TITLE);
+  return primary.length ? primary : executiveHolders(org, CEO_FALLBACK_TITLE);
+}
+
+/** COO is an alternate decision-maker for a CEO-held approval step. */
+export function canActForApprovalHolder(
+  users: ApprovalFlowUser[],
+  org: ApprovalFlowOrg | null | undefined,
+  actorId: string | undefined,
+  holderId: string | undefined,
+): boolean {
+  if (!actorId || !holderId) return false;
+  if (actorId === holderId) return true;
+  if (!active(users, actorId, holderId)) return false;
+  return ceoHolders(org).includes(holderId)
+    && executiveHolders(org, COO_TITLE).includes(actorId);
+}
+
 /**
  * Build the default route for one employee.
  *
@@ -68,7 +105,8 @@ function pushUnique(target: string[], candidate: string | undefined, users: Appr
  * the employee has no team lead, the department head is the only step. A
  * named direct manager is a safe fallback when the chart has not been set up
  * yet (or when a person is not on a team); it is never added after a complete
- * team-lead → department-head route.
+ * team-lead → department-head route. Department heads route to the CEO. COO
+ * can act for that CEO step without becoming another sequential step.
  */
 export function defaultApprovalChain(
   users: ApprovalFlowUser[],
@@ -91,6 +129,29 @@ export function defaultApprovalChain(
       .forEach((department) => departmentIds.add(department.id));
   }
 
+  /* Reporting directly to a department head is also a department relation.
+     More than one such line naturally gives the person more than one
+     department and includes every relevant head in the default route. */
+  const configuredManagers = Array.isArray(org?.reporting?.[employeeId])
+    ? org!.reporting![employeeId]
+    : [];
+  configuredManagers.forEach((managerId) => {
+    departments.filter((department) => (department.headIds || []).includes(managerId))
+      .forEach((department) => departmentIds.add(department.id));
+  });
+
+  /* A department head never approves their own request. Company leadership
+     is the next default layer: CEO is recorded in the flow, while COO is an
+     authorized alternate at decision time. */
+  const isDepartmentHead = departments.some((department) => (department.headIds || []).includes(employeeId));
+  if (isDepartmentHead) {
+    const executiveRoute: string[] = [];
+    const ceoIds = ceoHolders(org);
+    const fallbackCooIds = ceoIds.length ? [] : executiveHolders(org, COO_TITLE);
+    [...ceoIds, ...fallbackCooIds].forEach((id) => pushUnique(executiveRoute, id, users, employeeId));
+    if (executiveRoute.length) return executiveRoute.slice(0, 3);
+  }
+
   const leaders: string[] = [];
   employeeTeams.forEach((team) => {
     (team.leadIds || []).forEach((id) => pushUnique(leaders, id, users, employeeId));
@@ -106,9 +167,6 @@ export function defaultApprovalChain(
   heads.forEach((id) => pushUnique(route, id, users, employeeId));
   if (route.length) return route.slice(0, 3);
 
-  const configuredManagers = Array.isArray(org?.reporting?.[employeeId])
-    ? org!.reporting![employeeId]
-    : [];
   configuredManagers.forEach((id) => pushUnique(route, id, users, employeeId));
   if (!route.length) {
     const namedManager = users.find((user) => sameId(employee.manager, user));
