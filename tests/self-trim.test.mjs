@@ -174,6 +174,8 @@ test("the attention banner remains visible and counts the explicitly selected we
   assert.match(page, /allAttentionSessions\.length > 0/);
   assert.match(page, /Nothing was deleted\. Choose another period/);
   assert.match(page, /\['week', 'This week'\], \['month', 'This month'\], \['all', 'All history'\]/);
+  assert.match(page, />Review \{attentionPeriod === "week"/);
+  assert.doesNotMatch(page, /attentionSessions\.length > 0 && <button type="button" onClick=\{\(\) => \{/);
 });
 
 test("the trim window alone can show and edit Baghdad or U.S. Central time without changing stored instants", async () => {

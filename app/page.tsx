@@ -19703,7 +19703,7 @@ function QuickClock({
               ))}
             </div>
           </div>
-          {attentionSessions.length > 0 && <button type="button" onClick={() => {
+          <button type="button" onClick={() => {
             setShowCorrection(false);
             setShowTrim(true);
             setTrimUser("");
@@ -19716,7 +19716,7 @@ function QuickClock({
             }
             setTrimming(null);
             setTrimAskReview(false);
-          }}>Review {attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "all history"}</button>}
+          }}>Review {attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "all history"}</button>
         </section>
       )}
 
