@@ -4940,6 +4940,7 @@ export default function Home() {
      declared, so the ledger-restore toast goes through a ref that the
      declaration below fills in. */
   const notifyRef = useRef<(message: string) => void>(() => {});
+  const foregroundNotificationRef = useRef<string | null>(null);
   /* One pending in-place engine refresh per synced store (see
      onRemoteChange below), so bursts of remote saves repaint once. */
   const remoteRefreshTimers = useRef<Partial<Record<string, number>>>({});
@@ -10551,8 +10552,28 @@ export default function Home() {
      carries no content — it only says "go and look again". */
   useEffect(() => {
     if (!sessionUser?.id) return;
-    return watchNotifications({ id: sessionUser.id }, () => setNotifyTick((value) => value + 1));
-  }, [sessionUser?.id]);
+    let cancelled = false;
+    const startedAt = Date.now();
+    const stop = watchNotifications({ id: sessionUser.id }, () => {
+      setNotifyTick((value) => value + 1);
+      // System push is responsible while the app is in the background. When
+      // the app is open, also show a genuine in-app pop-up so a restrictive
+      // Windows/browser notification setting cannot make an arrival invisible.
+      if (document.visibilityState !== "visible") return;
+      fetchFeed({ id: sessionUser.id, name: sessionUser.name }, { scope: "unread", limit: 1 })
+        .then((feed) => {
+          if (cancelled) return;
+          const row = feed.items[0];
+          const createdAt = Date.parse(row?.createdAt || "");
+          if (!row || row.id === foregroundNotificationRef.current
+            || !Number.isFinite(createdAt) || createdAt < startedAt - 10_000) return;
+          foregroundNotificationRef.current = row.id;
+          notify(row.body ? `${row.title} — ${row.body}` : row.title);
+        })
+        .catch(() => { /* the bell refresh still happened */ });
+    });
+    return () => { cancelled = true; stop(); };
+  }, [sessionUser?.id, sessionUser?.name, notify]);
 
   /* One import per device, ever. The notifications already sitting in this
      browser's localStorage are somebody's history, so they are carried into the
@@ -18173,6 +18194,8 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
      somebody to wonder why a switch they turned on changed nothing. */
   const viewerHasEmail = Boolean(user?.email && user.email.includes("@"));
   const hasManagedChannels = Boolean(setup?.categories.some((row) => row.managed));
+  const hasPhoneDevice = Boolean(setup?.devices.some((device) =>
+    /iphone|ipad|android/i.test(`${device.platform || ""} ${device.label || ""}`)));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -18342,6 +18365,13 @@ function NotifySettings({ user, openBell }: { user: StaffUser | null; openBell: 
 
       {configured && setup && (
         <>
+          {!hasPhoneDevice && (
+            <div className="notify-state warn">
+              <Smartphone size={18} />
+              <span><b>No phone is connected yet</b>
+                <small>Open Larsa Control on your phone, go to Settings → Notifications, and choose “Turn on here”. On iPhone or iPad, add the app to the Home Screen first.</small></span>
+            </div>
+          )}
           <div className="section-head sub">
             <div><h4>Notification channels</h4>
               <small>Turned off here, it still arrives in the bell — it just will not interrupt you.</small></div>

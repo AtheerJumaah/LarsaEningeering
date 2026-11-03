@@ -202,7 +202,8 @@ test("12. archiving hides a notification, it never deletes one", () => {
 });
 
 test("13. unread state syncs across devices without leaking content", () => {
-  assert.match(page, /return watchNotifications\(\{ id: sessionUser\.id \}, \(\) => setNotifyTick/);
+  assert.match(page, /const stop = watchNotifications\(\{ id: sessionUser\.id \}, \(\) => \{/);
+  assert.match(page, /setNotifyTick\(\(value\) => value \+ 1\)/);
   assert.match(notify, /\.on\("broadcast", \{ event: "changed" \}, \(\) => onChange\(\)\)/);
   // The broadcast is content-free and per person: guessing a colleague's topic
   // reveals that something arrived, never what it said.
@@ -552,8 +553,18 @@ test("alerts stay on until the person turns them off", () => {
      them, so the previous account stops receiving on that hardware. */
   assert.match(page, /void adoptPushSubscription\(normalizedUser\.id, normalizedUser\.name\);/);
   assert.match(push, /export async function adoptPushSubscription/);
-  // Silent: it never re-asks for permission and never creates a subscription.
+  // Silent: it never re-asks for permission, but it repairs a subscription
+  // that the browser lost after permission had already been granted.
   assert.match(push, /if \(typeof Notification === "undefined" \|\| Notification\.permission !== "granted"\) return;/);
-  assert.match(push, /const subscription = await registration\.pushManager\.getSubscription\(\);\s*\n\s*if \(!subscription\) return;/);
-  assert.doesNotMatch(push.slice(push.indexOf("export async function adoptPushSubscription")), /requestPermission|pushManager\.subscribe/);
+  assert.match(push, /const subscription = await ensureGrantedSubscription\(registration, vapidKey\);/);
+  assert.match(push, /if \(!subscription\) \{\s*\n\s*subscription = await registration\.pushManager\.subscribe/);
+  assert.doesNotMatch(push.slice(push.indexOf("export async function adoptPushSubscription")), /requestPermission/);
+});
+
+test("foreground arrivals show an in-app pop-up and missing phones are explained", () => {
+  assert.match(page, /document\.visibilityState !== "visible"/);
+  assert.match(page, /fetchFeed\(\{ id: sessionUser\.id, name: sessionUser\.name \}, \{ scope: "unread", limit: 1 \}\)/);
+  assert.match(page, /notify\(row\.body \? `\$\{row\.title\} — \$\{row\.body\}` : row\.title\)/);
+  assert.match(page, /No phone is connected yet/);
+  assert.match(page, /Settings → Notifications/);
 });

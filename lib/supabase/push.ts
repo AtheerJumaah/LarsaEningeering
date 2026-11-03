@@ -83,6 +83,53 @@ export type PushOutcome = {
   state: "granted" | "denied" | "unsupported" | "unconfigured" | "needs-home-screen" | "error";
 };
 
+async function ensureGrantedSubscription(registration: ServiceWorkerRegistration, vapidKey: string): Promise<PushSubscription> {
+  const desiredKey = urlBase64ToUint8Array(vapidKey);
+  let subscription = await registration.pushManager.getSubscription();
+  // Permission can survive while the subscription itself is removed by the
+  // browser, and an old VAPID key can leave a subscription that looks healthy
+  // locally but can no longer receive anything. Repair both cases without
+  // asking the person for permission again.
+  if (subscription) {
+    const existingKey = subscription.options?.applicationServerKey
+      ? new Uint8Array(subscription.options.applicationServerKey)
+      : null;
+    const sameKey = !!existingKey && existingKey.length === desiredKey.length
+      && existingKey.every((byte, idx) => byte === desiredKey[idx]);
+    if (!sameKey) {
+      await subscription.unsubscribe();
+      subscription = null;
+    }
+  }
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: desiredKey as BufferSource,
+    });
+  }
+  return subscription;
+}
+
+async function registerPushSubscription(subscription: PushSubscription, staffUid: string, staffName?: string): Promise<string | null> {
+  const json = subscription.toJSON();
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+    return "Could not read this browser's push subscription.";
+  }
+  const client = getSupabaseClient();
+  if (!client) return "Alerts outside the app aren't configured for this deployment yet.";
+  const device = describeThisDevice();
+  const { error } = await client.rpc("notify_register_device", {
+    actor: { id: staffUid, name: staffName || "" },
+    p_endpoint: json.endpoint,
+    p_p256dh: json.keys.p256dh,
+    p_auth: json.keys.auth,
+    p_label: device.label,
+    p_ua: navigator.userAgent || "",
+    p_platform: device.platform,
+  });
+  return error ? `Could not save this device: ${error.message}` : null;
+}
+
 /* Requests permission if needed, subscribes this browser to the push service,
  * and registers the subscription against the signed-in staff id. */
 export async function subscribeToPush(staffUid: string, staffName?: string): Promise<PushOutcome> {
@@ -112,49 +159,10 @@ export async function subscribeToPush(staffUid: string, staffName?: string): Pro
 
   try {
     const registration = await navigator.serviceWorker.ready;
-    const desiredKey = urlBase64ToUint8Array(vapidKey);
-    let subscription = await registration.pushManager.getSubscription();
-    // A subscription can already exist under an OLD VAPID key (e.g. after a
-    // key rotation) -- getSubscription() happily returns it, but the push
-    // service silently rejects anything signed with the new private key.
-    // Drop it here so the block below creates a fresh one under this key.
-    if (subscription) {
-      const existingKey = subscription.options?.applicationServerKey
-        ? new Uint8Array(subscription.options.applicationServerKey)
-        : null;
-      const sameKey = !!existingKey && existingKey.length === desiredKey.length
-        && existingKey.every((byte, idx) => byte === desiredKey[idx]);
-      if (!sameKey) {
-        await subscription.unsubscribe();
-        subscription = null;
-      }
-    }
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: desiredKey as BufferSource,
-      });
-    }
-
-    const json = subscription.toJSON();
-    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
-      return { ok: false, state: "error", message: "Could not read this browser's push subscription." };
-    }
-    const client = getSupabaseClient();
-    if (!client) {
-      return { ok: false, state: "unconfigured", message: "Alerts outside the app aren't configured for this deployment yet." };
-    }
+    const subscription = await ensureGrantedSubscription(registration, vapidKey);
+    const registerError = await registerPushSubscription(subscription, staffUid, staffName);
+    if (registerError) return { ok: false, state: "error", message: registerError };
     const device = describeThisDevice();
-    const { error } = await client.rpc("notify_register_device", {
-      actor: { id: staffUid, name: staffName || "" },
-      p_endpoint: json.endpoint,
-      p_p256dh: json.keys.p256dh,
-      p_auth: json.keys.auth,
-      p_label: device.label,
-      p_ua: navigator.userAgent || "",
-      p_platform: device.platform,
-    });
-    if (error) return { ok: false, state: "error", message: `Could not save this device: ${error.message}` };
     return { ok: true, state: "granted", message: `Alerts are on for ${device.label}.` };
   } catch (err) {
     return { ok: false, state: "error", message: `Could not enable alerts: ${String(err).slice(0, 140)}` };
@@ -173,30 +181,18 @@ export async function subscribeToPush(staffUid: string, staffName?: string): Pro
  * receiving on hardware it no longer sits in front of, without anybody losing
  * their alerts.
  *
- * Silent by design: it never asks for permission and never creates a
- * subscription. If this browser has none, or permission was never granted,
- * there is nothing to hand over and it does nothing. */
+ * Silent by design: it never asks for permission. If permission was already
+ * granted but the browser lost its subscription (or the VAPID key changed),
+ * it repairs that subscription and registers it again. */
 export async function adoptPushSubscription(staffUid: string, staffName?: string): Promise<void> {
   if (!pushSupported() || !staffUid) return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  if (!supabaseConfigured() || !vapidKey || pushNeedsHomeScreen()) return;
   try {
     const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
-    if (!subscription) return;
-    const json = subscription.toJSON();
-    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) return;
-    const client = getSupabaseClient();
-    if (!client) return;
-    const device = describeThisDevice();
-    await client.rpc("notify_register_device", {
-      actor: { id: staffUid, name: staffName || "" },
-      p_endpoint: json.endpoint,
-      p_p256dh: json.keys.p256dh,
-      p_auth: json.keys.auth,
-      p_label: device.label,
-      p_ua: navigator.userAgent || "",
-      p_platform: device.platform,
-    });
+    const subscription = await ensureGrantedSubscription(registration, vapidKey);
+    await registerPushSubscription(subscription, staffUid, staffName);
   } catch {
     /* Alerts simply stay with whoever held them; sign-in must not fail here. */
   }
