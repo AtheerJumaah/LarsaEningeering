@@ -5,6 +5,7 @@ import {
   defaultApprovalChain,
   ensureDefaultApprovalFlows,
 } from "../lib/approval-flow.ts";
+import { departmentMemberships } from "../lib/org-membership.mjs";
 
 const users = [
   { id: "member", name: "Member", enabled: true },
@@ -36,6 +37,41 @@ const org = {
 
 test("team membership plus a second department reporting line builds one ordered route", () => {
   assert.deepEqual(defaultApprovalChain(users, org, "member"), ["lead", "head-a", "head-b"]);
+});
+
+test("department display comes from every chart role instead of the stale single profile field", () => {
+  const staleMember = { ...users[0], department: "Unassigned" };
+  assert.deepEqual(
+    departmentMemberships(org, staleMember).map((department) => department.name),
+    ["Department A", "Department B"],
+  );
+  assert.deepEqual(
+    departmentMemberships(org, users[1]).map((department) => department.name),
+    ["Department A"],
+  );
+  assert.deepEqual(
+    departmentMemberships(org, users[2]).map((department) => department.name),
+    ["Department A"],
+  );
+});
+
+test("saved default flows refresh when chart membership changes but manual routes do not", () => {
+  const seeded = ensureDefaultApprovalFlows(users, org, {}, {});
+  const movedOrg = {
+    ...org,
+    teams: [{ id: "team-b", departmentId: "department-b", leadIds: [], memberIds: ["member"] }],
+    reporting: {},
+  };
+  const refreshed = ensureDefaultApprovalFlows(users, movedOrg, seeded.flowConfig, seeded.flowConfigMeta);
+  assert.deepEqual(refreshed.flowConfig.member.Leave, ["head-b"]);
+
+  const manual = ensureDefaultApprovalFlows(
+    users,
+    movedOrg,
+    { ...seeded.flowConfig, member: { ...seeded.flowConfig.member, Leave: ["vp"] } },
+    { ...seeded.flowConfigMeta, member: { ...seeded.flowConfigMeta.member, Leave: { mode: "manual" } } },
+  );
+  assert.deepEqual(manual.flowConfig.member.Leave, ["vp"]);
 });
 
 test("a department head defaults to CEO approval", () => {

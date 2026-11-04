@@ -23,7 +23,7 @@ import {
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { OrgStructure2 } from "./OrgStructure2";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo } from "../lib/org"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo, type OrgChart } from "../lib/org"; import { departmentMemberships } from "../lib/org-membership.mjs"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
 import { APPROVAL_FLOW_TYPES, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
@@ -17675,6 +17675,14 @@ function ApprovalFlowCentre({
   const steps = touched ? draft : saved;
   const dirty = touched && JSON.stringify(draft) !== JSON.stringify(saved);
   const nameOf = (id: string) => users.find((user) => user.id === id)?.name || id;
+  const storedOrg = store?.org as OrgChart | undefined;
+  const organization = storedOrg && Array.isArray(storedOrg.departments) && Array.isArray(storedOrg.teams)
+    ? storedOrg
+    : effectiveOrg(users);
+  const departmentText = (user: StaffUser) => {
+    const names = departmentMemberships(organization, user).map((department) => department.name);
+    return names.length ? names.join(" · ") : "Unassigned";
+  };
 
   const change = (next: string[]) => { setDraft(next); setTouched(true); };
   const move = (at: number, by: number) => {
@@ -17690,7 +17698,7 @@ function ApprovalFlowCentre({
     user.enabled !== false && user.offboarded !== true && user.id !== person?.id
     && (!person || rankOf(user) >= rankOf(person)));
   const listed = scope.filter((user) =>
-    `${user.name} ${user.department || ""} ${user.access || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+    `${user.name} ${departmentText(user)} ${user.access || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
 
   return (
     <div className="native-scroll requests-scroll">
@@ -17723,7 +17731,7 @@ function ApprovalFlowCentre({
               return (
                 <tr key={user.id}>
                   <td><b>{user.name}</b><small>{user.access || ""}</small></td>
-                  <td>{user.department || "—"}</td>
+                  <td>{departmentText(user)}</td>
                   <td>{chain.length ? chain.map(nameOf).join(" → ") : <span className="chain-none">No flow set</span>}</td>
                   <td><button type="button" className="btn small" onClick={() => { setSelectedId(user.id); reset(); }}>
                     {person?.id === user.id ? "Editing" : "Edit"}
@@ -17740,7 +17748,7 @@ function ApprovalFlowCentre({
         <section className="settings-panel">
           <div className="section-head">
             <div>
-              <span className="eyebrow">{person.department || "No department"}</span>
+              <span className="eyebrow">{departmentText(person)}</span>
               <h3>{person.name}</h3>
               <p>Set the order approvals travel in. Each step waits for the one before it.</p>
             </div>

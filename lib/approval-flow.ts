@@ -6,6 +6,8 @@
  * different manager lookup or touching browser storage themselves.
  */
 
+import { departmentMembershipIds } from "./org-membership.mjs";
+
 export type ApprovalFlowConfig = Record<string, Record<string, string[]>>;
 export type ApprovalFlowMeta = Record<string, Record<string, {
   mode: "default" | "manual";
@@ -122,23 +124,11 @@ export function defaultApprovalChain(
     (team.memberIds || []).includes(employeeId) || (team.leadIds || []).includes(employeeId),
   );
 
-  const departmentIds = new Set<string>();
-  employeeTeams.forEach((team) => { if (team.departmentId) departmentIds.add(team.departmentId); });
-  if (employee.department) {
-    departments.filter((department) => String(department.name || "").trim().toLowerCase() === employee.department!.trim().toLowerCase())
-      .forEach((department) => departmentIds.add(department.id));
-  }
-
-  /* Reporting directly to a department head is also a department relation.
-     More than one such line naturally gives the person more than one
-     department and includes every relevant head in the default route. */
   const configuredManagers = Array.isArray(org?.reporting?.[employeeId])
     ? org!.reporting![employeeId]
     : [];
-  configuredManagers.forEach((managerId) => {
-    departments.filter((department) => (department.headIds || []).includes(managerId))
-      .forEach((department) => departmentIds.add(department.id));
-  });
+  /* Membership, display, and routing share the same many-to-many rule. */
+  const departmentIds = departmentMembershipIds(org, employee);
 
   /* A department head never approves their own request. Company leadership
      is the next default layer: CEO is recorded in the flow, while COO is an
