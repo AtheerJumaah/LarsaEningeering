@@ -11680,7 +11680,7 @@ function EngineeringManagementPortal({
       </div>
       {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}
       {tab === "organization" && <OrgStructure2 viewer={viewer} users={users} onSaved={onSaved} />}
-      {manages && (tab === "time" || tab === "performance") && <><TeamCharts summaries={summaries} mode={tab} />
+      {manages && (tab === "time" || tab === "performance") && <>
         <div className="period-presets" aria-label="Team report period">
           <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
         </div>
@@ -11689,6 +11689,7 @@ function EngineeringManagementPortal({
           <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
           <span className="filter-summary">{visibleUsers.length} people</span>
         </section>
+        <TeamCharts summaries={summaries} mode={tab} />
         <section className="report-panel">
           <div className="section-head"><div><span className="eyebrow">{tab === "time" ? "Team time" : "Team performance"}</span><h3>{from} to {to}</h3></div></div>
           <div className="data-table-wrap"><table className="data-table"><thead>{tab === "time"
