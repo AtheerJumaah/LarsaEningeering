@@ -24,7 +24,7 @@ import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notif
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { OrgStructure2 } from "./OrgStructure2";
 import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo, type OrgChart } from "../lib/org"; import { departmentMemberships } from "../lib/org-membership.mjs"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
-import { APPROVAL_FLOW_TYPES, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
+import { APPROVAL_FLOW_TYPES, LEGACY_APPROVAL_FLOW_TYPES, UNIFIED_APPROVAL_FLOW_TYPE, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
   ArrowRight,
@@ -360,6 +360,7 @@ type ClockLog = {
   note?: string;
   clockedBy?: string;
   correctionId?: string;
+  provisionalReview?: boolean;
   lastSeen?: string;
   active?: boolean;
   /* Recency stamp (ISO server time), written at punch time and refreshed by
@@ -1742,10 +1743,10 @@ function chainFor(
 ): string[] {
   const flowConfig = (store?.flowConfig || {}) as Record<string, Record<string, string[]>>;
   const own = flowConfig[employeeId] || {};
-  const steps = own[type] || (type === "Points" ? own.Performance : undefined) || [];
+  const steps = own[UNIFIED_APPROVAL_FLOW_TYPE] || own[type] || (type === "Points" ? own.Performance : undefined) || [];
   const configured = Array.isArray(steps) ? steps.filter(Boolean) : [];
   const meta = (store?.flowConfigMeta || {}) as ApprovalFlowMeta;
-  if (meta[employeeId]?.[type]?.mode === "manual") return configured;
+  if ((meta[employeeId]?.[UNIFIED_APPROVAL_FLOW_TYPE] || meta[employeeId]?.[type])?.mode === "manual") return configured;
   if (configured.length) return configured;
   const users = Array.isArray(store?.users) ? store!.users as StaffUser[] : [];
   const org = (store?.org && typeof store.org === "object")
@@ -2397,6 +2398,8 @@ type LeaveRequest = {
   timeZone?: string;
   materialized?: boolean;
   materialised?: boolean;
+  provisional?: boolean;
+  provisionalReversedAt?: string;
   // performance entry waiting on the decision. Approving one writes the entry.
   week?: string;
   entry?: PerformanceRow;
@@ -3313,7 +3316,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
        adjusted, so the trim panel can say so instead of leaving the next
        corrector to guess. */
     const adjustedMark = (...notes: (string | undefined)[]) => notes.some((note) =>
-      Boolean(note && (note.includes("Adjusted by") || note.includes("Fixed by") || note.includes("Manual entry by"))));
+      Boolean(note && (note.includes("Adjusted by") || note.includes("Fixed by") || note.includes("Manual entry by") || note.toLowerCase().includes("correction"))));
 
     /* One ClockSession per canonical company calendar day. clockIn/clockOut
        always carry the original punches (they are the session's identity for
@@ -3369,8 +3372,9 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           return;
         }
         if (row.status !== "Out" || !open?.time || !row.time) return;
+        const reviewedCorrection = Boolean(open.correctionId && open.correctionId === row.correctionId);
         record(open.time, row.time, open.type || row.type || "Unspecified", false,
-          isSuspiciousClosedSession(open.time, row.time) ? "long" : undefined,
+          !reviewedCorrection && isSuspiciousClosedSession(open.time, row.time) ? "long" : undefined,
           adjustedMark(open.note, row.note));
         open = null;
       });
@@ -8638,17 +8642,24 @@ export default function Home() {
       .map((id) => people.find((row) => row.id === id)?.name || id);
     const flowConfig = (store.flowConfig || {}) as Record<string, Record<string, string[]>>;
     const own = { ...(flowConfig[employeeId] || {}) };
-    if (clean.length) own[type] = clean;
-    else delete own[type];
-    /* Points chains briefly lived under the tab's old name. Whether saving or
-       clearing, the record is settled under the one current key so the legacy
-       fallback in chainFor can never resurrect a cleared chain. */
-    if (type === "Points") delete own.Performance;
+    if (clean.length) own[UNIFIED_APPROVAL_FLOW_TYPE] = clean;
+    else delete own[UNIFIED_APPROVAL_FLOW_TYPE];
+    /* One explicit route now governs every request. Mirror it into the legacy
+       keys so a device on an older build cannot fork Leave, Schedule, points,
+       and attendance into different approval rules. */
+    LEGACY_APPROVAL_FLOW_TYPES.forEach((legacyType) => {
+      if (clean.length) own[legacyType] = clean;
+      else delete own[legacyType];
+    });
+    delete own.Performance;
     flowConfig[employeeId] = own;
     store.flowConfig = flowConfig;
     const flowConfigMeta = (store.flowConfigMeta || {}) as ApprovalFlowMeta;
     const metaOwn = { ...(flowConfigMeta[employeeId] || {}) };
-    metaOwn[type] = { mode: "manual", touchedAt: serverNowIso() };
+    const flowStamp = { mode: "manual" as const, touchedAt: serverNowIso() };
+    metaOwn[UNIFIED_APPROVAL_FLOW_TYPE] = flowStamp;
+    LEGACY_APPROVAL_FLOW_TYPES.forEach((legacyType) => { metaOwn[legacyType] = flowStamp; });
+    delete metaOwn.Performance;
     flowConfigMeta[employeeId] = metaOwn;
     store.flowConfigMeta = flowConfigMeta;
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
@@ -8656,8 +8667,8 @@ export default function Home() {
     setStorageTick((value) => value + 1);
     const names = clean.map((id) => people.find((row) => row.id === id)?.name || id);
     notify(clean.length
-      ? `${type} approvals for ${employee.name}: ${names.join(" → ")}${dropped.length ? ` · dropped ${dropped.join(", ")} (self, duplicate, inactive, or below their rank)` : ""}`
-      : `${employee.name} has no ${type} chain now — the explicit override is saved.`);
+      ? `All approvals for ${employee.name}: ${names.join(" → ")}${dropped.length ? ` · dropped ${dropped.join(", ")} (self, duplicate, inactive, or below their rank)` : ""}`
+      : `${employee.name} has no approval chain now — the explicit override is saved.`);
     return true;
   }, [notify, refreshStaffEngine]);
 
@@ -9150,9 +9161,9 @@ export default function Home() {
   }, [notify]);
 
   /* Attendance corrections: a forgotten clock in/out, an unrecorded break, or
-     hours worked that the clock never captured. These deliberately do NOT write
-     attendance directly -- they raise a request on the person's normal approval
-     chain, and only a full approval turns them into real records. */
+     hours worked that the clock never captured. Added time is useful at once,
+     so it is written provisionally and visibly flagged for the normal approval
+     chain. Approval confirms it; revision replaces it; rejection reverses it. */
   const submitCorrection = useCallback((draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
     date: string; from: string; to: string; reason: string; mode: string;
@@ -9202,9 +9213,35 @@ export default function Home() {
       step: 0,
       history: [],
       createdAt: new Date().toISOString(),
+      materialised: true,
+      materialized: true,
+      provisional: true,
     };
+    const correctionPlan = planAttendanceCorrection(record, store.logs, serverNowMs());
+    if (!correctionPlan.ok) { notify(correctionPlan.reason); return false; }
+    if (!Array.isArray(store.logs)) store.logs = [];
+    const isBreak = draft.kind === "Missed Break";
+    const states: [string, string][] = isBreak
+      ? [["Break Start", correctionPlan.start], ["Break End", correctionPlan.end]]
+      : [["In", correctionPlan.start], ["Out", correctionPlan.end]];
+    states.forEach(([status, time], position) => {
+      (store.logs as ClockLog[]).push({
+        id: `correction:${record.id}:${position === 0 ? "in" : "out"}`,
+        uid: actor.id,
+        type: isBreak ? "Break" : draft.mode,
+        status,
+        time,
+        lastSeen: time,
+        note: `Pending review correction (${draft.kind}) · ${draft.reason.trim()}`,
+        clockedBy: actor.id,
+        touchedAt: serverNowIso(),
+        correctionId: record.id,
+        provisionalReview: true,
+      });
+    });
     store.approvals.unshift(record);
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    void pushSyncedKeyNow("larsaStaffV8");
     raiseNotification({
       event: "clock.correction",
       title: `${draft.kind} correction from ${actor.name}`,
@@ -9213,7 +9250,7 @@ export default function Home() {
     });
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
-    notify("Correction request submitted for approval.");
+    notify("Time added provisionally and sent for review. It remains counted unless an approver revises or rejects it.");
     return true;
   // raiseNotification is a module-level function, so it is not a dependency.
   }, [notify, refreshStaffEngine]);
@@ -9346,7 +9383,7 @@ export default function Home() {
         note: overriding
           ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn`
           : executiveDelegate
-            ? `${note ? `${note} · ` : ""}Decided by the COO under CEO approval authority`
+            ? `${note ? `${note} · ` : ""}Decided by ${actor.name} under higher organizational authority`
             : note,
       }],
     };
@@ -9355,6 +9392,19 @@ export default function Home() {
        records. Guarded on `materialised` so re-approving can never double-count,
        and breaks keep their own status values so they stay out of hour totals. */
     const updated = store.approvals[index] as LeaveRequest & { materialised?: boolean };
+    if (CORRECTIONS.includes(String(record.type)) && settled === "Rejected") {
+      const removed = (Array.isArray(store.logs) ? store.logs as ClockLog[] : [])
+        .filter((log) => log.correctionId === record.id)
+        .map((log) => String(log.id || ""))
+        .filter(Boolean);
+      store.logs = (Array.isArray(store.logs) ? store.logs as ClockLog[] : [])
+        .filter((log) => log.correctionId !== record.id);
+      markLogsRemoved(store as { removedLogIds?: string[] }, removed);
+      updated.materialised = false;
+      updated.materialized = false;
+      updated.provisional = false;
+      updated.provisionalReversedAt = stamp;
+    }
     if (correctionPlan?.ok && !updated.materialised && !updated.materialized) {
       if (!Array.isArray(store.logs)) store.logs = [];
       const at = (position: number) => position === 0 ? correctionPlan.start : correctionPlan.end;
@@ -9372,6 +9422,15 @@ export default function Home() {
       });
       updated.materialised = true;
       updated.materialized = true;
+    }
+    if (correctionPlan?.ok && (updated.materialised || updated.materialized)) {
+      (Array.isArray(store.logs) ? store.logs as ClockLog[] : []).forEach((log) => {
+        if (log.correctionId !== record.id) return;
+        log.provisionalReview = false;
+        log.note = `Approved correction (${record.type}) · ${record.reason || ""}`;
+        log.touchedAt = stamp;
+      });
+      updated.provisional = false;
     }
 
     /* Approving is what actually writes the entry into the closed week. It lands
@@ -9394,6 +9453,8 @@ export default function Home() {
     }
 
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    if (settled === "Approved" && CORRECTIONS.includes(String(record.type))) captureApprovedCorrection(record.id);
+    void pushSyncedKeyNow("larsaStaffV8");
     refreshStaffEngine();
     const employee = (store.users as StaffUser[]).find((row) => row.id === record.uid);
     /* Still moving: the person who has to act next is the one who needs to
@@ -9433,6 +9494,102 @@ export default function Home() {
       : `Request ${settled.toLowerCase()}.`);
     return true;
   // raiseNotification is a module-level function, so it is not a dependency.
+  }, [notify, refreshStaffEngine]);
+
+  const reviseAttendanceRequest = useCallback((requestId: string, patch: {
+    date: string; from: string; to: string; reason?: string;
+  }) => {
+    const actor = sessionUserRef.current;
+    const approvalsItem = ITEMS.find((item) => item.id === "staff-approvals");
+    if (!actor || !approvalsItem || !hasItemPermission(actor, approvalsItem, "approve")) {
+      notify("Your account cannot revise requests.");
+      return false;
+    }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.approvals) || !Array.isArray(store.users)) {
+      notify("Requests are still loading."); return false;
+    }
+    const index = (store.approvals as LeaveRequest[]).findIndex((row) => row.id === requestId);
+    if (index < 0) { notify("That request could not be found."); return false; }
+    const record = store.approvals[index] as LeaveRequest;
+    const correctionTypes = ["Missed Clock", "Missed Break", "Extra Hours"];
+    if (record.status !== "Pending" || !correctionTypes.includes(record.type)) {
+      notify("Only a pending attendance correction can be revised here."); return false;
+    }
+    const approvalOrg = (store.org && typeof store.org === "object")
+      ? store.org as ApprovalFlowOrg
+      : effectiveOrg(store.users as StaffUser[]);
+    const { holder } = requestStage(record);
+    const requester = (store.users as StaffUser[]).find((row) => row.id === record.uid);
+    const mayAct = holder
+      ? canActForApprovalHolder(store.users as StaffUser[], approvalOrg, actor.id, holder)
+      : Boolean(!requester || rankOf(actor) >= rankOf(requester));
+    if (!mayAct && !isAdmin(actor)) {
+      notify("This correction is currently with another approver."); return false;
+    }
+    if (!patch.date || !patch.from || !patch.to) {
+      notify("Revision needs a date and both times."); return false;
+    }
+    const endDate = patch.to < patch.from ? attendanceDateOffset(patch.date, 1) : patch.date;
+    const fromAt = attendanceWallTimeUtc(patch.date, patch.from, ATTENDANCE_TIME_ZONE);
+    const toAt = attendanceWallTimeUtc(endDate, patch.to, ATTENDANCE_TIME_ZONE);
+    const revised: LeaveRequest = {
+      ...record,
+      date: patch.date,
+      from: patch.from,
+      to: patch.to,
+      fromAt,
+      toAt,
+      reason: patch.reason?.trim() || record.reason,
+    };
+    const plan = planAttendanceCorrection(revised, store.logs, serverNowMs());
+    if (!plan.ok) { notify(plan.reason); return false; }
+    const isBreak = record.type === "Missed Break";
+    const replacement: ClockLog[] = [
+      {
+        id: `correction:${record.id}:in`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
+        status: isBreak ? "Break Start" : "In", time: plan.start, lastSeen: plan.start,
+        note: `Pending review correction (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
+        touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
+      },
+      {
+        id: `correction:${record.id}:out`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
+        status: isBreak ? "Break End" : "Out", time: plan.end, lastSeen: plan.end,
+        note: `Pending review correction (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
+        touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
+      },
+    ];
+    store.logs = [
+      ...(Array.isArray(store.logs) ? store.logs as ClockLog[] : []).filter((log) => log.correctionId !== record.id),
+      ...replacement,
+    ];
+    const stamp = serverNowIso();
+    (store.approvals as LeaveRequest[])[index] = {
+      ...revised,
+      materialised: true,
+      materialized: true,
+      provisional: true,
+      history: [...(record.history || []), {
+        by: actor.name,
+        action: "Revised",
+        at: stamp,
+        note: `${patch.date} · ${patch.from}–${patch.to}${patch.reason?.trim() ? ` · ${patch.reason.trim()}` : ""}`,
+      }],
+    };
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    void pushSyncedKeyNow("larsaStaffV8");
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    if (requester) {
+      raiseNotification({
+        event: "clock.correction",
+        title: `${actor.name} revised your attendance correction`,
+        body: `${patch.date} · ${patch.from}–${patch.to}. The revised time remains provisional while review continues.`,
+        itemId: "my-requests", fromName: actor.name, recipients: [requester],
+      });
+    }
+    notify("Correction revised. The updated time is counted provisionally and remains in review.");
+    return true;
   }, [notify, refreshStaffEngine]);
 
   const saveGrowthStore = useCallback((next: GrowthStore) => {
@@ -11253,6 +11410,7 @@ export default function Home() {
               store={staffStore}
               submit={submitRequest}
               decide={decideRequest}
+              revise={reviseAttendanceRequest}
             />
           </NativePanel>
           <NativePanel active={active.native} view="approvalFlow">
@@ -17355,13 +17513,14 @@ function LivePresence({
 }
 
 function RequestsCentre({
-  viewer, users, store, submit, decide,
+  viewer, users, store, submit, decide, revise,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
   store: Record<string, unknown> | null;
   submit: (draft: { type: string; requestType: string; from: string; to: string; reason: string }) => boolean;
   decide: (id: string, status: "Approved" | "Rejected", note?: string) => boolean;
+  revise: (id: string, patch: { date: string; from: string; to: string; reason?: string }) => boolean;
 }) {
   const dialog = useDialog();
   const today = dateInputValue(new Date());
@@ -17443,6 +17602,11 @@ function RequestsCentre({
         {Boolean(row.entry.Notes) && <small>{String(row.entry.Notes || "")}</small>}
         <span>Worked {row.entry.Date} · week {row.week}</span>
         <em>{row.reason}</em>
+      </div>
+    ) : row.provisional && ["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) ? (
+      <div className="request-entry">
+        <b>{row.reason}</b>
+        <span>Counted provisionally · approve, revise, or reject</span>
       </div>
     ) : <>{row.reason}</>
   );
@@ -17581,6 +17745,15 @@ function RequestsCentre({
                             <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>
                               {total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
                             </button>
+                            {["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) && (
+                              <button type="button" onClick={async () => {
+                                const date = (await dialog.prompt(`Revised date (YYYY-MM-DD). Leave blank to keep ${row.date || "the current date"}:`)) || row.date || "";
+                                const from = (await dialog.prompt(`Revised start time (HH:MM). Leave blank to keep ${row.from || "the current time"}:`)) || row.from || "";
+                                const to = (await dialog.prompt(`Revised end time (HH:MM). Leave blank to keep ${row.to || "the current time"}:`)) || row.to || "";
+                                const reason = (await dialog.prompt("Revision note (optional; leave blank to keep the employee's reason):")) || row.reason || "";
+                                revise(row.id, { date, from, to, reason });
+                              }}>Revise</button>
+                            )}
                             <button type="button" onClick={async () => decide(row.id, "Rejected", (await dialog.prompt("Reason for rejecting (optional):")) || "")}>Reject</button>
                           </>
                         );
@@ -17639,7 +17812,7 @@ function RequestsCentre({
  * remove, and move up or down — so A → B → C becomes A → D → B in the order
  * you actually want, rather than by retyping every box.
  *
- * Every request type is editable here. New people inherit the structure route:
+ * One route governs every request here. New people inherit the structure route:
  * team leader → department head, department head alone when there is no team
  * leader, and department head → CEO. COO may act for a CEO-held step without
  * becoming another sequential approval. A named direct manager is the fallback
@@ -17662,7 +17835,7 @@ function ApprovalFlowCentre({
 
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string>("");
-  const [type, setType] = useState<string>("Leave");
+  const type = FLOW_TYPES[0];
   const [draft, setDraft] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
 
@@ -17708,7 +17881,7 @@ function ApprovalFlowCentre({
         <div>
           <span className="eyebrow">HR &amp; Skills</span>
           <h2>Approval Flow</h2>
-          <p>Who approves each person&apos;s requests, and in what order. Requests already waiting keep the chain they were raised with.</p>
+          <p>One organizational route for leave, schedules, attendance, hours, and performance. Requests already waiting keep the chain they were raised with.</p>
         </div>
         <span className="access-pill"><CheckCircle2 size={16} /> {canEdit ? "Can edit" : "Read only"}</span>
       </section>
@@ -17725,10 +17898,10 @@ function ApprovalFlowCentre({
         </div>
         <div className="data-table-wrap">
           <table className="data-table"><thead><tr>
-            <th>Employee</th><th>Department</th><th>Leave chain</th><th></th>
+            <th>Employee</th><th>Department</th><th>Approval route</th><th></th>
           </tr></thead><tbody>
             {listed.slice(0, 60).map((user) => {
-              const chain = chainFor(store, user.id, "Leave");
+              const chain = chainFor(store, user.id, UNIFIED_APPROVAL_FLOW_TYPE);
               return (
                 <tr key={user.id}>
                   <td><b>{user.name}</b><small>{user.access || ""}</small></td>
@@ -17755,13 +17928,7 @@ function ApprovalFlowCentre({
             </div>
           </div>
 
-          <div className="settings-tabs" role="tablist" aria-label="Request type">
-            {FLOW_TYPES.map((value) => (
-              <button key={value} type="button" role="tab" aria-selected={type === value}
-                className={type === value ? "active" : ""}
-                onClick={() => { setType(value); reset(); }}>{value}</button>
-            ))}
-          </div>
+          <p className="builder-note"><b>All requests use this route.</b> A higher organizational authority may act in place of the current holder, and that delegation is written into the decision history.</p>
 
           {/* What the chain does today, as the person will experience it. */}
           <div className="chain-strip" style={{ margin: "10px 0 4px" }}>
@@ -17809,15 +17976,16 @@ function ApprovalFlowCentre({
               )}
               <button type="button" className="primary" disabled={!dirty} onClick={() => {
                 if (save(person.id, type, steps)) reset();
-              }}>Save {type} flow</button>
+              }}>Save approval flow</button>
               {dirty && <button type="button" onClick={reset}>Cancel</button>}
             </div>
           )}
           <p className="builder-note">
             New people inherit the structure route automatically: team leader → department head,
-            or department head alone; department heads route to the CEO, and the COO can act with
-            CEO approval authority. A direct manager is used when the structure has not been formed
-            yet. Up to three approvers can be arranged here; clearing and saving is an explicit
+            or department head alone; department heads route to the CEO. A department head may act
+            for a team leader in their department, and the CEO or COO may act for any lower step.
+            A direct manager is used when the structure has not been formed yet. Up to three approvers
+            can be arranged here; clearing and saving is an explicit
             override. Nobody approves their own request, and the same person cannot appear twice.
             Changing this affects requests raised from now on — anything already waiting keeps its
             own chain, which Corrections can reroute.
@@ -20102,7 +20270,7 @@ function QuickClock({
               <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="Explain briefly — your approver sees exactly this." /></label>
             </div>
             <div className="correction-actions">
-              <span>Goes to your approval chain. Your hours only change once it is approved.</span>
+              <span>Added immediately as pending review. It remains counted unless your approver revises or rejects it.</span>
               <button
                 type="button"
                 className="primary"
@@ -20112,7 +20280,7 @@ function QuickClock({
                     setCorrection((c) => ({ ...c, reason: "" }));
                   }
                 }}
-              >Submit for Approval</button>
+              >Add &amp; Send for Review</button>
             </div>
           </div>
         )}

@@ -42,8 +42,11 @@ export type ApprovalFlowOrg = {
   reporting?: Record<string, string[]>;
 };
 
-/** Request types whose standing route is editable in Approval Flow. */
-export const APPROVAL_FLOW_TYPES = [
+/** One standing route governs every request raised by an employee. The
+ * legacy keys remain mirrored in storage so older clients and requests keep
+ * working while every current screen reads the one organizational route. */
+export const UNIFIED_APPROVAL_FLOW_TYPE = "All Requests" as const;
+export const LEGACY_APPROVAL_FLOW_TYPES = [
   "Leave",
   "Schedule",
   "Points",
@@ -52,6 +55,7 @@ export const APPROVAL_FLOW_TYPES = [
   "Extra Hours",
   "Hours Review",
 ] as const;
+export const APPROVAL_FLOW_TYPES = [UNIFIED_APPROVAL_FLOW_TYPE] as const;
 
 function sameId(value: unknown, user: ApprovalFlowUser): boolean {
   const needle = String(value || "").trim().toLowerCase();
@@ -86,7 +90,9 @@ function ceoHolders(org: ApprovalFlowOrg | null | undefined): string[] {
   return primary.length ? primary : executiveHolders(org, CEO_FALLBACK_TITLE);
 }
 
-/** COO is an alternate decision-maker for a CEO-held approval step. */
+/** Higher organizational authority may settle a lower-held approval step.
+ * Department heads may act for a team leader in their own department, while
+ * CEO and COO are company-wide alternates. */
 export function canActForApprovalHolder(
   users: ApprovalFlowUser[],
   org: ApprovalFlowOrg | null | undefined,
@@ -96,8 +102,20 @@ export function canActForApprovalHolder(
   if (!actorId || !holderId) return false;
   if (actorId === holderId) return true;
   if (!active(users, actorId, holderId)) return false;
-  return ceoHolders(org).includes(holderId)
-    && executiveHolders(org, COO_TITLE).includes(actorId);
+  const executiveAlternates = new Set([
+    ...ceoHolders(org),
+    ...executiveHolders(org, COO_TITLE),
+  ]);
+  if (executiveAlternates.has(actorId)) return true;
+
+  const departments = Array.isArray(org?.departments) ? org!.departments! : [];
+  const teams = Array.isArray(org?.teams) ? org!.teams! : [];
+  return teams.some((team) =>
+    (team.leadIds || []).includes(holderId)
+    && departments.some((department) =>
+      department.id === team.departmentId && (department.headIds || []).includes(actorId),
+    ),
+  );
 }
 
 /**
@@ -165,10 +183,6 @@ export function defaultApprovalChain(
   return route.slice(0, 3);
 }
 
-function arraysEqual(left: string[] | undefined, right: string[]): boolean {
-  return Boolean(Array.isArray(left) && left.length === right.length && left.every((value, index) => value === right[index]));
-}
-
 /**
  * Seed or refresh defaults without touching explicit Approval Flow edits.
  * Existing flowConfig entries with no metadata are treated as manual for
@@ -180,37 +194,52 @@ export function ensureDefaultApprovalFlows(
   inputConfig: ApprovalFlowConfig | null | undefined,
   inputMeta: ApprovalFlowMeta | null | undefined,
 ): { flowConfig: ApprovalFlowConfig; flowConfigMeta: ApprovalFlowMeta; changed: boolean } {
+  const beforeConfig = JSON.stringify(inputConfig || {});
+  const beforeMeta = JSON.stringify(inputMeta || {});
   const flowConfig: ApprovalFlowConfig = JSON.parse(JSON.stringify(inputConfig || {}));
   const flowConfigMeta: ApprovalFlowMeta = JSON.parse(JSON.stringify(inputMeta || {}));
-  let changed = false;
 
   users.filter((user) => user.enabled !== false && user.offboarded !== true).forEach((employee) => {
     const own = flowConfig[employee.id] || {};
     const meta = flowConfigMeta[employee.id] || {};
     const nextOwn = { ...own };
     const nextMeta = { ...meta };
-    APPROVAL_FLOW_TYPES.forEach((type) => {
-      const existing = Array.isArray(own[type]) ? own[type].filter(Boolean) : [];
-      const explicit = nextMeta[type]?.mode === "manual";
-      // A chain written before metadata existed is preserved as an explicit
-      // choice. New employees and empty legacy records get the new default.
-      if (existing.length && !nextMeta[type]) {
-        nextMeta[type] = { mode: "manual" };
-        changed = true;
-        return;
-      }
-      if (explicit) return;
-      const next = defaultApprovalChain(users, org, employee.id);
-      if (next.length) nextOwn[type] = next;
+    const unifiedExisting = Array.isArray(own[UNIFIED_APPROVAL_FLOW_TYPE])
+      ? own[UNIFIED_APPROVAL_FLOW_TYPE].filter(Boolean)
+      : [];
+    const unifiedMeta = nextMeta[UNIFIED_APPROVAL_FLOW_TYPE];
+    const legacyManualType = LEGACY_APPROVAL_FLOW_TYPES.find((type) =>
+      nextMeta[type]?.mode === "manual" || (Array.isArray(own[type]) && own[type].length > 0 && !nextMeta[type]),
+    );
+    const migratedLegacy = legacyManualType && Array.isArray(own[legacyManualType])
+      ? own[legacyManualType].filter(Boolean)
+      : [];
+    const mode: "default" | "manual" = unifiedMeta?.mode === "manual" || legacyManualType
+      ? "manual"
+      : "default";
+    const route = mode === "manual"
+      ? (unifiedMeta?.mode === "manual" ? unifiedExisting : migratedLegacy)
+      : defaultApprovalChain(users, org, employee.id);
+    const touchedAt = unifiedMeta?.touchedAt
+      || (legacyManualType ? nextMeta[legacyManualType]?.touchedAt : undefined);
+
+    if (route.length) nextOwn[UNIFIED_APPROVAL_FLOW_TYPE] = route;
+    else delete nextOwn[UNIFIED_APPROVAL_FLOW_TYPE];
+    nextMeta[UNIFIED_APPROVAL_FLOW_TYPE] = { mode, ...(touchedAt ? { touchedAt } : {}) };
+
+    LEGACY_APPROVAL_FLOW_TYPES.forEach((type) => {
+      if (route.length) nextOwn[type] = route;
       else delete nextOwn[type];
-      nextMeta[type] = { mode: "default" };
-      if (!arraysEqual(existing, next) || (next.length === 0 && own[type])) changed = true;
+      nextMeta[type] = { mode, ...(touchedAt ? { touchedAt } : {}) };
     });
+    delete nextOwn.Performance;
+    delete nextMeta.Performance;
     if (Object.keys(nextOwn).length) flowConfig[employee.id] = nextOwn;
     else delete flowConfig[employee.id];
     if (Object.keys(nextMeta).length) flowConfigMeta[employee.id] = nextMeta;
   });
 
+  const changed = beforeConfig !== JSON.stringify(flowConfig) || beforeMeta !== JSON.stringify(flowConfigMeta);
   return { flowConfig, flowConfigMeta, changed };
 }
 

@@ -52,9 +52,9 @@ test("rank derives from ROLE_PRESETS — one ladder, no second table", () => {
   assert.deepEqual(copy, native, "engine RANK_LADDER must equal ROLE_PRESETS, in order");
 });
 
-test("chainFor is the one reader of flowConfig, legacy Points key included", () => {
+test("chainFor reads the unified route first and keeps the legacy Points fallback", () => {
   assert.match(page, /function chainFor\(\s*\n\s*store: Record<string, unknown> \| null,/);
-  assert.match(page, /const steps = own\[type\] \|\| \(type === "Points" \? own\.Performance : undefined\) \|\| \[\];/);
+  assert.match(page, /const steps = own\[UNIFIED_APPROVAL_FLOW_TYPE\] \|\| own\[type\] \|\| \(type === "Points" \? own\.Performance : undefined\) \|\| \[\];/);
 });
 
 // ------------------------------------------------- chains are optional now
@@ -81,9 +81,9 @@ test("no seeded default chain, in the app or the engine", () => {
 test("saving an empty chain clears it instead of being refused", () => {
   const save = page.slice(page.indexOf("const saveApprovalFlow = useCallback"), page.indexOf("Fix the figures on a points entry"));
   assert.doesNotMatch(save, /An approval flow needs at least one approver/);
-  assert.match(save, /if \(clean\.length\) own\[type\] = clean;\s*\n\s*else delete own\[type\];/);
-  // Saving or clearing Points retires the legacy key so it cannot resurrect.
-  assert.match(save, /if \(type === "Points"\) delete own\.Performance;/);
+  assert.match(save, /if \(clean\.length\) own\[UNIFIED_APPROVAL_FLOW_TYPE\] = clean;\s*\n\s*else delete own\[UNIFIED_APPROVAL_FLOW_TYPE\];/);
+  assert.match(save, /LEGACY_APPROVAL_FLOW_TYPES\.forEach/);
+  assert.match(save, /delete own\.Performance;/);
   // Chain steps can only be people at or above the employee's rank.
   assert.match(save, /rankOf\(row\) >= rankOf\(employee\)/);
   // Same rules where the engine's own setup card saves the same store.
@@ -149,9 +149,10 @@ test("the engine's own decide buttons enforce the same two rules", () => {
 });
 
 // --------------------------------------------------------- the Points chain
-test("the Approval Flow screen offers every request type", () => {
+test("the Approval Flow screen exposes one unified route", () => {
   assert.match(page, /const FLOW_TYPES = \[\.\.\.APPROVAL_FLOW_TYPES\] as const;/);
-  assert.match(page, /"Missed Clock",\s*"Missed Break",\s*"Extra Hours"/);
+  assert.match(page, /All requests use this route/);
+  assert.match(page, /Save approval flow/);
   assert.match(engine, /<option>Leave<\/option><option>Schedule<\/option><option>Points<\/option>/);
 });
 

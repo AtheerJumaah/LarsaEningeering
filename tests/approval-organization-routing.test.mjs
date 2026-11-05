@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  LEGACY_APPROVAL_FLOW_TYPES,
+  UNIFIED_APPROVAL_FLOW_TYPE,
   canActForApprovalHolder,
   defaultApprovalChain,
   ensureDefaultApprovalFlows,
@@ -64,6 +66,7 @@ test("saved default flows refresh when chart membership changes but manual route
   };
   const refreshed = ensureDefaultApprovalFlows(users, movedOrg, seeded.flowConfig, seeded.flowConfigMeta);
   assert.deepEqual(refreshed.flowConfig.member.Leave, ["head-b"]);
+  assert.deepEqual(refreshed.flowConfig.member[UNIFIED_APPROVAL_FLOW_TYPE], ["head-b"]);
 
   const manual = ensureDefaultApprovalFlows(
     users,
@@ -72,6 +75,8 @@ test("saved default flows refresh when chart membership changes but manual route
     { ...seeded.flowConfigMeta, member: { ...seeded.flowConfigMeta.member, Leave: { mode: "manual" } } },
   );
   assert.deepEqual(manual.flowConfig.member.Leave, ["vp"]);
+  assert.deepEqual(manual.flowConfig.member[UNIFIED_APPROVAL_FLOW_TYPE], ["vp"]);
+  LEGACY_APPROVAL_FLOW_TYPES.forEach((type) => assert.deepEqual(manual.flowConfig.member[type], ["vp"]));
 });
 
 test("a department head defaults to CEO approval", () => {
@@ -79,11 +84,14 @@ test("a department head defaults to CEO approval", () => {
   assert.deepEqual(defaultApprovalChain(users, org, "head-b"), ["ceo"]);
 });
 
-test("COO can act for a CEO-held step but unrelated executives cannot", () => {
+test("department heads and company executives can act for lower organizational holders", () => {
   assert.equal(canActForApprovalHolder(users, org, "ceo", "ceo"), true);
   assert.equal(canActForApprovalHolder(users, org, "coo", "ceo"), true);
   assert.equal(canActForApprovalHolder(users, org, "vp", "ceo"), false);
-  assert.equal(canActForApprovalHolder(users, org, "coo", "head-a"), false);
+  assert.equal(canActForApprovalHolder(users, org, "head-a", "lead"), true);
+  assert.equal(canActForApprovalHolder(users, org, "head-b", "lead"), false);
+  assert.equal(canActForApprovalHolder(users, org, "ceo", "head-a"), true);
+  assert.equal(canActForApprovalHolder(users, org, "coo", "head-a"), true);
 });
 
 test("manual Approval Flow edits remain authoritative", () => {
@@ -95,6 +103,8 @@ test("manual Approval Flow edits remain authoritative", () => {
   );
   assert.deepEqual(result.flowConfig["head-a"].Leave, ["vp"]);
   assert.equal(result.flowConfigMeta["head-a"].Leave.mode, "manual");
-  // Unedited request types still receive the CEO default.
-  assert.deepEqual(result.flowConfig["head-a"].Schedule, ["ceo"]);
+  // A legacy manual route migrates into the one unified route and every
+  // compatibility key mirrors it.
+  assert.deepEqual(result.flowConfig["head-a"][UNIFIED_APPROVAL_FLOW_TYPE], ["vp"]);
+  assert.deepEqual(result.flowConfig["head-a"].Schedule, ["vp"]);
 });

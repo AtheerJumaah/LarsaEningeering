@@ -54,17 +54,18 @@ test("a rejection ends the request wherever it stands", () => {
   assert.match(body, /status === "Approved" && flow\.length > step \+ 1/);
 });
 
-test("nothing is written into the records until the chain finishes", () => {
-  /* This is the half that would actually corrupt data: a mid-chain approval
-     used to be indistinguishable from a final one, so an attendance
-     correction or a late points entry would be written on the first yes. */
-  /* Materialisation is now driven by the validated correction plan. That plan
-     is only created when `settled` is Approved, so a non-final chain step
-     cannot write attendance records. */
+test("provisional attendance is confirmed without duplication only when the chain finishes", () => {
   assert.match(body, /const correctionPlan = settled === "Approved" && CORRECTIONS\.includes\(String\(record\.type\)\)/);
   assert.match(body, /if \(correctionPlan\?\.ok && !updated\.materialised && !updated\.materialized\)/);
+  assert.match(body, /log\.provisionalReview = false;/);
   assert.match(body, /if \(settled === "Approved" && record\.type === "Points Unlock" && record\.entry && !updated\.materialised\)/);
   assert.doesNotMatch(body, /if \(status === "Approved" &&/);
+});
+
+test("rejecting provisional time reverses it and prevents ledger restoration", () => {
+  assert.match(body, /\.filter\(\(log\) => log\.correctionId !== record\.id\);/);
+  assert.match(body, /markLogsRemoved\(store as \{ removedLogIds\?: string\[\] \}, removed\);/);
+  assert.match(body, /updated\.provisionalReversedAt = stamp;/);
 });
 
 test("a request still moving names no decider", () => {
@@ -87,7 +88,7 @@ test("an administrator can still act, and it is written down as an override", ()
   /* A chain containing somebody who has left the company would otherwise block
      for ever. The escape hatch is real, so it is audited rather than hidden. */
   assert.match(body, /Decided by an administrator out of turn/);
-  assert.match(body, /Decided by the COO under CEO approval authority/);
+  assert.match(body, /under higher organizational authority/);
 });
 
 // ------------------------------------------------------- existing requests
@@ -127,6 +128,8 @@ test("points and attendance corrections use the editable approval flow", () => {
   assert.match(page, /const flow = configured\.length \? configured : \[\];/);
   assert.match(page, /event: "clock\.correction",/);
   assert.match(page, /event: "points\.unlock",/);
+  assert.match(page, /provisionalReview: true,/);
+  assert.match(page, /const reviseAttendanceRequest = useCallback/);
 });
 
 test("a request is only announced to the approver it is actually with", () => {
