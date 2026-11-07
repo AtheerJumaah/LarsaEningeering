@@ -12,6 +12,9 @@
 type Summary = {
   user: { id: string; name: string; department?: string };
   hours: number;
+  office: number;
+  online: number;
+  site: number;
   sessions: number;
   entries: number;
   submitted: number;
@@ -59,12 +62,31 @@ export function TeamCharts({ summaries, mode }: { summaries: Summary[]; mode: "t
             <span className="hier-stat"><small>Worked</small><b>{worked} / {people}</b></span>
           </div>
         </div>
-        <ul className="chart-rows">
+        <div className="chart-mode-legend" aria-label="Work mode colors">
+          <span><i className="office" />Office</span>
+          <span><i className="online" />Online</span>
+          <span><i className="site" />Site</span>
+        </div>
+        <ul className="chart-rows chart-time-rows">
           {rows.map((row) => (
             <li key={row.user.id}>
               <span className="chart-name">{row.user.name}</span>
-              <span className="chart-track">
-                <i style={{ width: Math.max(row.hours ? 2 : 0, (row.hours / peak) * 100) + "%" }} className="chart-fill-hours" />
+              <span
+                className="chart-track chart-mode-track"
+                title={`Office ${hoursLabel(row.office)} · Online ${hoursLabel(row.online)} · Site ${hoursLabel(row.site)} · Total ${hoursLabel(row.hours)}`}
+                aria-label={`${row.user.name}: Office ${hoursLabel(row.office)}, Online ${hoursLabel(row.online)}, Site ${hoursLabel(row.site)}, total ${hoursLabel(row.hours)}`}
+              >
+                <i style={{ width: (row.office / peak) * 100 + "%" }} className="chart-mode-office" />
+                <i style={{ width: (row.online / peak) * 100 + "%" }} className="chart-mode-online" />
+                <i style={{ width: (row.site / peak) * 100 + "%" }} className="chart-mode-site" />
+                {row.hours > row.office + row.online + row.site ? (
+                  <i style={{ width: ((row.hours - row.office - row.online - row.site) / peak) * 100 + "%" }} className="chart-mode-other" />
+                ) : null}
+              </span>
+              <span className="chart-mode-values" aria-hidden="true">
+                <small className="office">Office {hoursLabel(row.office)}</small>
+                <small className="online">Online {hoursLabel(row.online)}</small>
+                <small className="site">Site {hoursLabel(row.site)}</small>
               </span>
               <span className="chart-value">{hoursLabel(row.hours)}</span>
               <span className="chart-sub">{row.sessions} {row.sessions === 1 ? "shift" : "shifts"}</span>

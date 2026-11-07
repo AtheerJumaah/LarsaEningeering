@@ -11815,11 +11815,23 @@ function EngineeringManagementPortal({
   const summaries = visibleUsers.map((user) => {
     const mineSessions = filteredSessions.filter((session) => session.uid === user.id);
     const mineRows = filteredRows.filter((row) => rowUserId(row, users) === user.id);
-    const hours = mineSessions.reduce((sum, row) => sum + row.hours, 0);
+    const hourSummary = summarizeClockHours(mineSessions);
+    const hours = hourSummary.total;
     const submitted = mineRows.reduce((sum, row) => sum + finiteNumber(row["Submitted Points"]), 0);
     const approved = mineRows.reduce((sum, row) => sum + finiteNumber(row["Approved Points"]), 0);
     const target = Math.round((finiteNumber(targets[user.id]) || 50) * weeks);
-    return { user, sessions: mineSessions.length, hours, entries: mineRows.length, submitted, approved, target };
+    return {
+      user,
+      sessions: mineSessions.length,
+      hours,
+      office: hourSummary.office,
+      online: hourSummary.online,
+      site: hourSummary.site,
+      entries: mineRows.length,
+      submitted,
+      approved,
+      target,
+    };
   });
 
   return (

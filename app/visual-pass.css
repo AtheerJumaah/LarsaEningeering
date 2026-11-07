@@ -182,9 +182,41 @@ button[aria-label="Back to home"] svg {
 .chart-sub { min-width: 62px; font-size: 11.5px; color: var(--muted); text-align: right; }
 .chart-note { margin: 12px 0 0; font-size: 11.5px; color: var(--muted); }
 
+/* Timesheet mode summary: one additive bar, split without recalculating any
+   attendance. Widths use the same employee total and period as the table. */
+.chart-time-rows { gap: 10px; }
+.chart-time-rows li { grid-template-columns: minmax(120px, 1.15fr) minmax(260px, 4fr) minmax(250px, auto) 78px 62px; }
+.chart-mode-legend { display: flex; justify-content: flex-end; gap: 14px; margin: -5px 0 12px; color: var(--muted); font-size: 11px; font-weight: 750; }
+.chart-mode-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.chart-mode-legend i { width: 9px; height: 9px; border-radius: 999px; }
+.chart-mode-legend .office { background: #22a06b; }
+.chart-mode-legend .online { background: #3674e8; }
+.chart-mode-legend .site { background: #17181b; }
+.chart-mode-track { display: flex; height: 22px; }
+.chart-mode-track i { flex: none; min-width: 0; border-radius: 0; }
+.chart-mode-track i:first-child { border-radius: 999px 0 0 999px; }
+.chart-mode-track i:last-child { border-radius: 0 999px 999px 0; }
+.chart-mode-office { background: #22a06b; }
+.chart-mode-online { background: #3674e8; }
+.chart-mode-site { background: #17181b; }
+.chart-mode-other { background: #9ca3af; }
+.chart-mode-values { display: grid; grid-template-columns: repeat(3, minmax(70px, auto)); gap: 5px; }
+.chart-mode-values small { display: inline-flex; justify-content: center; padding: 3px 6px; border-radius: 7px; font-size: 10px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-mode-values .office { color: #166534; background: #dcfce7; }
+.chart-mode-values .online { color: #1e40af; background: #dbeafe; }
+.chart-mode-values .site { color: #fff; background: #17181b; }
+
 @media (max-width: 720px) {
   .chart-rows li { grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) auto; }
   .chart-sub { display: none; }
+  .chart-time-rows li { grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) auto; }
+  .chart-mode-values { display: none; }
+  .chart-mode-legend { justify-content: flex-start; }
+}
+
+@media (min-width: 721px) and (max-width: 1180px) {
+  .chart-time-rows li { grid-template-columns: minmax(110px, 1fr) minmax(220px, 3fr) 78px 58px; }
+  .chart-mode-values { display: none; }
 }
 
 /* Drag handle for reordering departments. */

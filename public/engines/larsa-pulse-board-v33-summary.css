@@ -1,0 +1,129 @@
+.v33-personSummary {
+  display: grid;
+  gap: 12px;
+}
+
+.v33-personSummary .v33-cardHead {
+  margin-bottom: 0;
+}
+
+.v33-personSummary .v33-dot.site {
+  background: #17181b;
+}
+
+.v33-personSummaryRows {
+  display: grid;
+  gap: 10px;
+}
+
+.v33-personSummaryRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(280px, 4fr) minmax(250px, auto) 72px;
+  gap: 10px;
+  align-items: center;
+}
+
+.v33-personSummaryRow > b {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v33-personModeTrack {
+  display: flex;
+  height: 24px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--soft);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.v33-personModeTrack:hover,
+.v33-personModeTrack:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v33-personModeTrack i {
+  display: block;
+  flex: none;
+  height: 100%;
+}
+
+.v33-personModeTrack i.office {
+  background: #22a06b;
+}
+
+.v33-personModeTrack i.online {
+  background: #3674e8;
+}
+
+.v33-personModeTrack i.site {
+  background: #17181b;
+}
+
+.v33-personModeValues {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(78px, auto));
+  gap: 5px;
+}
+
+.v33-personModeValues small {
+  display: inline-flex;
+  justify-content: center;
+  padding: 4px 6px;
+  font-size: 10px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  border-radius: 7px;
+}
+
+.v33-personModeValues .office {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.v33-personModeValues .online {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.v33-personModeValues .site {
+  color: #fff;
+  background: #17181b;
+}
+
+.v33-personSummaryRow > strong {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (max-width: 1100px) {
+  .v33-personSummaryRow {
+    grid-template-columns: minmax(130px, 1fr) minmax(220px, 3fr) 72px;
+  }
+
+  .v33-personModeValues {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .v33-personSummaryRow {
+    grid-template-columns: minmax(90px, 1fr) minmax(140px, 2fr) 58px;
+    gap: 7px;
+  }
+
+  .v33-personModeTrack {
+    height: 20px;
+  }
+
+  .v33-personSummaryRow > strong {
+    font-size: 11px;
+  }
+}
