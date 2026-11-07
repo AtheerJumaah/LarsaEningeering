@@ -35,6 +35,10 @@ test("Time and Attendance timesheet adds the same summary for the selected perio
   assert.ok(embedded.includes('data-v33-view="bars"'));
   assert.match(embedded, /view:'calendar'/);
   assert.match(embedded, /if\(st\.view==='bars'\)/);
+  assert.match(embedded, /st\.view==='bars'\?'':\(st\.period==='month'\?monthBands/);
+  assert.match(embedded, /var viewButton=e\.target\.closest\('\[data-v33-view\]'\)/);
+  assert.match(embedded, /var periodButton=e\.target\.closest\('\[data-v33-period\]'\)/);
+  assert.doesNotMatch(embedded, /querySelectorAll\('\[data-v33-period\]'\)\.forEach/);
   assert.ok(embedded.includes('data-v33-print'));
   assert.match(embedded, /W\.print\(\)/);
   assert.ok(embedded.includes("Office '+fmt(row.sums.Office)+'h"));
