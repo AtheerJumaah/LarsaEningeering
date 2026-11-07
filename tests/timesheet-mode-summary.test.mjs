@@ -17,9 +17,10 @@ test("Engineering Management timesheets split each employee total by work mode",
   assert.match(chart, /chart-mode-office/);
   assert.match(chart, /chart-mode-online/);
   assert.match(chart, /chart-mode-site/);
-  assert.match(chart, /Office \{hoursLabel\(row\.office\)\}/);
-  assert.match(chart, /Online \{hoursLabel\(row\.online\)\}/);
-  assert.match(chart, /Site \{hoursLabel\(row\.site\)\}/);
+  assert.match(chart, /chart-mode-office[\s\S]*Office \{hoursLabel\(row\.office\)\}/);
+  assert.match(chart, /chart-mode-online[\s\S]*Online \{hoursLabel\(row\.online\)\}/);
+  assert.match(chart, /chart-mode-site[\s\S]*Site \{hoursLabel\(row\.site\)\}/);
+  assert.doesNotMatch(chart, /chart-mode-values/);
   assert.match(visualCss, /\.chart-mode-office \{ background: #22a06b; \}/);
   assert.match(visualCss, /\.chart-mode-online \{ background: #3674e8; \}/);
   assert.match(visualCss, /\.chart-mode-site \{ background: #17181b; \}/);
@@ -28,10 +29,14 @@ test("Engineering Management timesheets split each employee total by work mode",
 test("Time and Attendance timesheet adds the same summary for the selected period", () => {
   assert.match(embedded, /function employeeSummary\(rows,people\)/);
   assert.match(embedded, /var rows=W\.__v33PeriodRows\|\|periodRows\(st\);/);
-  assert.match(embedded, /insertAdjacentHTML\('afterend',employeeSummary\(rows,users\(rows\)\)\)/);
+  assert.ok(embedded.includes('data-v33-view="calendar"'));
+  assert.ok(embedded.includes('data-v33-view="bars"'));
+  assert.match(embedded, /view:'calendar'/);
+  assert.match(embedded, /if\(st\.view==='bars'\)/);
   assert.ok(embedded.includes("Office '+fmt(row.sums.Office)+'h"));
   assert.ok(embedded.includes("Online '+fmt(row.sums.Online)+'h"));
   assert.ok(embedded.includes("Site '+fmt(row.sums.Site)+'h"));
+  assert.doesNotMatch(embedded, /v33-personModeValues/);
   assert.match(embeddedCss, /\.v33-personModeTrack i\.office[\s\S]*#22a06b/);
   assert.match(embeddedCss, /\.v33-personModeTrack i\.online[\s\S]*#3674e8/);
   assert.match(embeddedCss, /\.v33-personModeTrack i\.site[\s\S]*#17181b/);

@@ -13,12 +13,12 @@
 
 .v33-personSummaryRows {
   display: grid;
-  gap: 10px;
+  gap: 7px;
 }
 
 .v33-personSummaryRow {
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) minmax(280px, 4fr) minmax(250px, auto) 72px;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(280px, 4fr) 72px;
   gap: 10px;
   align-items: center;
 }
@@ -32,7 +32,7 @@
 
 .v33-personModeTrack {
   display: flex;
-  height: 24px;
+  height: 20px;
   padding: 0;
   overflow: hidden;
   background: var(--soft);
@@ -48,9 +48,24 @@
 }
 
 .v33-personModeTrack i {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
   height: 100%;
+  overflow: hidden;
+}
+
+.v33-personModeTrack i span {
+  padding: 0 5px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .v33-personModeTrack i.office {
@@ -65,38 +80,6 @@
   background: #17181b;
 }
 
-.v33-personModeValues {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(78px, auto));
-  gap: 5px;
-}
-
-.v33-personModeValues small {
-  display: inline-flex;
-  justify-content: center;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  border-radius: 7px;
-}
-
-.v33-personModeValues .office {
-  color: #166534;
-  background: #dcfce7;
-}
-
-.v33-personModeValues .online {
-  color: #1e40af;
-  background: #dbeafe;
-}
-
-.v33-personModeValues .site {
-  color: #fff;
-  background: #17181b;
-}
-
 .v33-personSummaryRow > strong {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -106,10 +89,6 @@
 @media (max-width: 1100px) {
   .v33-personSummaryRow {
     grid-template-columns: minmax(130px, 1fr) minmax(220px, 3fr) 72px;
-  }
-
-  .v33-personModeValues {
-    display: none;
   }
 }
 
@@ -126,4 +105,30 @@
   .v33-personSummaryRow > strong {
     font-size: 11px;
   }
+}
+
+.v33-viewSwitch {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 4px 0 12px;
+}
+
+.v33-viewSwitch button {
+  min-height: 34px;
+  padding: 7px 12px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.v33-viewSwitch button[aria-pressed="true"] {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }

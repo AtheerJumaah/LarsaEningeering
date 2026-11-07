@@ -76,20 +76,20 @@ export function TeamCharts({ summaries, mode }: { summaries: Summary[]; mode: "t
                 title={`Office ${hoursLabel(row.office)} · Online ${hoursLabel(row.online)} · Site ${hoursLabel(row.site)} · Total ${hoursLabel(row.hours)}`}
                 aria-label={`${row.user.name}: Office ${hoursLabel(row.office)}, Online ${hoursLabel(row.online)}, Site ${hoursLabel(row.site)}, total ${hoursLabel(row.hours)}`}
               >
-                <i style={{ width: (row.office / peak) * 100 + "%" }} className="chart-mode-office" />
-                <i style={{ width: (row.online / peak) * 100 + "%" }} className="chart-mode-online" />
-                <i style={{ width: (row.site / peak) * 100 + "%" }} className="chart-mode-site" />
+                <i style={{ width: (row.office / peak) * 100 + "%" }} className="chart-mode-office">
+                  {row.office > 0 && <span>Office {hoursLabel(row.office)}</span>}
+                </i>
+                <i style={{ width: (row.online / peak) * 100 + "%" }} className="chart-mode-online">
+                  {row.online > 0 && <span>Online {hoursLabel(row.online)}</span>}
+                </i>
+                <i style={{ width: (row.site / peak) * 100 + "%" }} className="chart-mode-site">
+                  {row.site > 0 && <span>Site {hoursLabel(row.site)}</span>}
+                </i>
                 {row.hours > row.office + row.online + row.site ? (
                   <i style={{ width: ((row.hours - row.office - row.online - row.site) / peak) * 100 + "%" }} className="chart-mode-other" />
                 ) : null}
               </span>
-              <span className="chart-mode-values" aria-hidden="true">
-                <small className="office">Office {hoursLabel(row.office)}</small>
-                <small className="online">Online {hoursLabel(row.online)}</small>
-                <small className="site">Site {hoursLabel(row.site)}</small>
-              </span>
               <span className="chart-value">{hoursLabel(row.hours)}</span>
-              <span className="chart-sub">{row.sessions} {row.sessions === 1 ? "shift" : "shifts"}</span>
             </li>
           ))}
         </ul>

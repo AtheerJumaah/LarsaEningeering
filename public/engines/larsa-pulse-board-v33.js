@@ -5,7 +5,7 @@
   if(!document.querySelector('link[data-v33-summary-css]')){
     var summaryCss=document.createElement('link');
     summaryCss.rel='stylesheet';
-    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107';
+    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107b';
     summaryCss.setAttribute('data-v33-summary-css','');
     document.head.appendChild(summaryCss);
   }
@@ -83,7 +83,7 @@
     var peak=Math.max(1,...data.map(function(row){return row.total}));
     return '<section class="v33-card v33-personSummary"><div class="v33-cardHead"><div><h3>Employee hours summary</h3><p>Office, Online, and Site hours for the selected period. Total hours stay on the right.</p></div><div class="v33-legend"><span><i class="v33-dot office"></i>Office</span><span><i class="v33-dot online"></i>Online</span><span><i class="v33-dot site"></i>Site</span></div></div><div class="v33-personSummaryRows">'+data.map(function(row){
       var idx=W.__v33Rows.push(row.rows)-1;
-      return '<div class="v33-personSummaryRow"><b title="'+esc(row.person)+'">'+esc(row.person)+'</b><button type="button" class="v33-personModeTrack" data-v33-detail="'+idx+'" aria-label="'+esc(row.person+': Office '+fmt(row.sums.Office)+' hours, Online '+fmt(row.sums.Online)+' hours, Site '+fmt(row.sums.Site)+' hours, total '+fmt(row.total)+' hours')+'"><i class="office" style="width:'+(row.sums.Office/peak*100)+'%"></i><i class="online" style="width:'+(row.sums.Online/peak*100)+'%"></i><i class="site" style="width:'+(row.sums.Site/peak*100)+'%"></i></button><div class="v33-personModeValues"><small class="office">Office '+fmt(row.sums.Office)+'h</small><small class="online">Online '+fmt(row.sums.Online)+'h</small><small class="site">Site '+fmt(row.sums.Site)+'h</small></div><strong>'+fmt(row.total)+'h</strong></div>';
+      return '<div class="v33-personSummaryRow"><b title="'+esc(row.person)+'">'+esc(row.person)+'</b><button type="button" class="v33-personModeTrack" data-v33-detail="'+idx+'" aria-label="'+esc(row.person+': Office '+fmt(row.sums.Office)+' hours, Online '+fmt(row.sums.Online)+' hours, Site '+fmt(row.sums.Site)+' hours, total '+fmt(row.total)+' hours')+'"><i class="office" style="width:'+(row.sums.Office/peak*100)+'%">'+(row.sums.Office?'<span>Office '+fmt(row.sums.Office)+'h</span>':'')+'</i><i class="online" style="width:'+(row.sums.Online/peak*100)+'%">'+(row.sums.Online?'<span>Online '+fmt(row.sums.Online)+'h</span>':'')+'</i><i class="site" style="width:'+(row.sums.Site/peak*100)+'%">'+(row.sums.Site?'<span>Site '+fmt(row.sums.Site)+'h</span>':'')+'</i></button><strong>'+fmt(row.total)+'h</strong></div>';
     }).join('')+'</div></section>';
   }
   function weekGrid(rows,days,people){
@@ -131,18 +131,26 @@
     if(c){c.classList.remove('v33-boot-pending');W.__v33PendingSince=0}
     var result=rawDraw.apply(this,arguments);
     c=el('content');
-    if(c&&!c.querySelector('.v33-personSummary')){
-      var st=W.__v33State||{period:'week',mode:'all',from:'',to:'',query:''};
+    if(c){
+      var st=W.__v33State||{period:'week',mode:'all',from:'',to:'',query:'',view:'calendar'};
       var q=String(st.query||'').toLowerCase();
       var rows=W.__v33PeriodRows||periodRows(st);
       if(q)rows=rows.filter(function(s){return name(s).toLowerCase().indexOf(q)>=0});
       var kpis=c.querySelector('.v33-kpis');
-      if(kpis)kpis.insertAdjacentHTML('afterend',employeeSummary(rows,users(rows)));
+      if(kpis){
+        kpis.insertAdjacentHTML('afterend','<div class="v33-viewSwitch" role="group" aria-label="Timesheet view"><button type="button" data-v33-view="calendar" aria-pressed="'+(st.view!=='bars')+'">Calendar view</button><button type="button" data-v33-view="bars" aria-pressed="'+(st.view==='bars')+'">Bar chart view</button></div>');
+        if(st.view==='bars'){
+          var switcher=c.querySelector('.v33-viewSwitch');
+          if(switcher)switcher.insertAdjacentHTML('afterend',employeeSummary(rows,users(rows)));
+          c.querySelectorAll('.v33-insights,.v33-board').forEach(function(section){section.hidden=true});
+        }
+      }
+      c.querySelectorAll('[data-v33-view]').forEach(function(button){button.addEventListener('click',function(){W.__v33State.view=button.getAttribute('data-v33-view');draw()})});
     }
     return result;
   };
   var readyPulse=setInterval(function(){if(announceReady())clearInterval(readyPulse)},250);
   setTimeout(function(){var n=0,early=setInterval(function(){syncLegacyGlobals();if(W.activePage==='timesheet'&&!el('content .v33-shell'))draw();if(el('content .v33-shell')||++n>200)clearInterval(early)},50)},0);
   function install(){if(installed)return;syncLegacyGlobals();if(typeof W.renderTimesheet!=='function'||typeof W.larsaSharedAttendanceSessions!=='function')return;W.renderTimesheet=function(){draw()};try{renderTimesheet=W.renderTimesheet}catch(e){}var old=W.render;if(typeof old==='function'&&!old.__v33){var wr=function(){syncLegacyGlobals();if(W.activePage==='timesheet'){draw();return}old.apply(this,arguments);syncLegacyGlobals();if(W.activePage==='timesheet')draw()};wr.__v33=true;W.render=wr;try{render=wr}catch(e){}}installed=true;if(W.activePage==='timesheet')draw()}
-  addStyle();W.__v33Rows=[];W.__v33State={period:'week',mode:'all',from:'',to:'',query:''};W.V33={render:draw,set:function(k,v){W.__v33State[k]=v;draw()}};document.addEventListener('click',function(e){var nav=e.target.closest('button[data-page="timesheet"]');if(nav){e.preventDefault();e.stopImmediatePropagation();W.__larsaTimesheetPendingNav=true;var c=el('content');if(c)c.classList.add('v33-boot-pending');return}var b=e.target.closest('[data-v33-detail]');if(b&&b.closest('#content')){e.preventDefault();var i=Number(b.getAttribute('data-v33-detail')),rows=W.__v33Rows[i]||[];openDetail(rows,'Session details')}});document.addEventListener('keydown',function(e){if((e.key==='Enter'||e.key===' ')&&e.target.closest('[data-v33-detail]')){e.preventDefault();var i=Number(e.target.closest('[data-v33-detail]').getAttribute('data-v33-detail'));openDetail(W.__v33Rows[i]||[],'Session details')}});var tries=0,loop=setInterval(function(){syncLegacyGlobals();install();if(installed&&W.activePage==='timesheet')draw();if(installed||++tries>200)clearInterval(loop)},100);document.addEventListener('DOMContentLoaded',function(){syncLegacyGlobals();setTimeout(install,20)})
+  addStyle();W.__v33Rows=[];W.__v33State={period:'week',mode:'all',from:'',to:'',query:'',view:'calendar'};W.V33={render:draw,set:function(k,v){W.__v33State[k]=v;draw()}};document.addEventListener('click',function(e){var nav=e.target.closest('button[data-page="timesheet"]');if(nav){e.preventDefault();e.stopImmediatePropagation();W.__larsaTimesheetPendingNav=true;var c=el('content');if(c)c.classList.add('v33-boot-pending');return}var b=e.target.closest('[data-v33-detail]');if(b&&b.closest('#content')){e.preventDefault();var i=Number(b.getAttribute('data-v33-detail')),rows=W.__v33Rows[i]||[];openDetail(rows,'Session details')}});document.addEventListener('keydown',function(e){if((e.key==='Enter'||e.key===' ')&&e.target.closest('[data-v33-detail]')){e.preventDefault();var i=Number(e.target.closest('[data-v33-detail]').getAttribute('data-v33-detail'));openDetail(W.__v33Rows[i]||[],'Session details')}});var tries=0,loop=setInterval(function(){syncLegacyGlobals();install();if(installed&&W.activePage==='timesheet')draw();if(installed||++tries>200)clearInterval(loop)},100);document.addEventListener('DOMContentLoaded',function(){syncLegacyGlobals();setTimeout(install,20)})
 })();

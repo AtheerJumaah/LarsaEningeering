@@ -244,6 +244,35 @@ button[aria-label="Back to home"] svg {
 .hier-barline .hier-bar,
 .hier-person > .hier-bar { background: rgba(23, 24, 27, 0.08); }
 
+/* Compact work-mode totals: the mode figures belong on their colored segment;
+   only the employee total sits in the right-hand value column. */
+.chart-time-rows { gap: 7px; }
+.chart-time-rows li { grid-template-columns: minmax(120px, 1.15fr) minmax(260px, 4fr) 78px; }
+.chart-time-rows .chart-mode-track { height: 20px; }
+.chart-time-rows .chart-mode-track i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.chart-time-rows .chart-mode-track i span {
+  padding: 0 5px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-time-rows .chart-mode-values { display: none; }
+@media (max-width: 720px) {
+  .chart-time-rows li { grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) 62px; }
+  .chart-time-rows .chart-mode-track i span { font-size: 0; }
+  .chart-time-rows .chart-mode-track i span::first-letter { font-size: 0; }
+}
+
 /* --------------------------------------------------------------------------
    Structure tab: the rows were tall enough to fit a paragraph and carried four
    numbers. Bring the name and its figures onto one line.
