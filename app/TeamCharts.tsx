@@ -60,6 +60,7 @@ export function TeamCharts({ summaries, mode }: { summaries: Summary[]; mode: "t
             <span className="hier-stat"><small>Total</small><b>{hoursLabel(total)}</b></span>
             <span className="hier-stat"><small>Average</small><b>{hoursLabel(average)}</b></span>
             <span className="hier-stat"><small>Worked</small><b>{worked} / {people}</b></span>
+            <button type="button" className="chart-print" onClick={() => window.print()}>Print / Save PDF</button>
           </div>
         </div>
         <div className="chart-mode-legend" aria-label="Work mode colors">

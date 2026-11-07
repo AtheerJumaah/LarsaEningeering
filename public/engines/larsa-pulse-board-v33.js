@@ -5,7 +5,7 @@
   if(!document.querySelector('link[data-v33-summary-css]')){
     var summaryCss=document.createElement('link');
     summaryCss.rel='stylesheet';
-    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107b';
+    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107c';
     summaryCss.setAttribute('data-v33-summary-css','');
     document.head.appendChild(summaryCss);
   }
@@ -138,7 +138,7 @@
       if(q)rows=rows.filter(function(s){return name(s).toLowerCase().indexOf(q)>=0});
       var kpis=c.querySelector('.v33-kpis');
       if(kpis){
-        kpis.insertAdjacentHTML('afterend','<div class="v33-viewSwitch" role="group" aria-label="Timesheet view"><button type="button" data-v33-view="calendar" aria-pressed="'+(st.view!=='bars')+'">Calendar view</button><button type="button" data-v33-view="bars" aria-pressed="'+(st.view==='bars')+'">Bar chart view</button></div>');
+        kpis.insertAdjacentHTML('afterend','<div class="v33-viewSwitch" role="group" aria-label="Timesheet view"><button type="button" data-v33-view="calendar" aria-pressed="'+(st.view!=='bars')+'">Calendar view</button><button type="button" data-v33-view="bars" aria-pressed="'+(st.view==='bars')+'">Bar chart view</button><button type="button" class="v33-printButton" data-v33-print>Print / Save PDF</button></div>');
         if(st.view==='bars'){
           var switcher=c.querySelector('.v33-viewSwitch');
           if(switcher)switcher.insertAdjacentHTML('afterend',employeeSummary(rows,users(rows)));
@@ -146,6 +146,7 @@
         }
       }
       c.querySelectorAll('[data-v33-view]').forEach(function(button){button.addEventListener('click',function(){W.__v33State.view=button.getAttribute('data-v33-view');draw()})});
+      var printButton=c.querySelector('[data-v33-print]');if(printButton)printButton.addEventListener('click',function(){W.print()});
     }
     return result;
   };

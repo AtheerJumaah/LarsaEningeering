@@ -60,7 +60,7 @@
   padding: 0 5px;
   overflow: hidden;
   color: #fff;
-  font-size: 9px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 850;
   line-height: 20px;
@@ -131,4 +131,16 @@
   color: #fff;
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.v33-viewSwitch .v33-printButton {
+  margin-left: 6px;
+  color: var(--ink);
+  background: var(--panel);
+}
+
+@media print {
+  .v33-viewSwitch { display: none !important; }
+  .v33-personModeTrack i span { font-size: 11px; }
+  .v33-card { break-inside: avoid; box-shadow: none; }
 }
