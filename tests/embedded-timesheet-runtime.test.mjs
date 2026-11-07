@@ -52,6 +52,12 @@ test('real parent bridge respects current employee scope and sums daily net segm
 test('timesheet presentation reuses timezone formatters and does not add an artificial first-pass wait',()=>{
   assert.match(pulse,/var DATE_PARTS_FORMATTER=new Intl\.DateTimeFormat/);
   assert.match(pulse,/var TIME_FORMATTER=new Intl\.DateTimeFormat/);
-  assert.match(pulse,/function periodRows\(st\)\{var b=bounds\(st\), filter=st\.mode\|\|'all';var rows=sourceSessions\(\)/);
+  assert.match(pulse,/function periodRows\(st\).*periodCache\.source===source/);
   assert.doesNotMatch(pulse,/__v33DataWarm/);
+});
+
+test('bar chart uses a dedicated fast render instead of building and hiding the calendar',()=>{
+  assert.match(pulse,/function drawBarSheet\(c,st\)/);
+  assert.match(pulse,/if\(c&&st\.view==='bars'\)\{drawBarSheet\(c,st\);return\}/);
+  assert.doesNotMatch(pulse,/querySelectorAll\('\.v33-insights,\.v33-board'\)/);
 });

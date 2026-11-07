@@ -30,11 +30,11 @@ test("Engineering Management timesheets split each employee total by work mode",
 
 test("Time and Attendance timesheet adds the same summary for the selected period", () => {
   assert.match(embedded, /function employeeSummary\(rows,people\)/);
-  assert.match(embedded, /var rows=W\.__v33PeriodRows\|\|periodRows\(st\);/);
+  assert.match(embedded, /function drawBarSheet\(c,st\)/);
+  assert.match(embedded, /if\(c&&st\.view==='bars'\)\{drawBarSheet\(c,st\);return\}/);
   assert.ok(embedded.includes('data-v33-view="calendar"'));
   assert.ok(embedded.includes('data-v33-view="bars"'));
   assert.match(embedded, /view:'calendar'/);
-  assert.match(embedded, /if\(st\.view==='bars'\)/);
   assert.match(embedded, /st\.view==='bars'\?'':\(st\.period==='month'\?monthBands/);
   assert.match(embedded, /var viewButton=e\.target\.closest\('\[data-v33-view\]'\)/);
   assert.match(embedded, /var periodButton=e\.target\.closest\('\[data-v33-period\]'\)/);

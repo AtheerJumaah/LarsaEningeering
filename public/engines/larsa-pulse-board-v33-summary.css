@@ -7,6 +7,15 @@
   margin-bottom: 0;
 }
 
+.v33-personSummary .v33-cardHead h3 {
+  font-size: 18px;
+}
+
+.v33-personSummary .v33-cardHead p,
+.v33-personSummary .v33-legend {
+  font-size: 12px;
+}
+
 .v33-personSummary .v33-dot.site {
   background: #17181b;
 }
@@ -25,14 +34,14 @@
 
 .v33-personSummaryRow > b {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .v33-personModeTrack {
   display: flex;
-  height: 20px;
+  height: 24px;
   padding: 0;
   overflow: hidden;
   background: var(--soft);
@@ -60,10 +69,10 @@
   padding: 0 5px;
   overflow: hidden;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 850;
-  line-height: 20px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -81,7 +90,7 @@
 }
 
 .v33-personSummaryRow > strong {
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -99,7 +108,7 @@
   }
 
   .v33-personModeTrack {
-    height: 20px;
+    height: 22px;
   }
 
   .v33-personSummaryRow > strong {

@@ -248,7 +248,9 @@ button[aria-label="Back to home"] svg {
    only the employee total sits in the right-hand value column. */
 .chart-time-rows { gap: 7px; }
 .chart-time-rows li { grid-template-columns: minmax(120px, 1.15fr) minmax(260px, 4fr) 78px; }
-.chart-time-rows .chart-mode-track { height: 20px; }
+.chart-time-rows .chart-name { font-size: 14.5px; }
+.chart-time-rows .chart-value { font-size: 14px; }
+.chart-time-rows .chart-mode-track { height: 24px; }
 .chart-time-rows .chart-mode-track i {
   display: flex;
   align-items: center;
@@ -259,10 +261,10 @@ button[aria-label="Back to home"] svg {
   padding: 0 5px;
   overflow: hidden;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 850;
-  line-height: 20px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
