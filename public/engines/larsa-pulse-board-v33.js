@@ -5,7 +5,7 @@
   if(!document.querySelector('link[data-v33-summary-css]')){
     var summaryCss=document.createElement('link');
     summaryCss.rel='stylesheet';
-    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107d';
+    summaryCss.href='/engines/larsa-pulse-board-v33-summary.css?v=20261107e';
     summaryCss.setAttribute('data-v33-summary-css','');
     document.head.appendChild(summaryCss);
   }

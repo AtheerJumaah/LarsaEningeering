@@ -26,6 +26,8 @@ test("Engineering Management timesheets split each employee total by work mode",
   assert.match(visualCss, /\.chart-mode-office \{ background: #22a06b; \}/);
   assert.match(visualCss, /\.chart-mode-online \{ background: #3674e8; \}/);
   assert.match(visualCss, /\.chart-mode-site \{ background: #17181b; \}/);
+  assert.match(visualCss, /\.chart-time-rows \{ gap: 5px; \}/);
+  assert.match(visualCss, /\.chart-time-rows \.chart-mode-track \{ height: 20px; \}/);
 });
 
 test("Time and Attendance timesheet adds the same summary for the selected period", () => {
@@ -48,6 +50,8 @@ test("Time and Attendance timesheet adds the same summary for the selected perio
   assert.match(embeddedCss, /\.v33-personModeTrack i\.office[\s\S]*#22a06b/);
   assert.match(embeddedCss, /\.v33-personModeTrack i\.online[\s\S]*#3674e8/);
   assert.match(embeddedCss, /\.v33-personModeTrack i\.site[\s\S]*#17181b/);
+  assert.match(embeddedCss, /\.v33-personSummaryRows \{[\s\S]*gap: 5px;/);
+  assert.match(embeddedCss, /\.v33-personModeTrack \{[\s\S]*height: 20px;/);
 });
 
 test("embedded presentation remains valid JavaScript", () => {
