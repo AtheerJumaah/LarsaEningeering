@@ -411,6 +411,30 @@ test("the clock labels read from the left", () => {
     "the clock chips must not be right-aligned");
 });
 
+test("the phone keeps the same shell structure and information as desktop", () => {
+  // Mobile is a responsive arrangement of the desktop shell, not a reduced
+  // second app. The full navigation remains in the drawer and is explicitly
+  // labelled instead of relying on an unexplained icon.
+  assert.match(page, /className="menu-button-label">Menu<\/span>/);
+  assert.match(page, /<aside className=\{menuOpen \? "sidebar open" : "sidebar"\}/);
+  assert.match(globals, /@media \(max-width: 1024px\) \{[\s\S]*?\.menu-button-label \{ display: inline; \}/);
+
+  // The title description and both company clocks used to disappear on a
+  // phone. They now occupy the second responsive row and stay scrollable when
+  // the remaining account controls need more width.
+  assert.doesNotMatch(globals, /\.page-heading p, \.clocks \{ display: none; \}/);
+  assert.doesNotMatch(globals, /\.clocks \{ display: none; \}/);
+  assert.doesNotMatch(globals, /\.page-heading p \{ display: none; \}/);
+  assert.match(globals, /@media \(max-width: 760px\) \{[\s\S]*?\.top-right \{[\s\S]*?overflow-x: auto;/);
+  assert.match(globals, /@media \(max-width: 760px\) \{[\s\S]*?\.clocks \{ display: flex;/);
+
+  // A flex column lets the actual two-row header determine its own height;
+  // the active page receives every remaining pixel without a brittle fixed
+  // phone-header subtraction.
+  assert.match(globals, /\.main-shell \{[^}]*display: flex;[^}]*flex-direction: column;/);
+  assert.match(globals, /\.workspace \{[^}]*flex: 1 1 auto;[^}]*height: auto;/);
+});
+
 test("responsive rules keep the six cards as cards on small screens", () => {
   assert.match(pass, /@media \(max-width: 700px\) \{/);
   // On a phone the grid becomes one column of full-width cards...

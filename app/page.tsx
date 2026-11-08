@@ -11233,6 +11233,7 @@ export default function Home() {
               aria-controls="larsa-main-nav"
             >
               <PanelLeftOpen size={20} />
+              <span className="menu-button-label">Menu</span>
             </button>
             {/* Back, on every page that has somewhere to go back to. The
                 browser's own Back leaves the app, so this is the only control

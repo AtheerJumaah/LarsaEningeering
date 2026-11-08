@@ -135,7 +135,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .sidebar-account small { margin-top: 2px; color: #9aa1ad; font-size: 11px; font-weight: 700; }
 .sidebar-account button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #303030; border-radius: 11px; background: #151515; color: #cfd3da; }
 
-.main-shell { min-width: 0; height: 100dvh; overflow: hidden; }
+.main-shell { min-width: 0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   position: relative;
   z-index: 30;
@@ -164,7 +164,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border-radius: 12px;
   background: var(--panel);
 }
-.menu-button span { width: 18px; height: 2px; display: block; border-radius: 99px; background: var(--ink); }
+.menu-button-label { display: none; font-size: 12px; font-weight: 850; }
 .clocks { display: flex; align-items: center; gap: 8px; }
 .clocks span {
   min-width: 112px;
@@ -188,7 +188,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .theme, .top-signout { display: grid; place-items: center; }
 .top-signout { width: 44px; padding: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 
-.workspace { position: relative; height: calc(100dvh - 74px); overflow: hidden; }
+.workspace { position: relative; min-height: 0; flex: 1 1 auto; height: auto; overflow: hidden; }
 /* Do not let a server-rendered/previous shell become visible while the
    current React tree is hydrating. This is deliberately in the base sheet so
    it wins before any page-specific visual pass can paint an older panel. */
@@ -1420,7 +1420,8 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
   .close-menu { display: block; }
   .scrim { position: fixed; z-index: 45; inset: 0; display: block; visibility: hidden; opacity: 0; background: rgba(0,0,0,.5); transition: opacity .18s ease, visibility .18s ease; }
   .scrim.open { visibility: visible; opacity: 1; }
-  .menu-button { display: grid; }
+  .menu-button { width: auto; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; }
+  .menu-button-label { display: inline; }
   .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-scroll > .module-grid:not(.quick-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-scroll > .module-grid:not(.quick-grid) .module-bubble,
@@ -1433,11 +1434,42 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 }
 
 @media (max-width: 760px) {
-  .topbar { min-height: 64px; padding: 8px 10px; }
-  .workspace { height: calc(100dvh - 64px); }
-  .page-heading h1 { max-width: min(48vw, 330px); font-size: 17px; }
-  .page-heading p, .clocks { display: none; }
-  .top-right { gap: 6px; }
+  /* The installed phone app is the same workspace, not a reduced edition.
+     Keep the desktop hierarchy in the same order and wrap it into two rows:
+     navigation/title first, then the same clocks and account controls. */
+  .topbar {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) 10px 8px;
+  }
+  .top-left { width: 100%; gap: 8px; }
+  .page-heading { min-width: 84px; flex: 1 1 auto; }
+  .page-heading h1 { max-width: none; font-size: 17px; }
+  .page-heading p {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 10.5px;
+    line-height: 1.25;
+  }
+  .top-right {
+    width: 100%;
+    max-width: 100%;
+    gap: 6px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    padding-bottom: 1px;
+  }
+  .top-right::-webkit-scrollbar { display: none; }
+  .clocks { display: flex; flex: none; gap: 6px; }
+  .clocks span { min-width: 92px; padding: 6px 8px; font-size: 11.5px; }
+  .clocks b { font-size: 8px; }
   .top-right .primary { padding: 8px 10px; font-size: 11px; }
   .theme { width: 42px; min-height: 42px; }
   .top-signout { width: 42px; min-height: 42px; }
@@ -1536,7 +1568,8 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 }
 
 @media (max-width: 420px) {
-  .page-heading h1 { max-width: 42vw; }
+  .menu-button { padding-inline: 10px; }
+  .page-heading h1 { max-width: none; }
   .overview-hero p { font-size: 13px; }
   .module-grid, .module-grid.quick-grid { grid-template-columns: minmax(0,1fr); }
   .home-scroll > .module-grid:not(.quick-grid) { grid-template-columns: minmax(0,1fr); }
@@ -2591,7 +2624,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .cell-picker { position: fixed; inset: auto 12px 12px 12px; width: auto; max-height: 62vh; }
   .schedule-table { min-width: 760px; }
   .notify-table td small { display: none; }
-  .clocks { display: none; }
+  .clocks { display: flex; }
 }
 
 /* very small phones */
@@ -2600,7 +2633,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .clock-readout.compact b { font-size: 30px; }
   .settings-tabs button { font-size: 12px; min-height: 40px; }
   .topbar { gap: 8px; }
-  .page-heading p { display: none; }
+  .page-heading p { display: -webkit-box; }
 }
 
 /* landscape phones and short windows */
