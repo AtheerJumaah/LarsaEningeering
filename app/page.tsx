@@ -11913,6 +11913,7 @@ function Overview({
   const accountingLanding = landingFor("acc-dashboard", [
     ACCOUNTING_HUB_ITEM,
     ...(GROUPS.find((group) => group.label === "Accounting")?.items || []),
+    MY_PAY_ITEM,
   ]);
   const hrLanding = landingFor("hr-dashboard",
     GROUPS.find((group) => group.label === "HR & Skills")?.items || []);
@@ -11924,7 +11925,7 @@ function Overview({
   const timeLanding = landingFor("quick-clock",
     ["week-schedule", "staff-timesheet", "my-requests", "live-presence"].map(byId));
   const performanceLanding = landingFor("staff-dashboard",
-    ["performance-center", "performance-history", "staff-reports"].map(byId));
+    ["performance-center", "performance-history", "staff-reports", "my-points"].map(byId));
   const fullModules = [
     { id: timeLanding?.id || "quick-clock", channel: "time" as const, title: "Time & Attendance", text: "Clock, schedule, leave", icon: Timer, color: "green" },
     { id: performanceLanding?.id || "staff-performance", channel: "performance" as const, title: "Performance", text: "Points, targets, approvals", icon: TrendingUp, color: "violet" },
@@ -11932,15 +11933,7 @@ function Overview({
     { id: accountingLanding?.id || "acc-dashboard", channel: "accounting" as const, title: "Accounting", text: "Finance, payroll, projects", icon: BadgeDollarSign, color: "amber" },
     { id: "admin", channel: "admin" as const, title: "Administration", text: "Users, access, data", icon: Settings, color: "slate" },
   ];
-  const pinModules = [
-    { id: "quick-clock", channel: "time" as const, title: "Clock In / Out", text: "Record your attendance in one tap", icon: Timer, color: "green" },
-    { id: "my-points", channel: "performance" as const, title: "Add My Points", text: "Add and submit only your own points", icon: TrendingUp, color: "violet" },
-    { id: "staff-development", channel: "performance" as const, title: "Development Portal", text: "Your learning hours, presentations, and evidence", icon: BookOpen, color: "rose" },
-  ].filter((module) => {
-    const item = ITEMS.find((row) => row.id === module.id);
-    return item && canOpenInSession(user, item, method);
-  });
-  const modules = (method === "pin" ? pinModules : fullModules).filter((module) => {
+  const modules = fullModules.filter((module) => {
     const item = ITEMS.find((row) => row.id === module.id);
     return item && canOpenInSession(user, item, method);
   });

@@ -51,6 +51,8 @@ test("the sidebar still filters every group by access", () => {
 test("PIN sessions keep the real channel navigation and its safe time pages", () => {
   assert.match(page, /const PIN_ALLOWED_ITEMS = new Set\(\[[^\]]*"staff-timesheet"[^\]]*"live-presence"[^\]]*\]\)/);
   assert.doesNotMatch(page, /sessionMethod === "pin"\s*\?\s*quickGroup/);
+  assert.doesNotMatch(page, /const pinModules = \[/);
+  assert.match(page, /const modules = fullModules\.filter/);
   assert.match(page, /navChannel === "admin"\s*\? \{ label: "Administration", items: adminNavItems \}\s*: channelGroups\[navChannel\]/);
 });
 
