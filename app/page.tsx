@@ -11048,6 +11048,24 @@ export default function Home() {
       items: group.items.filter((item) => canOpenInSession(sessionUser, item, sessionMethod)),
     }))
     .filter((group) => group.items.length);
+  /* A phone opens navigation as a drawer. On Home that drawer used to contain
+     only Home, so the installed app appeared to be missing Timesheet, Live
+     Presence, and every other page that was visible in the desktop sidebar.
+     Keep the desktop Home sidebar compact, but give the mobile Home drawer the
+     complete permission-filtered workspace structure immediately. */
+  const mobileHomeGroups: Group[] = [
+    channelGroups.time,
+    channelGroups.performance,
+    channelGroups.engineering,
+    channelGroups.hr,
+    channelGroups.accounting,
+    { label: "Administration", items: adminNavItems },
+  ]
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canOpenInSession(sessionUser, item, sessionMethod)),
+    }))
+    .filter((group) => group.items.length);
   /* Written straight through rather than in an effect: the sidebar is one
      boolean, and a person who folds it away expects it folded on the next
      visit, not on the render after next. */
@@ -11198,6 +11216,30 @@ export default function Home() {
               })}
             </section>
           ))}
+          {navChannel === "home" && (
+            <div className="mobile-home-nav">
+              {mobileHomeGroups.map((group) => (
+                <section className="nav-group" key={`mobile-${group.label}`}>
+                  <h2>{group.label}</h2>
+                  {group.items.map((item) => {
+                    const Icon = ICONS[item.id] || ListChecks;
+                    return (
+                      <button
+                        type="button"
+                        key={item.id}
+                        className={active.id === item.id ? "nav-item active" : "nav-item"}
+                        onClick={() => choose(item, channelForItem(item))}
+                        title={item.description}
+                      >
+                        <span className="nav-code"><Icon size={16} strokeWidth={2.15} /></span>
+                        <span><b>{item.label}</b><small>{item.description}</small></span>
+                      </button>
+                    );
+                  })}
+                </section>
+              ))}
+            </div>
+          )}
         </nav>
         {sessionUser && (
           <div className="sidebar-account">

@@ -56,6 +56,14 @@ test("PIN sessions keep the real channel navigation and its safe time pages", ()
   assert.match(page, /navChannel === "admin"\s*\? \{ label: "Administration", items: adminNavItems \}\s*: channelGroups\[navChannel\]/);
 });
 
+test("the mobile Home drawer exposes every permitted work area", () => {
+  assert.match(page, /const mobileHomeGroups: Group\[\] = \[/);
+  assert.match(page, /channelGroups\.time,[\s\S]*channelGroups\.performance,[\s\S]*channelGroups\.engineering,[\s\S]*channelGroups\.hr,[\s\S]*channelGroups\.accounting/);
+  assert.match(page, /mobileHomeGroups[\s\S]*canOpenInSession\(sessionUser, item, sessionMethod\)/);
+  assert.match(page, /navChannel === "home" && \([\s\S]*className="mobile-home-nav"/);
+  assert.match(page, /choose\(item, channelForItem\(item\)\)/);
+});
+
 // -------------------------------------------------------- removed: themes
 test("there is no theme selector — one appearance, plus light and dark", () => {
   assert.doesNotMatch(page, /theme-picker|data-theme|setAppearance|larsa-control-appearance/);

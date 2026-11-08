@@ -76,6 +76,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .product-name span { color: #aeb4bf; font-size: 12px; font-weight: 700; }
 
 .nav-list { display: grid; align-content: start; gap: 18px; }
+.mobile-home-nav { display: none; }
 .nav-group { display: grid; gap: 6px; }
 .nav-group h2 {
   margin: 0 0 2px;
@@ -1417,6 +1418,10 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
   .unified-app { display: block; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: min(330px, 88vw); transform: translateX(-105%); transition: transform .18s ease; box-shadow: 24px 0 60px rgba(0,0,0,.34); }
   .sidebar.open { transform: translateX(0); }
+  /* The phone drawer is the mobile equivalent of the desktop's persistent
+     navigation. Expose the complete permitted workspace from Home instead of
+     making people guess which work-area card hides Timesheet or Live Presence. */
+  .mobile-home-nav { display: contents; }
   .close-menu { display: block; }
   .scrim { position: fixed; z-index: 45; inset: 0; display: block; visibility: hidden; opacity: 0; background: rgba(0,0,0,.5); transition: opacity .18s ease, visibility .18s ease; }
   .scrim.open { visibility: visible; opacity: 1; }
