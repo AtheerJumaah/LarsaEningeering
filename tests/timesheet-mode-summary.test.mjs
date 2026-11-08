@@ -28,6 +28,8 @@ test("Engineering Management timesheets split each employee total by work mode",
   assert.match(visualCss, /\.chart-mode-site \{ background: #17181b; \}/);
   assert.match(visualCss, /\.chart-time-rows \{ gap: 5px; \}/);
   assert.match(visualCss, /\.chart-time-rows \.chart-mode-track \{ height: 20px; \}/);
+  assert.match(visualCss, /@media \(max-width: 720px\)[\s\S]*\.chart-time-rows \.chart-mode-track \{[\s\S]*grid-column: 1 \/ -1;/);
+  assert.doesNotMatch(visualCss, /\.chart-time-rows \.chart-mode-track i span \{ font-size: 0; \}/);
 });
 
 test("Time and Attendance timesheet adds the same summary for the selected period", () => {
@@ -52,6 +54,7 @@ test("Time and Attendance timesheet adds the same summary for the selected perio
   assert.match(embeddedCss, /\.v33-personModeTrack i\.site[\s\S]*#17181b/);
   assert.match(embeddedCss, /\.v33-personSummaryRows \{[\s\S]*gap: 5px;/);
   assert.match(embeddedCss, /\.v33-personModeTrack \{[\s\S]*height: 20px;/);
+  assert.match(embeddedCss, /@media \(max-width: 700px\)[\s\S]*\.v33-personModeTrack \{[\s\S]*grid-column: 1 \/ -1;/);
 });
 
 test("embedded presentation remains valid JavaScript", () => {

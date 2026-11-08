@@ -287,9 +287,21 @@ button[aria-label="Back to home"] svg {
 }
 .chart-print:hover { border-color: var(--ink); }
 @media (max-width: 720px) {
-  .chart-time-rows li { grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) 62px; }
-  .chart-time-rows .chart-mode-track i span { font-size: 0; }
-  .chart-time-rows .chart-mode-track i span::first-letter { font-size: 0; }
+  .chart-time-rows li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 8px;
+  }
+  .chart-time-rows .chart-name { grid-column: 1; }
+  .chart-time-rows .chart-value { grid-column: 2; }
+  .chart-time-rows .chart-mode-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+  .chart-time-rows .chart-mode-track i span {
+    font-size: 10.5px;
+    line-height: 20px;
+  }
 }
 @media print {
   .chart-print { display: none !important; }
