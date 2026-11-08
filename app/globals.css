@@ -1484,6 +1484,26 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 }
 
 @media (max-width: 760px) {
+  /* Show the complete current area's hierarchy at phone width. A sideways
+     strip hid later pages such as Timesheet and Live Presence off screen. */
+  .mobile-channel-scroll {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    scroll-snap-type: none;
+  }
+  .mobile-channel-scroll button {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .mobile-channel-scroll button b {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+  }
   /* The installed phone app is the same workspace, not a reduced edition.
      Keep the desktop hierarchy in the same order and wrap it into two rows:
      navigation/title first, then the same clocks and account controls. */

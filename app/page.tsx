@@ -20411,6 +20411,20 @@ function QuickClock({
           <span className="module-copy"><b>Weekly Schedule</b><small>Your shifts and who else is in</small></span>
           <ArrowRight size={16} />
         </button>
+        {canOpenInSession(user, ITEMS.find((item) => item.id === "staff-timesheet")!, method) && (
+          <button type="button" className="portal-violet" onClick={() => go("staff-timesheet")}>
+            <span className="module-orb"><FileClock size={22} /></span>
+            <span className="module-copy"><b>Timesheet</b><small>Review sessions and hours</small></span>
+            <ArrowRight size={16} />
+          </button>
+        )}
+        {canOpenInSession(user, PRESENCE_ITEM, method) && (
+          <button type="button" className="portal-green" onClick={() => go("live-presence")}>
+            <span className="module-orb"><UsersRound size={22} /></span>
+            <span className="module-copy"><b>Live Presence</b><small>See who is working now</small></span>
+            <ArrowRight size={16} />
+          </button>
+        )}
         <button type="button" className="portal-violet" onClick={() => go(method === "pin" ? "my-points" : "performance-center")}>
           <span className="module-orb"><TrendingUp size={22} /></span>
           <span className="module-copy"><b>{method === "pin" ? "Add My Points" : "Points & Targets"}</b><small>Record and submit your own work</small></span>
