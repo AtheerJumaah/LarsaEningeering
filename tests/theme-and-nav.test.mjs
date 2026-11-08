@@ -64,6 +64,14 @@ test("the mobile Home drawer exposes every permitted work area", () => {
   assert.match(page, /choose\(item, channelForItem\(item\)\)/);
 });
 
+test("every mobile work area visibly exposes all of its permitted pages", () => {
+  assert.match(page, /const mobileChannelGroup = visibleGroups\.find\(\(group\) => group\.label !== "Home"\) \|\| null/);
+  assert.match(page, /mobileChannelGroup && \([\s\S]*className="mobile-channel-nav"/);
+  assert.match(page, /mobileChannelGroup\.items\.map\(\(item\) =>/);
+  assert.match(page, /aria-current=\{active\.id === item\.id \? "page" : undefined\}/);
+  assert.match(page, /onClick=\{\(\) => choose\(item, channelForItem\(item\)\)\}/);
+});
+
 // -------------------------------------------------------- removed: themes
 test("there is no theme selector — one appearance, plus light and dark", () => {
   assert.doesNotMatch(page, /theme-picker|data-theme|setAppearance|larsa-control-appearance/);

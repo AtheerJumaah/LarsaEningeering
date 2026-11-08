@@ -11066,6 +11066,12 @@ export default function Home() {
       items: group.items.filter((item) => canOpenInSession(sessionUser, item, sessionMethod)),
     }))
     .filter((group) => group.items.length);
+  /* The desktop always keeps the current area's pages in its sidebar. A phone
+     hides that sidebar in a drawer, so entering Time & Attendance made
+     Timesheet and Live Presence look as if they did not exist. This is the
+     same permission-filtered current group, surfaced as a compact mobile tab
+     strip on every work-area page. */
+  const mobileChannelGroup = visibleGroups.find((group) => group.label !== "Home") || null;
   /* Written straight through rather than in an effect: the sidebar is one
      boolean, and a person who folds it away expects it folded on the next
      visit, not on the render after next. */
@@ -11365,6 +11371,29 @@ export default function Home() {
             {sessionUser && !previewOwner && <button type="button" className="top-signout" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button>}
           </div>
         </header>
+
+        {mobileChannelGroup && (
+          <nav className="mobile-channel-nav" aria-label={`${mobileChannelGroup.label} pages`}>
+            <span>{mobileChannelGroup.label}</span>
+            <div className="mobile-channel-scroll">
+              {mobileChannelGroup.items.map((item) => {
+                const Icon = ICONS[item.id] || ListChecks;
+                return (
+                  <button
+                    type="button"
+                    key={`mobile-channel-${item.id}`}
+                    className={active.id === item.id ? "active" : ""}
+                    aria-current={active.id === item.id ? "page" : undefined}
+                    onClick={() => choose(item, channelForItem(item))}
+                  >
+                    <Icon size={15} strokeWidth={2.2} />
+                    <b>{item.label}</b>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        )}
 
         <section className="workspace">
           {/* The overview contains a device-local greeting. Render it after

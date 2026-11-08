@@ -166,6 +166,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: var(--panel);
 }
 .menu-button-label { display: none; font-size: 12px; font-weight: 850; }
+.mobile-channel-nav { display: none; }
 .clocks { display: flex; align-items: center; gap: 8px; }
 .clocks span {
   min-width: 112px;
@@ -1422,6 +1423,50 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
      navigation. Expose the complete permitted workspace from Home instead of
      making people guess which work-area card hides Timesheet or Live Presence. */
   .mobile-home-nav { display: contents; }
+  .mobile-channel-nav {
+    display: grid;
+    gap: 7px;
+    flex: none;
+    padding: 9px 12px 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .mobile-channel-nav > span {
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 950;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .mobile-channel-scroll {
+    display: flex;
+    gap: 7px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding-bottom: 1px;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .mobile-channel-scroll::-webkit-scrollbar { display: none; }
+  .mobile-channel-scroll button {
+    min-height: 38px;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 7px;
+    scroll-snap-align: start;
+    padding: 8px 11px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--soft);
+    color: var(--ink);
+  }
+  .mobile-channel-scroll button b { font-size: 11px; white-space: nowrap; }
+  .mobile-channel-scroll button.active {
+    border-color: #1e3a8a;
+    background: #1e3a8a;
+    color: #fff;
+  }
   .close-menu { display: block; }
   .scrim { position: fixed; z-index: 45; inset: 0; display: block; visibility: hidden; opacity: 0; background: rgba(0,0,0,.5); transition: opacity .18s ease, visibility .18s ease; }
   .scrim.open { visibility: visible; opacity: 1; }
