@@ -16,6 +16,7 @@ import {
   LayoutGrid,
   Maximize2,
   Minus,
+  MoveHorizontal,
   Network,
   Pencil,
   Plus,
@@ -756,6 +757,9 @@ export function OrgStructure2({
 
       {view === "chart" ? (
         <>
+          <p className="s2-mobile-structure-hint"><MoveHorizontal size={14} /> Swipe sideways to move across the full desktop organization layout.</p>
+          <div className="s2-structure-scroll" aria-label="Company leadership layout. Swipe sideways on smaller screens.">
+          <div className="s2-structure-surface">
           <section className="s2-executive-board">
             <header>
               <div><span className="eyebrow"><Crown size={13} /> Company leadership</span><h4>Executive positions</h4><p>Place CEO, President, COO, VP, or any custom leadership position above the department structure.</p></div>
@@ -787,6 +791,8 @@ export function OrgStructure2({
               {!executivePositions.length ? <div className="s2-executive-empty"><Crown size={22} /><span><b>No executive positions yet</b><small>Add only the company-level positions your organization needs.</small></span>{isOrgAdmin(viewer) ? <button type="button" onClick={addExecutivePosition}><Plus size={14} /> Add position</button> : null}</div> : null}
             </div>
           </section>
+          </div>
+          </div>
 
           <div className="s2-workspace">
           <aside className="s2-people-palette">
@@ -820,6 +826,8 @@ export function OrgStructure2({
             </> : <p className="s2-palette-collapsed">The directory is collapsed. Open it to search, sort, or drag a person.</p>}
           </aside>
 
+          <div className="s2-structure-scroll" aria-label="Departments and teams layout. Swipe sideways on smaller screens.">
+          <div className="s2-structure-surface">
           <div className="s2-canvas">
             {departments.map((department) => {
               const editable = canEditDepartment(chart, viewer, department.id, users);
@@ -880,6 +888,8 @@ export function OrgStructure2({
               );
             })}
             {!departments.length ? <div className="s2-blank"><Network size={28} /><h4>No departments yet</h4><p>Create a department, then drag people into its teams.</p></div> : null}
+          </div>
+          </div>
           </div>
           </div>
         </>

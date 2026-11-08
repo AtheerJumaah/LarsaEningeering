@@ -56,8 +56,19 @@ test("Organization Chart supports overlapping roles, drag assignment, a movable 
   assert.match(structure2, /aria-label="Zoom out"/);
   assert.match(structure2, /application\/x-larsa-organization/);
   assert.match(structure2, /Additional reporting lines/);
+  assert.match(structure2, /Swipe sideways to move across the full desktop organization layout/);
+  assert.match(structure2, /className="s2-structure-scroll"/);
+  assert.match(structure2, /className="s2-structure-surface"/);
   assert.match(structure2, /Save changes/);
   assert.match(structure2, /disabled=\{!draft \|\| saving\}/);
+});
+
+test("mobile Organization Chart preserves the desktop card layout inside its own pan surface", async () => {
+  const css = await read("app/visual-pass.css");
+  assert.match(css, /\.s2-structure-scroll \{[^}]*overflow-x: auto/);
+  assert.match(css, /\.s2-structure-surface \{ min-width: 1180px; \}/);
+  assert.match(css, /\.s2-structure-surface \.s2-team-grid \{ grid-template-columns: repeat\(auto-fit, minmax\(285px, 1fr\)\); \}/);
+  assert.match(css, /\.s2-structure-surface \.s2-dropzone \{ grid-template-columns: 90px minmax\(0, 1fr\); \}/);
 });
 
 test("Organization Chart persists executive positions without breaking older saved charts", async () => {

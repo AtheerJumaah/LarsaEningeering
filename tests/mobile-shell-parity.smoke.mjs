@@ -131,6 +131,14 @@ try {
     visual: { executives: 1, departments: 2, teams: 2 },
     matrixRows: 4,
   }, "phone must contain the complete company structure");
+  await organization.getByRole("tab", { name: "Build chart", exact: true }).click();
+  const phoneStructureSurfaces = organization.locator(".s2-structure-scroll");
+  assert.equal(await phoneStructureSurfaces.count(), 2, "phone must expose desktop-layout pan surfaces for leadership and departments");
+  for (const surface of await phoneStructureSurfaces.all()) {
+    assert.equal(await surface.evaluate((node) => node.scrollWidth > node.clientWidth), true, "each complete desktop structure must be reachable by swiping sideways");
+  }
+  const phoneTeamColumns = await organization.locator(".s2-team-grid").first().evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+  assert.ok(phoneTeamColumns > 1, "the phone must retain the desktop multi-column team geometry inside its pan surface");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "the whole structure must stay inside the phone page");
 
   await page.setViewportSize({ width: 1440, height: 1000 });

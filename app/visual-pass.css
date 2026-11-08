@@ -399,6 +399,9 @@ button[aria-label="Back to home"] svg {
 .s2-savebar p { flex: 1 1 260px; margin: 0; color: var(--muted); font-size: 12px; }
 .s2-savebar > button { margin-left: 0; }
 .s2-note { margin: -4px 1px 0; color: var(--muted); font-size: 12px; }
+.s2-mobile-structure-hint { display: none; }
+.s2-structure-scroll { min-width: 0; overflow: visible; }
+.s2-structure-surface { min-width: 0; }
 .s2-executive-board { display: grid; gap: 11px; padding: 14px; border: 1px solid #cfd8e8; border-radius: 16px; background: linear-gradient(135deg, #f7f9fd, #fff); }
 .s2-executive-board > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .s2-executive-board > header > div { min-width: 0; }
@@ -679,6 +682,21 @@ button[aria-label="Back to home"] svg {
   .s2-check-list { grid-template-columns: 1fr; }
   .s2-team-assignments > div { grid-template-columns: minmax(0, 1fr) auto; }
   .s2-team-assignments > div > label:last-child { grid-column: 2; }
+  .s2-mobile-structure-hint { display: flex; align-items: center; gap: 7px; margin: 0; padding: 9px 11px; border: 1px solid #d7dfeb; border-radius: 10px; background: #f5f8fd; color: #42536d; font-size: 10.5px; font-weight: 750; }
+  .s2-mobile-structure-hint svg { flex: none; }
+  .s2-structure-scroll { width: 100%; overflow-x: auto; overflow-y: hidden; padding: 0 0 8px; overscroll-behavior-inline: contain; scrollbar-gutter: stable; scrollbar-color: #8290a5 #e9edf3; touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; }
+  .s2-structure-scroll::-webkit-scrollbar { height: 10px; }
+  .s2-structure-scroll::-webkit-scrollbar-track { border-radius: 999px; background: #e9edf3; }
+  .s2-structure-scroll::-webkit-scrollbar-thumb { border: 2px solid #e9edf3; border-radius: 999px; background: #8290a5; }
+  .s2-structure-surface { min-width: 1180px; }
+  .s2-structure-surface .s2-executive-board > header { align-items: center; flex-direction: row; }
+  .s2-structure-surface .s2-executive-board > header > button { width: auto; }
+  .s2-structure-surface .s2-executive-grid { grid-template-columns: repeat(auto-fit, minmax(275px, 1fr)); }
+  .s2-structure-surface .s2-executive-report-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .s2-structure-surface .s2-department-head { align-items: center; }
+  .s2-structure-surface .s2-department-head .s2-card-actions { align-items: center; flex-direction: row; }
+  .s2-structure-surface .s2-team-grid { grid-template-columns: repeat(auto-fit, minmax(285px, 1fr)); }
+  .s2-structure-surface .s2-dropzone { grid-template-columns: 90px minmax(0, 1fr); }
 }
 
 .struct-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: start; }

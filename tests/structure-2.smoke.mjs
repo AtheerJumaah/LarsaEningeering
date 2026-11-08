@@ -314,6 +314,14 @@ try {
     const box = await panel.getByRole("button", { name, exact: true }).boundingBox();
     assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name} must remain inside the mobile viewport`);
   }
+  const mobileStructureScrolls = panel.locator(".s2-structure-scroll");
+  assert.equal(await mobileStructureScrolls.count(), 2, "leadership and departments must each have a mobile pan surface");
+  for (const scroll of await mobileStructureScrolls.all()) {
+    assert.equal(await scroll.evaluate((node) => node.scrollWidth > node.clientWidth), true, "the desktop organization layout must stay horizontally reachable on mobile");
+  }
+  const mobileTeamGrid = panel.locator(".s2-team-grid").first();
+  const mobileTeamColumns = await mobileTeamGrid.evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+  assert.ok(mobileTeamColumns > 1, "mobile must preserve the desktop multi-column team structure inside the pan surface");
   await panel.getByRole("tab", { name: "Visual chart", exact: true }).click();
   const mobileDiagramScroll = panel.locator(".s2-diagram-scroll");
   assert.equal(await mobileDiagramScroll.evaluate((node) => node.scrollWidth > node.clientWidth), true, "the figurative chart must provide its own horizontal navigation on mobile");
