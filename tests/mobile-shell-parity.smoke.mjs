@@ -15,7 +15,25 @@ const admin = {
   access: "Super Admin",
   role: "Managing Director",
 };
-const staff = { users: [admin], logs: [], org: { departments: [], teams: [], reporting: {} } };
+const architect = { id: "mobile-architect", name: "Mobile Architect", email: "architect@example.invalid", enabled: true, access: "Employee", role: "Architecture Department Head", department: "Architecture" };
+const engineer = { id: "mobile-engineer", name: "Mobile Engineer", email: "engineer@example.invalid", enabled: true, access: "Employee", role: "Architect", department: "Architecture" };
+const operations = { id: "mobile-operations", name: "Mobile Operations", email: "operations@example.invalid", enabled: true, access: "Employee", role: "Chief Operating Officer", department: "Management" };
+const staff = {
+  users: [admin, architect, engineer, operations],
+  logs: [],
+  org: {
+    departments: [
+      { id: "mobile-management", name: "Management", headIds: [admin.id] },
+      { id: "mobile-architecture", name: "Architecture", headIds: [architect.id] },
+    ],
+    teams: [
+      { id: "mobile-operations-team", departmentId: "mobile-management", name: "Operations", leadIds: [operations.id], memberIds: [operations.id] },
+      { id: "mobile-architecture-team", departmentId: "mobile-architecture", name: "Architecture A", leadIds: [architect.id], memberIds: [architect.id, engineer.id] },
+    ],
+    executivePositions: [{ id: "mobile-ceo", title: "Chief Executive Officer (CEO)", personIds: [admin.id], reportsToPositionIds: [] }],
+    reporting: { [operations.id]: [admin.id], [engineer.id]: [architect.id] },
+  },
+};
 
 await context.routeWebSocket("**/realtime/**", (socket) => socket.close());
 await context.route("**/*.supabase.co/**", async (route) => {
@@ -75,7 +93,51 @@ try {
   const drawerBox = await drawer.boundingBox();
   assert.ok(drawerBox && drawerBox.x >= -1 && drawerBox.x + drawerBox.width <= 391, `the complete desktop navigation must fit inside the phone drawer: ${JSON.stringify(drawerBox)}`);
   assert.equal(await drawer.getByText("Larsa Control", { exact: true }).isVisible(), true);
-  console.log("PASS mobile shell: same navigation, heading, clocks, actions, and content hierarchy as desktop");
+  await drawer.getByRole("button", { name: "Close navigation" }).click();
+  await page.waitForTimeout(250);
+
+  // The word "structure" means the whole Organization Chart, not merely the
+  // outer app shell. Exercise every representation at phone width and prove
+  // that leadership, departments, teams, people, reporting, and matrix rows
+  // are the same component/data as desktop rather than a reduced mobile copy.
+  await page.getByText("Engineering Management", { exact: true }).last().click();
+  await page.getByRole("tab", { name: "Organization Chart", exact: true }).click();
+  const organization = page.locator(".native.active .structure2");
+  await organization.waitFor();
+
+  const collectStructure = async () => {
+    await organization.getByRole("tab", { name: "Build chart", exact: true }).click();
+    const build = {
+      executives: await organization.locator(".s2-executive-position").count(),
+      departments: await organization.locator(".s2-department").count(),
+      teams: await organization.locator(".s2-team").count(),
+      people: await organization.locator(".s2-palette-person").count(),
+      reporting: await organization.locator(".s2-executive-reporting").count(),
+    };
+    await organization.getByRole("tab", { name: "Visual chart", exact: true }).click();
+    const visual = {
+      executives: await organization.locator(".s2-diagram-node.executive").count(),
+      departments: await organization.locator(".s2-diagram-node.department").count(),
+      teams: await organization.locator(".s2-diagram-node.team:not(.empty)").count(),
+    };
+    await organization.getByRole("tab", { name: "Matrix", exact: true }).click();
+    const matrixRows = await organization.locator(".s2-matrix tbody tr").count();
+    return { build, visual, matrixRows };
+  };
+
+  const phoneStructure = await collectStructure();
+  assert.deepEqual(phoneStructure, {
+    build: { executives: 1, departments: 2, teams: 2, people: 4, reporting: 1 },
+    visual: { executives: 1, departments: 2, teams: 2 },
+    matrixRows: 4,
+  }, "phone must contain the complete company structure");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "the whole structure must stay inside the phone page");
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const desktopStructure = await collectStructure();
+  assert.deepEqual(phoneStructure, desktopStructure, "phone and desktop must expose the same organization structure");
+
+  console.log("PASS mobile parity: same shell and complete organization structure as desktop");
 } finally {
   await browser.close();
 }
