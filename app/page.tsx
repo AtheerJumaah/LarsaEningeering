@@ -956,7 +956,7 @@ const ENGINEERING_ITEM_TABS: Record<string, EngineeringTab> = {
    the Dashboard if one is reached any other way. */
 const ENGINEERING_MANAGER_ITEMS = new Set(["org-team-time", "org-team-points"]);
 const DEFAULT_ITEM = ITEMS.find((item) => item.id === "overview")!;
-const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "my-points", "staff-development", "my-settings", "my-requests", "live-presence", "my-pay"]);
+const PIN_ALLOWED_ITEMS = new Set(["overview", "quick-clock", "week-schedule", "staff-clock", "staff-timesheet", "my-points", "staff-development", "my-settings", "my-requests", "live-presence", "my-pay"]);
 const PERMISSION_ACTIONS: { id: PermissionAction; label: string }[] = [
   { id: "view", label: "View" },
   { id: "add", label: "Add" },
@@ -11035,18 +11035,12 @@ export default function Home() {
     ITEMS.find((item) => item.id === "data")!,
     { ...ITEMS.find((item) => item.id === "staff-backup")!, label: "Staff CSV & Import Tools" },
   ];
-  const quickGroup: Group = {
-    label: "Quick Actions",
-    items: [QUICK_CLOCK_ITEM, WEEK_SCHEDULE_ITEM, MY_POINTS_ITEM, DEVELOPMENT_ITEM],
-  };
   const contextGroup: Group | null =
     navChannel === "home"
       ? null
-      : sessionMethod === "pin"
-        ? quickGroup
-        : navChannel === "admin"
-          ? { label: "Administration", items: adminNavItems }
-          : channelGroups[navChannel];
+      : navChannel === "admin"
+        ? { label: "Administration", items: adminNavItems }
+        : channelGroups[navChannel];
   const visibleGroups = [homeGroup, contextGroup]
     .filter((group): group is Group => Boolean(group))
     .map((group) => ({

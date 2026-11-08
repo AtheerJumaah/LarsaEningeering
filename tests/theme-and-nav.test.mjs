@@ -48,6 +48,12 @@ test("the sidebar still filters every group by access", () => {
   assert.match(page, /\.filter\(\(group\) => group\.items\.length\)/);
 });
 
+test("PIN sessions keep the real channel navigation and its safe time pages", () => {
+  assert.match(page, /const PIN_ALLOWED_ITEMS = new Set\(\[[^\]]*"staff-timesheet"[^\]]*"live-presence"[^\]]*\]\)/);
+  assert.doesNotMatch(page, /sessionMethod === "pin"\s*\?\s*quickGroup/);
+  assert.match(page, /navChannel === "admin"\s*\? \{ label: "Administration", items: adminNavItems \}\s*: channelGroups\[navChannel\]/);
+});
+
 // -------------------------------------------------------- removed: themes
 test("there is no theme selector — one appearance, plus light and dark", () => {
   assert.doesNotMatch(page, /theme-picker|data-theme|setAppearance|larsa-control-appearance/);
