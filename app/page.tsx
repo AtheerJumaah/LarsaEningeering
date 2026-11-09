@@ -2399,6 +2399,7 @@ type LeaveRequest = {
   materialized?: boolean;
   materialised?: boolean;
   provisional?: boolean;
+  reviewOnly?: boolean;
   provisionalReversedAt?: string;
   // performance entry waiting on the decision. Approving one writes the entry.
   week?: string;
@@ -2443,7 +2444,7 @@ function approvalSteps(record: LeaveRequest, nameOf: (id: string) => string): Ch
   const step = Math.max(0, Math.min(Number(record.step) || 0, flow.length - 1));
   const status = String(record.status || "Pending");
   const decisions = (Array.isArray(record.history) ? record.history : [])
-    .filter((h) => /approv|reject|declin/i.test(String(h?.action || "")));
+    .filter((h) => /approv|review|reject|declin/i.test(String(h?.action || "")));
   let d = 0;
   return flow.map((id, i) => {
     let state: ChainStep["state"];
@@ -2671,7 +2672,7 @@ function buildHomeSummary(
 
   // --- leave and schedule requests -------------------------------------
   const approvals = Array.isArray(store?.approvals)
-    ? store.approvals as { id?: string; uid?: string; type?: string; status?: string; from?: string; to?: string; date?: string; reason?: string; flow?: string[]; step?: number }[]
+    ? store.approvals as { id?: string; uid?: string; type?: string; status?: string; from?: string; to?: string; date?: string; reason?: string; flow?: string[]; step?: number; reviewOnly?: boolean }[]
     : [];
   approvals
     .filter((request) => request.uid === viewer.id && request.status === "Pending")
@@ -2680,7 +2681,7 @@ function buildHomeSummary(
       reminders.push({
         id: `req-${request.id || Math.random()}`,
         group: "Requests",
-        title: `${request.type || "Request"} awaiting approval`,
+        title: request.reviewOnly ? "Added hours flagged for review" : `${request.type || "Request"} awaiting approval`,
         detail: request.reason || "Submitted for review",
         meta: [request.from, request.to].filter(Boolean).join(" to ") || request.date || "",
         tone: "open",
@@ -2713,9 +2714,9 @@ function buildHomeSummary(
     reminders.push({
       id: "req-queue",
       group: "Requests",
-      title: "Waiting for your approval",
-      detail: `${queue} request${queue === 1 ? "" : "s"} need a decision from you.`,
-      meta: "Approval queue",
+      title: "Waiting for your review",
+      detail: `${queue} item${queue === 1 ? "" : "s"} to review or decide.`,
+      meta: "Review queue",
       tone: "due",
       itemId: "staff-approvals",
     });
@@ -2734,7 +2735,7 @@ function buildHomeSummary(
   const teamApproved = teamRows.reduce((sum, row) => sum + finiteNumber(row["Approved Points"]), 0);
   const teamTarget = team.reduce((sum, user) => sum + (finiteNumber(growth.pointTargets[user.id]) || 50), 0);
   const awaitingReview = teamRows.filter((row) => !["Approved", "Returned"].includes(String(row.Status || ""))).length;
-  const pendingAll = approvals.filter((request) => request.status === "Pending").length;
+  const pendingAll = approvals.filter((request) => request.status === "Pending" && !request.reviewOnly).length;
   /* "In the office today" is presence, not a planned shift count. A schedule
      entry says somebody was expected; only an active Office session says they
      are actually clocked in now. Keep stale and abandoned sessions out of the
@@ -9192,7 +9193,7 @@ export default function Home() {
     if (!Number.isFinite(correctionStart.getTime()) || !Number.isFinite(correctionEnd.getTime()) || correctionEnd.getTime() > serverNowMs()) {
       notify("Correction times must be valid and in the past."); return false;
     }
-    if (!draft.reason.trim()) { notify("Add a short reason — your approver needs the context."); return false; }
+    if (!draft.reason.trim()) { notify("Add a short reason so your lead can review the change."); return false; }
     if (!Array.isArray(store.approvals)) store.approvals = [];
     ensureStoreApprovalFlows(store);
     /* Corrections are requests too. They use the same default route as leave,
@@ -9204,7 +9205,11 @@ export default function Home() {
     const eligible = (store.users as StaffUser[]).filter((row) =>
       row.enabled !== false && row.id !== actor.id && approvalsGate && hasItemPermission(row, approvalsGate, "approve")
       && rankOf(row) >= rankOf(actor));
-    const flow = configured.length ? configured : [];
+    /* Employee-added hours are counted immediately. Route a single review
+       flag to the first configured lead, without making the rest of the
+       approval chain a condition for recording those hours. */
+    const reviewOnly = draft.kind === "Extra Hours" || draft.kind === "Missed Clock";
+    const flow = configured.length ? (reviewOnly ? configured.slice(0, 1) : configured) : [];
     const approvers = flow.length
       ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
       : eligible;
@@ -9228,6 +9233,7 @@ export default function Home() {
       materialised: true,
       materialized: true,
       provisional: true,
+      reviewOnly,
     };
     const correctionPlan = planAttendanceCorrection(record, store.logs, serverNowMs());
     if (!correctionPlan.ok) { notify(correctionPlan.reason); return false; }
@@ -9244,7 +9250,7 @@ export default function Home() {
         status,
         time,
         lastSeen: time,
-        note: `Pending review correction (${draft.kind}) · ${draft.reason.trim()}`,
+        note: `${reviewOnly ? "Employee-added hours · flagged for review" : "Pending review correction"} (${draft.kind}) · ${draft.reason.trim()}`,
         clockedBy: actor.id,
         touchedAt: serverNowIso(),
         correctionId: record.id,
@@ -9256,13 +9262,15 @@ export default function Home() {
     void pushSyncedKeyNow("larsaStaffV8");
     raiseNotification({
       event: "clock.correction",
-      title: `${draft.kind} correction from ${actor.name}`,
+      title: reviewOnly ? `Added hours to review from ${actor.name}` : `${draft.kind} correction from ${actor.name}`,
       body: `${draft.date} · ${draft.from}–${draft.to} · ${draft.reason.trim()}`,
       itemId: "my-requests", fromName: actor.name, recipients: approvers,
     });
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
-    notify("Time added provisionally and sent for review. It remains counted unless an approver revises or rejects it.");
+    notify(reviewOnly
+      ? "Hours added and counted now. Your lead has been flagged to review them."
+      : "Time added provisionally and sent for review. It remains counted unless an approver revises or rejects it.");
     return true;
   // raiseNotification is a module-level function, so it is not a dependency.
   }, [notify, refreshStaffEngine]);
@@ -9327,6 +9335,7 @@ export default function Home() {
     const index = store.approvals.findIndex((row: LeaveRequest) => row.id === requestId);
     if (index < 0) { notify("That request could not be found."); return false; }
     const record = store.approvals[index] as LeaveRequest;
+    if (record.status !== "Pending") { notify("This item has already been resolved."); return false; }
 
     /* The approval chain, finally enforced. It has been recorded on every
        request since flows were added -- flow is the ordered list of approver
@@ -9374,7 +9383,7 @@ export default function Home() {
     /* Approving at a step that is not the last advances the request instead of
        closing it. Rejecting ends it wherever it stands -- a chain is a series
        of people who must all agree, so any one of them can stop it. */
-    const advancing = status === "Approved" && flow.length > step + 1;
+    const advancing = status === "Approved" && !record.reviewOnly && flow.length > step + 1;
     const settled: "Approved" | "Rejected" | "Pending" = advancing ? "Pending" : status;
     const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
     const correctionPlan = settled === "Approved" && CORRECTIONS.includes(String(record.type))
@@ -9390,7 +9399,7 @@ export default function Home() {
       ...(advancing ? {} : { decidedBy: actor.name, decidedAt: stamp }),
       history: [...(record.history || []), {
         by: actor.name,
-        action: advancing ? `Approved (step ${step + 1} of ${flow.length})` : status,
+        action: record.reviewOnly && status === "Approved" ? "Reviewed" : advancing ? `Approved (step ${step + 1} of ${flow.length})` : status,
         at: stamp,
         note: overriding
           ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn`
@@ -9490,18 +9499,20 @@ export default function Home() {
         event: "leave.decided",
         title: isUnlock
           ? `Late entry for week ${record.week} ${settled.toLowerCase()}`
-          : `${record.type} request ${settled.toLowerCase()}`,
+          : record.reviewOnly && settled === "Approved" ? "Your added hours were reviewed" : `${record.type} request ${settled.toLowerCase()}`,
         body: isUnlock
           ? (settled === "Approved"
             ? `${actor.name} let your ${record.entry?.["Job Number"] || record.entry?.Project || "entry"} into closed week ${record.week}. It now waits for the normal points review.${note ? ` · ${note}` : ""}`
             : `${actor.name} did not accept your late entry for week ${record.week}.${note ? ` · ${note}` : ""}`)
-          : `${actor.name} ${settled.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
+          : record.reviewOnly && settled === "Approved"
+            ? `${actor.name} reviewed your added hours. They were already counted when you saved them.${note ? ` · ${note}` : ""}`
+            : `${actor.name} ${settled.toLowerCase()} your ${record.from} to ${record.to} request${note ? ` · ${note}` : ""}`,
         itemId: isUnlock && settled === "Approved" ? "my-points" : "my-requests",
         fromName: actor.name, recipients: [employee],
       });
     }
     setStorageTick((value) => value + 1);
-    notify(advancing
+    notify(record.reviewOnly && settled === "Approved" ? "Hours marked reviewed. They were counted when the employee added them." : advancing
       ? `Approved. This request now goes to step ${step + 2} of ${flow.length}.`
       : `Request ${settled.toLowerCase()}.`);
     return true;
@@ -9561,13 +9572,13 @@ export default function Home() {
       {
         id: `correction:${record.id}:in`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
         status: isBreak ? "Break Start" : "In", time: plan.start, lastSeen: plan.start,
-        note: `Pending review correction (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
+        note: `${record.reviewOnly ? "Lead-revised hours · flagged for review" : "Pending review correction"} (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
         touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
       },
       {
         id: `correction:${record.id}:out`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
         status: isBreak ? "Break End" : "Out", time: plan.end, lastSeen: plan.end,
-        note: `Pending review correction (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
+        note: `${record.reviewOnly ? "Lead-revised hours · flagged for review" : "Pending review correction"} (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
         touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
       },
     ];
@@ -9596,7 +9607,7 @@ export default function Home() {
       raiseNotification({
         event: "clock.correction",
         title: `${actor.name} revised your attendance correction`,
-        body: `${patch.date} · ${patch.from}–${patch.to}. The revised time remains provisional while review continues.`,
+        body: `${patch.date} · ${patch.from}–${patch.to}. The revised hours are counted now${record.reviewOnly ? "; the review flag remains open" : " while review continues"}.`,
         itemId: "my-requests", fromName: actor.name, recipients: [requester],
       });
     }
@@ -17658,8 +17669,10 @@ function RequestsCentre({
   }).sort((a, b) => b.approvedDays - a.approvedDays);
   const totalDays = report.reduce((sum, row) => sum + row.approvedDays, 0);
 
-  const statusChip = (status: string) => (
-    <span className={`record-status ${status.toLowerCase()}`}>{status}</span>
+  const statusChip = (row: LeaveRequest) => (
+    <span className={`record-status ${row.status.toLowerCase()}`}>
+      {row.reviewOnly ? (row.status === "Pending" ? "Flagged for review" : row.status === "Approved" ? "Reviewed" : "Rejected") : row.status}
+    </span>
   );
   const nameOfUser = (id: string) => users.find((user) => user.id === id)?.name || id;
   const stateLabel: Record<ChainStep["state"], string> = {
@@ -17679,7 +17692,7 @@ function RequestsCentre({
           <div key={`${s.id}-${i}`} className={`chain-step is-${s.state}`} title={s.note || undefined}>
             <span className="chain-badge" aria-hidden="true">{stateMark[s.state]}</span>
             <span className="chain-name">{s.name}</span>
-            <span className="chain-state">{stateLabel[s.state]}{s.at ? ` · ${new Date(s.at).toLocaleDateString()}` : ""}</span>
+            <span className="chain-state">{row.reviewOnly && s.state === "approved" ? "Reviewed" : row.reviewOnly && s.state === "pending" ? "To review" : stateLabel[s.state]}{s.at ? ` · ${new Date(s.at).toLocaleDateString()}` : ""}</span>
           </div>
         ))}
       </div>
@@ -17701,7 +17714,7 @@ function RequestsCentre({
     ) : row.provisional && ["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) ? (
       <div className="request-entry">
         <b>{row.reason}</b>
-        <span>Counted provisionally · approve, revise, or reject</span>
+        <span>{row.reviewOnly ? "Hours counted now · lead may review, revise, or reject" : "Counted provisionally · approve, revise, or reject"}</span>
       </div>
     ) : <>{row.reason}</>
   );
@@ -17724,7 +17737,7 @@ function RequestsCentre({
           <h2>Leave &amp; Requests</h2>
           <p>Submit leave or a schedule change, follow the decision, and see the record for any period.</p>
         </div>
-        <span className="access-pill"><ClipboardCheck size={16} /> {mine.filter((row) => row.status === "Pending").length} of yours pending</span>
+        <span className="access-pill"><ClipboardCheck size={16} /> {mine.filter((row) => row.status === "Pending" && !row.reviewOnly).length} requests pending{mine.some((row) => row.status === "Pending" && row.reviewOnly) ? ` · ${mine.filter((row) => row.status === "Pending" && row.reviewOnly).length} hours flagged` : ""}</span>
       </section>
 
       <div className="settings-tabs" role="tablist" aria-label="Request sections">
@@ -17733,7 +17746,7 @@ function RequestsCentre({
         </button>
         {canApprove && (
           <button type="button" role="tab" aria-selected={tab === "queue"} className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>
-            <CheckCircle2 size={16} /> To approve{queue.length ? ` (${queue.length})` : ""}
+            <CheckCircle2 size={16} /> To review{queue.length ? ` (${queue.length})` : ""}
           </button>
         )}
         <button type="button" role="tab" aria-selected={tab === "report"} className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}>
@@ -17785,7 +17798,7 @@ function RequestsCentre({
                     <td>{row.entry ? row.entry.Date : `${row.from} → ${row.to}`}</td>
                     <td>{row.entry ? `${finiteNumber(row.entry["Submitted Points"])} pts` : requestQuantity(row)}</td>
                     <td>{detailCell(row)}</td>
-                    <td>{statusChip(row.status)}</td>
+                    <td>{statusChip(row)}</td>
                     <td>{chainStrip(row) || <span className="chain-none">{row.decidedBy || "—"}</span>}</td>
                   </tr>
                 ))}
@@ -17798,7 +17811,7 @@ function RequestsCentre({
 
       {tab === "queue" && canApprove && (
         <section className="report-panel">
-          <div className="section-head"><div><span className="eyebrow">Approval queue</span><h3>Waiting for your decision</h3></div>
+          <div className="section-head"><div><span className="eyebrow">Review queue</span><h3>Hours to review and requests to decide</h3></div>
             <span className="black-badge">{queue.length}</span></div>
           <div className="data-table-wrap">
             <table className="data-table"><thead><tr>
@@ -17838,7 +17851,7 @@ function RequestsCentre({
                         return (
                           <>
                             <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>
-                              {total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
+                              {row.reviewOnly ? "Mark reviewed" : total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
                             </button>
                             {["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) && (
                               <button type="button" onClick={async () => {
@@ -20115,15 +20128,13 @@ function QuickClock({
           <button type="button" className="correction-open" onClick={() => setShowCorrection(true)}>
             <ClipboardCheck size={18} />
             <span>
-              <b>Add or fix past hours</b>
-              <small>Forgot to clock in yesterday, missed a break, or worked hours the clock never caught</small>
+              <b>Add hours or fix a missed clock</b>
+              <small>Choose a date and time. Added hours count immediately and your lead gets a review flag.</small>
             </span>
           </button>
         )}
 
-        {/* Sits beside the request button on purpose: same place, opposite
-            rule. Adding time needs approval; taking it away does not, because
-            nobody can inflate their own attendance by removing hours. */}
+        {/* Both changes save immediately; self-added hours also flag a lead. */}
         {(mayTrimOthers || maySelfTrim) && !showCorrection && (
           <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
             <Scissors size={18} />
@@ -20324,7 +20335,7 @@ function QuickClock({
               </button>
             )}
             <p className="panel-footnote">
-              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. To add hours, use Add or fix past hours above — that goes for approval. Every trim is recorded in the audit trail with the before and after times; you can also ask your normal leader chain to review your correction.
+              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. Use Add hours above for time the clock missed; those hours count immediately and are flagged for your lead. Every trim is recorded in the audit trail with the before and after times.
             </p>
           </div>
         )}
@@ -20332,7 +20343,7 @@ function QuickClock({
         {showCorrection && (
           <div className="report-panel">
             <div className="section-head">
-              <div><span className="eyebrow">Needs approval</span><h3>Attendance correction</h3></div>
+              <div><span className="eyebrow">Your attendance</span><h3>Add or fix time</h3></div>
               <button type="button" className="btn small" onClick={() => setShowCorrection(false)}>Close</button>
             </div>
             <div className="correction-types">
@@ -20361,11 +20372,11 @@ function QuickClock({
               )}
               <label>{correction.kind === "Missed Break" ? "Break started" : "From"}<input type="time" value={correction.from} onChange={(event) => setCorrection((c) => ({ ...c, from: event.target.value }))} /></label>
               <label>{correction.kind === "Missed Break" ? "Break ended" : "To"}<input type="time" value={correction.to} onChange={(event) => setCorrection((c) => ({ ...c, to: event.target.value }))} /></label>
-              <small>Times use the attendance calendar. An earlier end time means the following day; the exact instants are saved for your approver.</small>
-              <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="Explain briefly — your approver sees exactly this." /></label>
+              <small>Times use the attendance calendar. An earlier end time means the following day. Your lead can see the exact time and reason.</small>
+              <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="What work did you do, or what was missed?" /></label>
             </div>
             <div className="correction-actions">
-              <span>Added immediately as pending review. It remains counted unless your approver revises or rejects it.</span>
+              <span>{correction.kind !== "Missed Break" ? "Hours count when you save. Your lead receives a review flag and can revise or reject if needed." : "The correction is recorded now and sent for review."}</span>
               <button
                 type="button"
                 className="primary"
@@ -20375,7 +20386,7 @@ function QuickClock({
                     setCorrection((c) => ({ ...c, reason: "" }));
                   }
                 }}
-              >Add &amp; Send for Review</button>
+              >{correction.kind === "Missed Break" ? "Save correction" : "Save added hours"}</button>
             </div>
           </div>
         )}

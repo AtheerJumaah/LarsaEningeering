@@ -13,7 +13,8 @@ function runtime(path, client, seed = {}) {
   const timers = [];
   const listeners = new Map();
   const localStorage = { getItem: k => data.get(k) ?? null, setItem: (k,v) => data.set(k,String(v)), removeItem: k => data.delete(k) };
-  const events = { addEventListener: (k,f) => listeners.set(k,f), removeEventListener: k => listeners.delete(k) };
+  const events = { addEventListener: (k,f) => listeners.set(k,f), removeEventListener: k => listeners.delete(k),
+    dispatchEvent: event => { listeners.get(event.type)?.(event); return true; } };
   const exports = {};
   const context = vm.createContext({ exports, module: { exports }, console: { log(){},warn(){},error(){} },
     require: name => name.includes('client') ? { getSupabaseClient: () => client, supabaseConfigured: () => true }
@@ -34,6 +35,7 @@ function runtime(path, client, seed = {}) {
       : (() => {throw new Error(name)})(),
     localStorage, window: { localStorage, ...events }, document: { hidden: false, ...events },
     navigator: { onLine: true }, Date, Map, Set, Promise, AbortController,
+    Event: class Event { constructor(type) { this.type = type; } },
     setTimeout: (fn,ms) => { timers.push({fn,ms,interval:false}); return timers.length; }, clearTimeout(){},
     setInterval: (fn,ms) => { timers.push({fn,ms,interval:true}); return timers.length; }, clearInterval(){},
   });
