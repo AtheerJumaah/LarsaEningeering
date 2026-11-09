@@ -632,6 +632,8 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .auth-copy { padding: 24px 2px 18px; }
 .auth-copy h1 { margin: 6px 0 7px; font-size: 32px; letter-spacing: -.04em; }
 .auth-copy p { margin: 0; color: #6b7280; font-size: 14px; font-weight: 650; line-height: 1.5; }
+.auth-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.auth-actions button { min-height: 42px; }
 .auth-tabs { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 5px; margin-bottom: 15px; padding: 5px; border-radius: 14px; background: #f0f0ee; }
 .auth-tabs button { min-height: 42px; border: 0; border-radius: 11px; background: transparent; color: #6b7280; font-size: 12px; font-weight: 900; }
 .auth-tabs button.active { background: #fff; color: #17181b; box-shadow: 0 3px 10px rgba(23,24,27,.08); }

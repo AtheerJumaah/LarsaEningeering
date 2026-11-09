@@ -138,6 +138,19 @@ function hasContent(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && Object.keys(value as object).length > 0);
 }
 
+/* Mobile Safari can leave a fetch or auth storage lock pending indefinitely
+   after the app resumes. A failed startup must settle so the shell can offer
+   recovery instead of displaying its syncing screen forever. */
+function startupDeadline<T>(request: PromiseLike<T>, ms = 12000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Staff sync timed out")), ms);
+    Promise.resolve(request).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export function initLarsaSync(options: SyncOptions = {}): () => void {
   if (typeof window === "undefined") return () => {};
   if (!supabaseConfigured()) {
@@ -226,7 +239,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      callers cannot rotate the same refresh token or spam auth endpoints. */
   function ensureSession() {
     if (!ensureSessionInFlight) {
-      ensureSessionInFlight = ensureSessionOnce().finally(() => {
+      ensureSessionInFlight = startupDeadline(ensureSessionOnce()).finally(() => {
         ensureSessionInFlight = null;
       });
     }
@@ -448,11 +461,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              be skipped. Only a byte-for-byte copy of the last confirmed text
              may take this cheap stamp-only path. */
           if (cachedStamp && cachedHash && cachedHash === fingerprint(baseline)) {
-            const { data: stampRow, error: stampError } = await supabase
+            const { data: stampRow, error: stampError } = await startupDeadline(supabase
               .from("app_state")
               .select("updated_at")
               .eq("store_key", key)
-              .maybeSingle();
+              .maybeSingle());
             const serverStamp = stampRow?.updated_at ? String(stampRow.updated_at) : "";
             if (!stampError && serverStamp && serverStamp === cachedStamp) {
               lastSeenAt.set(key, serverStamp);
@@ -462,11 +475,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
             }
           }
         }
-        const { data: row, error: selectError } = await supabase
+        const { data: row, error: selectError } = await startupDeadline(supabase
           .from("app_state")
           .select("data, updated_at")
           .eq("store_key", key)
-          .maybeSingle();
+          .maybeSingle());
         if (selectError) {
           console.error(`[larsa-sync] select failed for "${key}":`, selectError);
           throw selectError;

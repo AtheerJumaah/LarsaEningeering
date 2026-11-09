@@ -11086,11 +11086,12 @@ export default function Home() {
   // screen fed only by data it is allowed to see, fetched straight from
   // Supabase rather than from the shared, everyone-signed-in-can-read
   // localStorage sync used by the rest of the app.
-  if (!viewerSession && sessionUser && supabaseConfigured() && !authoritativeStateReady
-      && (typeof navigator === "undefined" || navigator.onLine)) {
+  if (!viewerSession && sessionUser && supabaseConfigured() && !authoritativeStateReady) {
+    const syncUnavailable = attendanceConnection === "offline"
+      || (typeof navigator !== "undefined" && !navigator.onLine);
     return (
       <div className={dark ? "unified-app dark" : "unified-app"}>
-        <div className="auth-layer" role="status" aria-live="polite">
+        <div className="auth-layer" role={syncUnavailable ? "alert" : "status"} aria-live="polite">
           <section className="auth-card">
             <div className="auth-brand">
               <Image src="/icons/larsa-logo.svg" alt="Larsa Engineering" width={210} height={82} priority />
@@ -11098,8 +11099,19 @@ export default function Home() {
             </div>
             <div className="auth-copy">
               <span className="eyebrow">Company data</span>
-              <h1>Syncing your workspace…</h1>
-              <p>The server is loading the current account, organisation, colours, and attendance state. This browser cache is not used as the source of truth.</p>
+              <h1>{syncUnavailable ? "Unable to load your workspace" : "Syncing your workspace…"}</h1>
+              <p>{syncUnavailable
+                ? "We could not confirm your current account and attendance with the server. Check your connection, then try again."
+                : "Loading your current account and attendance from the server."}</p>
+              {syncUnavailable && (
+                <div className="auth-actions">
+                  <button type="button" className="primary" onClick={() => {
+                    setAttendanceConnectionState("connecting");
+                    refreshSharedStateNow();
+                  }}>Try again</button>
+                  <button type="button" className="btn" onClick={signOut}>Sign out</button>
+                </div>
+              )}
             </div>
           </section>
         </div>
