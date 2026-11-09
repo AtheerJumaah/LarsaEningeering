@@ -537,6 +537,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       await pullKey("larsaStaffV8");
       if (cancelled) return;
       bootstrapped = true;
+      window.dispatchEvent(new Event("larsa:staff-ready"));
       reportStatus("synced");
       const criticalCaughtUp = caughtUpKeys.splice(0, caughtUpKeys.length);
       console.log("[larsa-sync] staff roster catch-up complete; login is unblocked", criticalCaughtUp);

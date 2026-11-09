@@ -6785,12 +6785,24 @@ export default function Home() {
       && navigator.onLine) {
       refreshSharedStateNow();
       setLoginError("Loading staff access…");
-      const deadline = Date.now() + 7000;
-      while (!users.length && Date.now() < deadline) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
-        if (authGenerationRef.current !== generation) return;
-        users = readStaffUsers();
-      }
+      /* Wait for the one authoritative roster arrival instead of parsing the
+         multi-megabyte staff document five times a second on a phone. A
+         completed pull emits the event even if its contents were unchanged. */
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          window.removeEventListener("larsa:staff-ready", finish);
+          resolve();
+        };
+        window.addEventListener("larsa:staff-ready", finish);
+        const timer = window.setTimeout(finish, 18000);
+        if (readStaffUsers().length) finish();
+      });
+      if (authGenerationRef.current !== generation) return;
+      users = readStaffUsers();
       if (!users.length) {
         setLoginError("Staff access is unavailable right now. Check your connection and try again.");
         return;
