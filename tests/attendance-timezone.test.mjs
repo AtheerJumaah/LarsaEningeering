@@ -10,6 +10,7 @@ import {
   attendanceWallDateTimeUtc,
   attendanceWallTimeUtc,
   attendanceWeekKey,
+  attendanceReportingWeekStart,
   splitAttendanceInterval,
   validAttendanceTimeZone,
 } from "../lib/attendance-timezone.mjs";
@@ -41,6 +42,14 @@ test("calendar grouping uses the canonical zone, not the browser zone", () => {
   assert.equal(attendanceDateKey(instant, "Asia/Baghdad"), "2026-07-01");
   assert.equal(attendanceMonthKey(instant), "2026-06");
   assert.equal(attendanceWeekKey(instant), "2026-W27");
+});
+
+test("reporting weeks default to Saturday and honor a saved first day across year and DST boundaries", () => {
+  assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z"), "2026-11-07");
+  assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z", 1), "2026-11-09");
+  assert.equal(attendanceReportingWeekStart("2027-01-01T15:00:00Z"), "2026-12-26");
+  assert.equal(attendanceReportingWeekStart("2026-03-08T09:00:00Z"), "2026-03-07");
+  assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z", 99), "2026-11-07");
 });
 
 test("overnight sessions split at canonical midnight without changing total duration", () => {

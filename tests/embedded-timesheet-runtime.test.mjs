@@ -61,3 +61,20 @@ test('bar chart uses a dedicated fast render instead of building and hiding the 
   assert.match(pulse,/if\(c&&st\.view==='bars'\)\{drawBarSheet\(c,st\);return\}/);
   assert.doesNotMatch(pulse,/querySelectorAll\('\.v33-insights,\.v33-board'\)/);
 });
+
+test('embedded timesheet uses the platform week boundary for week and month bands',()=>{
+  const source=ts.createSourceFile('pulse.js',pulse,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+  const wanted=new Map();
+  function visit(node){if(ts.isFunctionDeclaration(node)&&['reportingWeekStartDay','shiftKey','startOfWeek','bounds'].includes(node.name?.text))wanted.set(node.name.text,node.getText(source));ts.forEachChild(node,visit)}
+  visit(source);
+  assert.equal(wanted.size,4);
+  let saved=null;
+  const context=vm.createContext({W:{localStorage:{getItem:()=>saved}},Date,Number});
+  vm.runInContext([...wanted.values()].join('\n')+'\nfunction today(){return "2026-11-11"}',context);
+  assert.equal(vm.runInContext('bounds({period:"week"}).a',context),'2026-11-07');
+  saved='1';
+  assert.equal(vm.runInContext('bounds({period:"week"}).a',context),'2026-11-09');
+  assert.equal(vm.runInContext('startOfWeek("2026-11-01")',context),'2026-10-26');
+  saved='bad';
+  assert.equal(vm.runInContext('bounds({period:"week"}).a',context),'2026-11-07');
+});

@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BellRing, Database, DownloadCloud, KeyRound, Mail, Save, ShieldCheck, Smartphone, UserCog } from "lucide-react";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { registerBackCloser } from "./backstack";
+import { normalizeReportingWeekStart, publishReportingWeekStart, REPORTING_WEEK_DAYS } from "../lib/reporting-week.mjs";
 
 type Policy = {
   enabled: boolean;
@@ -30,6 +31,7 @@ type Policy = {
   pin_verification_required: boolean;
   pin_hours: number;
   interval_unit?: "hours" | "days" | "business_days";
+  week_start_day: number;
   attendance_notifications: AttendanceNotificationPolicy;
 };
 
@@ -272,6 +274,7 @@ function normalizePolicy(value: unknown): Policy | null {
   const policy = value as Policy;
   return {
     ...policy,
+    week_start_day: normalizeReportingWeekStart(policy.week_start_day),
     attendance_notifications: {
       ...DEFAULT_ATTENDANCE_NOTIFICATIONS,
       ...(policy.attendance_notifications || {}),
@@ -386,6 +389,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
     }
     setPolicy(next);
     setDraft(next);
+    publishReportingWeekStart(next.week_start_day);
     setPolicyLoading(false);
     if (next.engineer_hours !== null) intervalValues.current.engineer = next.engineer_hours;
     if (next.privileged_hours !== null) intervalValues.current.privileged = next.privileged_hours;
@@ -525,6 +529,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
       setPending(null);
       setCode("");
       setMessage("Saved.");
+      if (result.policy) publishReportingWeekStart((result.policy as Policy).week_start_day);
       refresh();
     } else {
       setMessage(String((result && result.error) || "That code was not accepted."));
@@ -635,6 +640,20 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
         </label>
 
         <p className="ps-note">Engineers default to 72 hours; accountants and admins to 24; PIN sign-ins to 168 (weekly). Changing anything here asks you for an email code first.</p>
+      </section>
+
+      <section className="org-card">
+        <span className="org-eyebrow">Reporting calendar</span>
+        <h3>First day of the week</h3>
+        <p className="ps-note">Sets the boundaries for “This week” in Timesheets and attendance summaries. It changes the view only; recorded clock times stay intact.</p>
+        <label className="ps-field">
+          <span>Week starts on</span>
+          <select className="org-select" value={draft.week_start_day}
+            onChange={(event) => setDraft({ ...draft, week_start_day: Number(event.target.value) })}>
+            {REPORTING_WEEK_DAYS.map((day, index) => <option key={day} value={index}>{day}</option>)}
+          </select>
+        </label>
+        <p className="ps-note">Saturday is the default. Use Save changes above to apply a different day.</p>
       </section>
 
       <section className="org-card">

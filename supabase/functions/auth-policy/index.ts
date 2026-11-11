@@ -44,6 +44,7 @@ type Policy = {
   /* The unit the numbers above are counted in: 'hours', 'days' (calendar) or
      'business_days' (Iraqi working week, Sunday–Thursday). */
   interval_unit: "hours" | "days" | "business_days";
+  week_start_day: number;
   attendance_notifications: AttendanceNotificationPolicy;
 };
 
@@ -96,6 +97,7 @@ const FALLBACK: Policy = {
   pin_verification_required: true,
   pin_hours: 168,
   interval_unit: "hours",
+  week_start_day: 6,
   attendance_notifications: ATTENDANCE_FALLBACK,
 };
 
@@ -126,12 +128,13 @@ function normalizeAttendance(value: unknown): AttendanceNotificationPolicy {
 async function readPolicy(): Promise<Policy> {
   const { data, error } = await db
     .from("auth_policy")
-    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit, attendance_notifications")
+    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit, week_start_day, attendance_notifications")
     .eq("id", 1)
     .maybeSingle();
   if (error) throw new Error("Could not read verification settings.");
   const policy = (data as Policy) || FALLBACK;
   if (policy.interval_unit !== "days" && policy.interval_unit !== "business_days") policy.interval_unit = "hours";
+  if (!Number.isInteger(policy.week_start_day) || policy.week_start_day < 0 || policy.week_start_day > 6) policy.week_start_day = 6;
   policy.attendance_notifications = normalizeAttendance(policy.attendance_notifications);
   return policy;
 }
@@ -402,6 +405,7 @@ Deno.serve(async (req: Request) => {
         && (policy.privileged_hours === null ? before.privileged_hours !== null : Number(policy.privileged_hours) !== before.privileged_hours)) touched.push("privileged_hours");
       if (policy.pin_hours !== undefined && Math.max(1, Number(policy.pin_hours) || 168) !== before.pin_hours) touched.push("pin_hours");
       if (policy.interval_unit !== undefined && policy.interval_unit !== before.interval_unit) touched.push("interval_unit");
+      if (policy.week_start_day !== undefined && policy.week_start_day !== before.week_start_day) touched.push("week_start_day");
       if (policy.attendance_notifications !== undefined
         && JSON.stringify(normalizeAttendance(policy.attendance_notifications)) !== JSON.stringify(before.attendance_notifications)) touched.push("attendance_notifications");
       if (touched.length) {
@@ -437,6 +441,12 @@ Deno.serve(async (req: Request) => {
     if (policy.pin_hours !== undefined) next.pin_hours = Math.max(1, Number(policy.pin_hours) || 168);
     if (policy.interval_unit === "hours" || policy.interval_unit === "days" || policy.interval_unit === "business_days") {
       next.interval_unit = policy.interval_unit;
+    }
+    if (policy.week_start_day !== undefined) {
+      if (!Number.isInteger(policy.week_start_day) || policy.week_start_day < 0 || policy.week_start_day > 6) {
+        return json({ ok: false, error: "Choose a valid first day of the week." });
+      }
+      next.week_start_day = policy.week_start_day;
     }
     if (policy.attendance_notifications !== undefined) {
       next.attendance_notifications = normalizeAttendance(policy.attendance_notifications);

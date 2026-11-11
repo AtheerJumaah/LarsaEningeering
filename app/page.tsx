@@ -9,7 +9,8 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
-import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
+import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
+import { readReportingWeekStart, REPORTING_WEEK_DAYS, REPORTING_WEEK_STORAGE_KEY } from "../lib/reporting-week.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { recordAttendancePunch, warmAttendanceAuth, type AttendancePunchInput } from "../lib/attendance-punch";
@@ -109,6 +110,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ChangeEvent, CSSProperties, FormEvent, MouseEvent, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
+function useReportingWeekStartDay() {
+  const [day, setDay] = useState(6);
+  useEffect(() => {
+    const sync = () => setDay(readReportingWeekStart());
+    sync();
+    const onStorage = (event: StorageEvent) => { if (event.key === REPORTING_WEEK_STORAGE_KEY) sync(); };
+    window.addEventListener("larsa-reporting-week-changed", sync);
+    window.addEventListener("storage", onStorage);
+    return () => { window.removeEventListener("larsa-reporting-week-changed", sync); window.removeEventListener("storage", onStorage); };
+  }, []);
+  return day;
+}
 
 /* The three embedded engines keep their state in top-level `const` and `let`
    bindings, which never become window properties, so the only way in from the
@@ -11865,6 +11879,7 @@ function EngineeringManagementPortal({
      work on their own — this only decides where you arrive. */
   openTab?: EngineeringTab;
 }) {
+  const reportingWeekStartDay = useReportingWeekStartDay();
   const org = effectiveOrg(users);
   const manages = isResponsibleForOthers(org, viewer, users);
   /* The section the sidebar asked for. A management section reached by
@@ -11882,16 +11897,21 @@ function EngineeringManagementPortal({
   const tab = picked && picked.from === openTab ? picked.tab : requestedTab;
   const setTab = (next: EngineeringTab) => setPicked({ from: openTab, tab: next });
   const today = attendanceDateKey(new Date());
-  const [from, setFrom] = useState(attendanceDateOffset(today, -6));
+  const [from, setFrom] = useState(attendanceReportingWeekStart(new Date(), reportingWeekStartDay));
   const [to, setTo] = useState(today);
+  const reportPeriodRef = useRef<"week" | "other" | "custom">("week");
+  useEffect(() => {
+    if (reportPeriodRef.current === "week") setFrom(attendanceReportingWeekStart(new Date(), reportingWeekStartDay));
+  }, [reportingWeekStartDay]);
   const visibleIds = manages ? staffIdsVisibleTo(org, viewer, users) : new Set(viewer ? [viewer.id] : []);
   const visibleUsers = users.filter((user) => user.enabled !== false && visibleIds.has(user.id));
   const filteredSessions = sessions.filter((session) => visibleIds.has(session.uid) && withinDates(session.date, from, to));
   const filteredRows = rows.filter((row) => visibleIds.has(rowUserId(row, users)) && withinDates(rowDate(row), from, to));
   const setPeriod = (period: "today" | "week" | "month" | "sixMonths" | "year") => {
+    reportPeriodRef.current = period === "week" ? "week" : "other";
     const end = attendanceDateKey(new Date());
     let days = 0;
-    if (period === "week") days = 6;
+    if (period === "week") { setFrom(attendanceReportingWeekStart(new Date(), reportingWeekStartDay)); setTo(end); return; }
     if (period === "month") days = 29;
     if (period === "sixMonths") {
       const begin = new Date(`${end}T12:00:00Z`);
@@ -11953,11 +11973,11 @@ function EngineeringManagementPortal({
       {tab === "organization" && <OrgStructure2 viewer={viewer} users={users} onSaved={onSaved} />}
       {manages && (tab === "time" || tab === "performance") && <>
         <div className="period-presets" aria-label="Team report period">
-          <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>7 days</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
+          <button type="button" onClick={() => setPeriod("today")}>Today</button><button type="button" onClick={() => setPeriod("week")}>This week</button><button type="button" onClick={() => setPeriod("month")}>30 days</button><button type="button" onClick={() => setPeriod("sixMonths")}>6 months</button><button type="button" onClick={() => setPeriod("year")}>Year</button><span>Custom</span>
         </div>
         <section className="filter-toolbar history-filters">
-          <label><span>From</span><input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label>
-          <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></label>
+          <label><span>From</span><input type="date" value={from} max={to} onChange={(event) => { reportPeriodRef.current = "custom"; setFrom(event.target.value); }} /></label>
+          <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => { reportPeriodRef.current = "custom"; setTo(event.target.value); }} /></label>
           <span className="filter-summary">{visibleUsers.length} people</span>
         </section>
         <TeamCharts summaries={summaries} mode={tab} />
@@ -19634,6 +19654,7 @@ function QuickClock({
   store: Record<string, unknown> | null;
   notify: (message: string) => void;
 }) {
+  const reportingWeekStartDay = useReportingWeekStartDay();
   const dialog = useDialog();
   // Shares the schedule's catalogue so an edited shift reads the same here.
   const catalogue = useMemo(() => shiftCatalogue(store), [store]);
@@ -19821,8 +19842,7 @@ function QuickClock({
      the punch identity used by the trim handler. */
   const attentionToday = attendanceDateKey(new Date());
   const attentionMonthStart = `${attentionToday.slice(0, 7)}-01`;
-  const attentionWeekday = attendanceWeekdayIndex(new Date());
-  const attentionWeekStart = attendanceDateOffset(attentionToday, attentionWeekday === 0 ? -6 : 1 - attentionWeekday);
+  const attentionWeekStart = attendanceReportingWeekStart(new Date(), reportingWeekStartDay);
   const allAttentionSessions = useMemo(() => {
     const unique = new Map<string, ClockSession>();
     sessions.forEach((session) => {
@@ -19922,8 +19942,8 @@ function QuickClock({
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = attendanceDateKey(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
-  const weekKey = attendanceWeekKey(new Date());
-  const weekSessions = mine.filter((session) => attendanceWeekKey(`${session.date}T12:00:00Z`) === weekKey);
+  const weekStart = attendanceReportingWeekStart(new Date(), reportingWeekStartDay);
+  const weekSessions = mine.filter((session) => session.date >= weekStart && session.date <= todayKey);
   const todaySummary = summarizeClockHours(todaySessions);
   const weekSummary = summarizeClockHours(weekSessions);
   const todayHours = todaySummary.total;
@@ -20416,7 +20436,7 @@ function QuickClock({
               <tr>
                 <th scope="col"><span>Work mode</span><small>Net time</small></th>
                 <th scope="col"><span>Today</span><small>Current day</small></th>
-                <th scope="col"><span>This week</span><small>Monday–Sunday</small></th>
+                <th scope="col"><span>This week</span><small>{REPORTING_WEEK_DAYS[reportingWeekStartDay]}–{REPORTING_WEEK_DAYS[(reportingWeekStartDay + 6) % 7]}</small></th>
                 <th scope="col"><span>Period</span><small>{selectedPeriodLabel}</small></th>
               </tr>
             </thead>

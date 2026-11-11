@@ -20,6 +20,7 @@
  */
 
 import { getSupabaseClient, supabaseConfigured } from "./supabase/client";
+import { publishReportingWeekStart } from "./reporting-week.mjs";
 
 export type VerificationPolicy = {
   enabled: boolean;
@@ -34,6 +35,7 @@ export type VerificationPolicy = {
   /* The unit the interval numbers are counted in — hours, calendar days, or
      business days (Iraqi working week, Sun–Thu). Set in Platform Settings. */
   interval_unit?: "hours" | "days" | "business_days";
+  week_start_day: number;
 };
 
 export type VerificationStatus = {
@@ -51,6 +53,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   privileged_hours: 24,
   force_relogin: true, self_signup_enabled: true, signup_requires_approval: false, initial_verification_required: true,
   pin_verification_required: true, pin_hours: 168,
+  week_start_day: 6,
 };
 
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
@@ -83,6 +86,7 @@ async function call(body: Record<string, unknown>): Promise<Record<string, unkno
 export async function loadPolicy(): Promise<VerificationPolicy> {
   const data = await call({ op: "policy" });
   const policy = data && data.ok ? (data.policy as VerificationPolicy) : null;
+  if (policy) publishReportingWeekStart(policy.week_start_day);
   return policy || DEFAULT_POLICY;
 }
 
