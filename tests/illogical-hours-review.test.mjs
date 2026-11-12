@@ -16,14 +16,15 @@ test("employees are visibly prompted to correct implausible attendance", () => {
   assert.match(page, /It is not counted until you correct it/);
 });
 
-test("a self-trim can optionally request leader review without rewriting hours twice", () => {
+test("a self-trim follows the saved approval rule and flags immediate changes for review", () => {
   const trim = page.slice(page.indexOf("const trimSession = useCallback"), page.indexOf("Removes a session outright"));
-  assert.match(trim, /requestReview = false/);
-  assert.match(trim, /requestReview && uid === actor\.id/);
+  assert.match(trim, /attendanceApprovalPolicy\(\)/);
+  assert.match(trim, /approvalPolicy\?\.trim_hours_requires_approval/);
+  assert.match(trim, /type: "Trim Hours"/);
   assert.match(trim, /type: "Hours Review"/);
   assert.match(trim, /chainFor\(store, actor\.id, "Hours Review"\)/);
   assert.doesNotMatch(trim, /record\.type === "Hours Review"[\s\S]*?store\.logs/);
-  assert.match(page, /Ask my leader to review/);
+  assert.match(page, /Your leader receives a review flag when approval is off/);
   assert.match(flows, /"Hours Review"/);
 });
 

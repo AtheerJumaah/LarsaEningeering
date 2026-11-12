@@ -6,6 +6,7 @@ import {
   canActForApprovalHolder,
   defaultApprovalChain,
   ensureDefaultApprovalFlows,
+  nextUncoveredApprovalStep,
 } from "../lib/approval-flow.ts";
 import { departmentMemberships } from "../lib/org-membership.mjs";
 
@@ -92,6 +93,20 @@ test("department heads and company executives can act for lower organizational h
   assert.equal(canActForApprovalHolder(users, org, "head-b", "lead"), false);
   assert.equal(canActForApprovalHolder(users, org, "ceo", "head-a"), true);
   assert.equal(canActForApprovalHolder(users, org, "coo", "head-a"), true);
+});
+
+test("higher authority settles covered steps without asking the same CEO or head again", () => {
+  const route = ["lead", "head-a", "ceo"];
+  assert.equal(nextUncoveredApprovalStep(users, org, route, 0, "lead"), 1);
+  assert.equal(nextUncoveredApprovalStep(users, org, route, 0, "head-a"), 2);
+  assert.equal(nextUncoveredApprovalStep(users, org, route, 0, "ceo"), null);
+  assert.equal(nextUncoveredApprovalStep(users, org, route, 0, "coo"), null);
+  assert.equal(nextUncoveredApprovalStep(users, org, route, 0, "vp", true), null);
+});
+
+test("manual cross-department steps remain until a person who covers them acts", () => {
+  assert.equal(nextUncoveredApprovalStep(users, org, ["lead", "head-a", "head-b"], 0, "head-a"), 2);
+  assert.equal(nextUncoveredApprovalStep(users, org, ["lead", "head-a", "head-b"], 0, "ceo"), null);
 });
 
 test("manual Approval Flow edits remain authoritative", () => {

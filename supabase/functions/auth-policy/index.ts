@@ -46,6 +46,12 @@ type Policy = {
   interval_unit: "hours" | "days" | "business_days";
   week_start_day: number;
   attendance_notifications: AttendanceNotificationPolicy;
+  attendance_approval: AttendanceApprovalPolicy;
+};
+
+type AttendanceApprovalPolicy = {
+  add_hours_requires_approval: boolean;
+  trim_hours_requires_approval: boolean;
 };
 
 type AttendanceNotificationPolicy = {
@@ -99,7 +105,16 @@ const FALLBACK: Policy = {
   interval_unit: "hours",
   week_start_day: 6,
   attendance_notifications: ATTENDANCE_FALLBACK,
+  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false },
 };
+
+function normalizeAttendanceApproval(value: unknown): AttendanceApprovalPolicy {
+  const row = value && typeof value === "object" ? value as Partial<AttendanceApprovalPolicy> : {};
+  return {
+    add_hours_requires_approval: row.add_hours_requires_approval === true,
+    trim_hours_requires_approval: row.trim_hours_requires_approval === true,
+  };
+}
 
 function normalizeAttendance(value: unknown): AttendanceNotificationPolicy {
   const row = value && typeof value === "object" ? value as Partial<AttendanceNotificationPolicy> : {};
@@ -128,7 +143,7 @@ function normalizeAttendance(value: unknown): AttendanceNotificationPolicy {
 async function readPolicy(): Promise<Policy> {
   const { data, error } = await db
     .from("auth_policy")
-    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit, week_start_day, attendance_notifications")
+    .select("enabled, engineer_hours, privileged_hours, force_relogin, self_signup_enabled, signup_requires_approval, initial_verification_required, pin_verification_required, pin_hours, interval_unit, week_start_day, attendance_notifications, attendance_approval")
     .eq("id", 1)
     .maybeSingle();
   if (error) throw new Error("Could not read verification settings.");
@@ -136,6 +151,7 @@ async function readPolicy(): Promise<Policy> {
   if (policy.interval_unit !== "days" && policy.interval_unit !== "business_days") policy.interval_unit = "hours";
   if (!Number.isInteger(policy.week_start_day) || policy.week_start_day < 0 || policy.week_start_day > 6) policy.week_start_day = 6;
   policy.attendance_notifications = normalizeAttendance(policy.attendance_notifications);
+  policy.attendance_approval = normalizeAttendanceApproval(policy.attendance_approval);
   return policy;
 }
 
@@ -408,6 +424,8 @@ Deno.serve(async (req: Request) => {
       if (policy.week_start_day !== undefined && policy.week_start_day !== before.week_start_day) touched.push("week_start_day");
       if (policy.attendance_notifications !== undefined
         && JSON.stringify(normalizeAttendance(policy.attendance_notifications)) !== JSON.stringify(before.attendance_notifications)) touched.push("attendance_notifications");
+      if (policy.attendance_approval !== undefined
+        && JSON.stringify(normalizeAttendanceApproval(policy.attendance_approval)) !== JSON.stringify(before.attendance_approval)) touched.push("attendance_approval");
       if (touched.length) {
         return json({ ok: false, error: "A Super Admin can only switch Email Verification for PIN Login on or off. Other platform settings need a platform owner. Nothing has been changed." });
       }
@@ -450,6 +468,9 @@ Deno.serve(async (req: Request) => {
     }
     if (policy.attendance_notifications !== undefined) {
       next.attendance_notifications = normalizeAttendance(policy.attendance_notifications);
+    }
+    if (policy.attendance_approval !== undefined) {
+      next.attendance_approval = normalizeAttendanceApproval(policy.attendance_approval);
     }
 
     const { error } = await db.from("auth_policy").upsert(next, { onConflict: "id" });

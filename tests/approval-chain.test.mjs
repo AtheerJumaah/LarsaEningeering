@@ -43,15 +43,16 @@ test("the permission check is still there — the chain is on top of it", () => 
 });
 
 test("approving at a non-final step advances instead of closing", () => {
-  assert.match(body, /const advancing = status === "Approved" && flow\.length > step \+ 1;/);
+  assert.match(body, /nextUncoveredApprovalStep\(store\.users as StaffUser\[\], approvalOrg, flow, step, actor\.id, isAdmin\(actor\)\)/);
+  assert.match(body, /const advancing = nextStep !== null;/);
   assert.match(body, /const settled: "Approved" \| "Rejected" \| "Pending" = advancing \? "Pending" : status;/);
-  assert.match(body, /step: advancing \? step \+ 1 : step,/);
+  assert.match(body, /step: advancing \? nextStep : step,/);
 });
 
 test("a rejection ends the request wherever it stands", () => {
   /* advancing is only ever true for "Approved", so a Rejected decision always
      settles as Rejected. Every approver is a veto. */
-  assert.match(body, /status === "Approved" && flow\.length > step \+ 1/);
+  assert.match(body, /const nextStep = status === "Approved" && !record\.reviewOnly/);
 });
 
 test("provisional attendance is confirmed without duplication only when the chain finishes", () => {
@@ -74,13 +75,13 @@ test("a request still moving names no decider", () => {
 });
 
 test("and the next approver is told, not the employee", () => {
-  assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[step \+ 1\]\);/);
+  assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[nextStep\]\);/);
   assert.match(body, /title: `\$\{record\.type\} request needs your decision`/);
   assert.match(body, /\} else if \(employee\) \{/);
 });
 
 test("every step is recorded, including which step it was", () => {
-  assert.match(body, /action: advancing \? `Approved \(step \$\{step \+ 1\} of \$\{flow\.length\}\)` : status,/);
+  assert.match(body, /action: record\.reviewOnly && status === "Approved" \? "Reviewed" : advancing \? `Approved \(step \$\{step \+ 1\} of \$\{flow\.length\}\)` : status,/);
 });
 
 // ----------------------------------------------- the one deliberate exception
@@ -113,7 +114,7 @@ test("a corrupt step index cannot point outside the chain", () => {
 // ------------------------------------------------------------- the screen
 test("the queue shows whose desk a request is on instead of a dead button", () => {
   assert.match(page, /return <small>With \{who\?\.name \|\| "another approver"\}\{total > 1 \? ` · step \$\{step \+ 1\} of \$\{total\}` : ""\}<\/small>;/);
-  assert.match(page, /\{total > 1 && step \+ 1 < total \? "Approve · next step" : "Approve"\}/);
+  assert.match(page, /nextHolderStep !== null \? "Approve · next step" : "Approve request"/);
 });
 
 test("points and attendance corrections use the editable approval flow", () => {
@@ -145,7 +146,7 @@ test("a request is only announced to the approver it is actually with", () => {
   assert.doesNotMatch(submit, /\[managerId \|\| "u1"\]/);
   assert.doesNotMatch(submit, /"u1"/);
   // The hand-off to the next approver still happens inside the decision.
-  assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[step \+ 1\]\);/);
+  assert.match(body, /if \(advancing\) \{\s*\n\s*const next = \(store\.users as StaffUser\[\]\)\.find\(\(row\) => row\.id === flow\[nextStep\]\);/);
 });
 
 test('"need attention" counts only what is genuinely waiting on this person', () => {

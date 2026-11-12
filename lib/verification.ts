@@ -36,6 +36,10 @@ export type VerificationPolicy = {
      business days (Iraqi working week, Sun–Thu). Set in Platform Settings. */
   interval_unit?: "hours" | "days" | "business_days";
   week_start_day: number;
+  attendance_approval?: {
+    add_hours_requires_approval: boolean;
+    trim_hours_requires_approval: boolean;
+  };
 };
 
 export type VerificationStatus = {
@@ -54,7 +58,15 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   force_relogin: true, self_signup_enabled: true, signup_requires_approval: false, initial_verification_required: true,
   pin_verification_required: true, pin_hours: 168,
   week_start_day: 6,
+  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false },
 };
+
+let cachedPolicy: VerificationPolicy | null = null;
+let cachedPolicyAt = 0;
+export function publishPolicy(policy: VerificationPolicy): void {
+  cachedPolicy = policy;
+  cachedPolicyAt = Date.now();
+}
 
 async function call(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   if (!supabaseConfigured()) return null;
@@ -87,7 +99,19 @@ export async function loadPolicy(): Promise<VerificationPolicy> {
   const data = await call({ op: "policy" });
   const policy = data && data.ok ? (data.policy as VerificationPolicy) : null;
   if (policy) publishReportingWeekStart(policy.week_start_day);
+  if (policy) publishPolicy(policy);
   return policy || DEFAULT_POLICY;
+}
+
+/** A time edit cannot silently bypass an enabled approval rule if the policy
+ * service is unavailable. Refresh at action time while keeping repeat edits
+ * quick; another device's setting becomes effective within 30 seconds. */
+export async function attendanceApprovalPolicy(): Promise<VerificationPolicy["attendance_approval"] | null> {
+  if (cachedPolicy && Date.now() - cachedPolicyAt < 30_000) return cachedPolicy.attendance_approval || DEFAULT_POLICY.attendance_approval;
+  const data = await call({ op: "policy" });
+  if (!data?.ok || !data.policy) return null;
+  publishPolicy(data.policy as VerificationPolicy);
+  return (data.policy as VerificationPolicy).attendance_approval || DEFAULT_POLICY.attendance_approval;
 }
 
 export async function savePolicy(policy: VerificationPolicy, updatedBy: string): Promise<boolean> {
@@ -108,6 +132,7 @@ export async function checkVerification(user: {
      being challenged on every sign-in — the incident's most-reported bug. */
   const data = await call({ op: "status", method, userId: user.id, email: String(user.email || "").trim().toLowerCase(), access: user.access || "", role: user.role || "" });
   if (!data || !data.ok) return null;
+  if (data.policy) publishPolicy(data.policy as VerificationPolicy);
   return {
     required: Boolean(data.required),
     exempt: Boolean(data.exempt),

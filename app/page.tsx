@@ -24,8 +24,8 @@ import {
 import type { NotifyRow, NotifyCounts, NotifySetup } from "../lib/supabase/notify";
 import { sendMail } from "../lib/supabase/mail"; import { AccountAccess } from "./AccountAccess"; import { HierarchyDashboard } from "./HierarchyDashboard"; import { TeamCharts } from "./TeamCharts";import { PlatformSettings } from "./PlatformSettings";
 import { OrgStructure2 } from "./OrgStructure2";
-import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo, type OrgChart } from "../lib/org"; import { departmentMemberships } from "../lib/org-membership.mjs"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
-import { APPROVAL_FLOW_TYPES, LEGACY_APPROVAL_FLOW_TYPES, UNIFIED_APPROVAL_FLOW_TYPE, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
+import { SmartCardGrid, type CardSize } from "./SmartCards"; import { canSeeOrgPortal, effectiveOrg, isResponsibleForOthers, staffIdsVisibleTo, type OrgChart } from "../lib/org"; import { departmentMemberships } from "../lib/org-membership.mjs"; import { verifyPassword, hashPassword, hashPin, findByPin, needsUpgrade, isHashed, pinTakenByOther } from "../lib/password"; import { getDeviceId, describeDevice, accountingNeedsVerification, verificationWindowHours, withDeviceRecorded, withDeviceRemoved, describeWhen } from "../lib/devices"; import type { TrustedDevice } from "../lib/devices";import { attendanceApprovalPolicy, checkVerification, loadPolicy } from "../lib/verification"; import { useDialog } from "./Dialog"; import { popBackCloser } from "./backstack";
+import { APPROVAL_FLOW_TYPES, LEGACY_APPROVAL_FLOW_TYPES, UNIFIED_APPROVAL_FLOW_TYPE, canActForApprovalHolder, defaultApprovalChain, ensureDefaultApprovalFlows, nextUncoveredApprovalStep, type ApprovalFlowMeta, type ApprovalFlowOrg } from "../lib/approval-flow";
 import {
   ArrowLeft,
   ArrowRight,
@@ -2414,6 +2414,7 @@ type LeaveRequest = {
   materialised?: boolean;
   provisional?: boolean;
   reviewOnly?: boolean;
+  skippedApprovalSteps?: number[];
   provisionalReversedAt?: string;
   // performance entry waiting on the decision. Approving one writes the entry.
   week?: string;
@@ -2451,20 +2452,22 @@ function requestStage(record: LeaveRequest): { holder: string | null; step: numb
    from history where a step has already been decided. Read-only: this reports
    what happened, it never changes who may act. Legacy requests with no chain
    return nothing, so the display simply falls back to the plain status. */
-type ChainStep = { id: string; name: string; state: "approved" | "rejected" | "pending" | "waiting" | "skipped"; at?: string; note?: string };
+type ChainStep = { id: string; name: string; state: "approved" | "rejected" | "pending" | "waiting" | "skipped" | "covered"; at?: string; note?: string };
 function approvalSteps(record: LeaveRequest, nameOf: (id: string) => string): ChainStep[] {
   const flow = Array.isArray(record.flow) ? record.flow.filter(Boolean) : [];
   if (!flow.length) return [];
   const step = Math.max(0, Math.min(Number(record.step) || 0, flow.length - 1));
   const status = String(record.status || "Pending");
+  const skipped = new Set(record.skippedApprovalSteps || []);
   const decisions = (Array.isArray(record.history) ? record.history : [])
     .filter((h) => /approv|review|reject|declin/i.test(String(h?.action || "")));
   let d = 0;
   return flow.map((id, i) => {
     let state: ChainStep["state"];
-    if (i < step) state = "approved";
+    if (skipped.has(i)) state = "covered";
+    else if (i < step) state = "approved";
     else if (i === step) state = status === "Approved" ? "approved" : status === "Rejected" ? "rejected" : "pending";
-    else state = status === "Rejected" ? "skipped" : "waiting";
+    else state = status === "Pending" ? "waiting" : status === "Approved" ? "covered" : "skipped";
     const out: ChainStep = { id, name: nameOf(id), state };
     if (state === "approved" || state === "rejected") {
       const h = decisions[d++];
@@ -8368,11 +8371,9 @@ export default function Home() {
      action is never anonymous in the attendance history. */
 
   /* Trimming a session an authorized person can already see. Deliberately
-     one-way: the new clock-out may only move EARLIER, so this can reduce
-     recorded time but never manufacture it. Adding hours stays behind the
-     correction request and its approval chain, which is the whole point --
-     nobody can quietly inflate their own attendance. */
-  const trimSession = useCallback((uid: string, clockIn: string, newClockOut: string, requestReview = false) => {
+     one-way: the new clock-out may only move EARLIER. The platform policy
+     decides whether a self-trim waits for approval or applies with a flag. */
+  const trimSession = useCallback(async (uid: string, clockIn: string, newClockOut: string) => {
     const actor = sessionUserRef.current;
     const clockItem = ITEMS.find((item) => item.id === "staff-clock");
     /* Two doors in. A clock manager — the staff-clock "manage" capability
@@ -8425,6 +8426,39 @@ export default function Home() {
     const { inLog, outLog } = plan.session;
     const previousOut = outLog?.time || null;
     const nextOutIso = new Date(newClockOut).toISOString();
+    const approvalPolicy = uid === actor.id ? await attendanceApprovalPolicy() : null;
+    if (uid === actor.id && !approvalPolicy) {
+      notify("Approval settings could not be checked. Please try again."); return false;
+    }
+    if (uid === actor.id && approvalPolicy?.trim_hours_requires_approval) {
+      if (!Array.isArray(store.approvals)) store.approvals = [];
+      if ((store.approvals as LeaveRequest[]).some((row) => row.type === "Trim Hours" && row.uid === uid && row.fromAt === inLog.time && row.status === "Pending")) {
+        notify("This trim is already waiting for approval."); return false;
+      }
+      ensureStoreApprovalFlows(store);
+      const flow = chainFor(store, actor.id, "Hours Review");
+      const review: LeaveRequest = {
+        id: `trim-review:${actor.id}:${Date.now()}`,
+        type: "Trim Hours", uid: actor.id, requestType: inLog.type || "Office",
+        date: attendanceDateKey(new Date(inLog.time || clockIn)),
+        from: attendanceTime(inLog.time || clockIn), to: attendanceTime(nextOutIso),
+        fromAt: inLog.time || clockIn, toAt: nextOutIso,
+        reason: previousOut ? `Shorten clock-out from ${attendanceTime(previousOut)} to ${attendanceTime(nextOutIso)}.` : `Close the open shift at ${attendanceTime(nextOutIso)}.`,
+        status: "Pending", flow, step: 0, history: [], createdAt: serverNowIso(),
+      };
+      (store.approvals as LeaveRequest[]).unshift(review);
+      const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+      const approvers = flow.length
+        ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
+        : (store.users as StaffUser[]).filter((row) => row.id !== actor.id && row.enabled !== false && approvalsGate && hasItemPermission(row, approvalsGate, "approve") && rankOf(row) >= rankOf(actor));
+      localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+      void pushSyncedKeyNow("larsaStaffV8");
+      raiseNotification({ event: "clock.correction", title: `Trim needs approval from ${actor.name}`, body: `${review.date} · ${review.reason}`, itemId: "my-requests", fromName: actor.name, recipients: approvers });
+      refreshStaffEngine();
+      setStorageTick((value) => value + 1);
+      notify("Trim sent for approval. Your recorded hours have not changed yet.");
+      return true;
+    }
     const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString(undefined, { timeZone: ATTENDANCE_TIME_ZONE })}`;
     if (outLog) {
       /* This session's own clock-out, corrected in place: same record id,
@@ -8462,14 +8496,11 @@ export default function Home() {
         closedOpenSession: !outLog,
         self: uid === actor.id,
       });
-    /* A self-trim is safe to apply immediately because it can only remove
-       time. The employee may still want a leader to confirm that the result
-       is sensible. That is a separate, auditable Hours Review request: it
-       does not write attendance again, so approval can never duplicate or
-       inflate hours. It follows the same editable team-lead -> department-
-       head route as every other attendance request. */
+    /* When approval is off, the self-trim applies immediately and a separate
+       review-only record flags it to the first configured lead. Reviewing
+       never writes the attendance a second time. */
     let reviewRequested = false;
-    if (requestReview && uid === actor.id) {
+    if (uid === actor.id) {
       if (!Array.isArray(store.approvals)) store.approvals = [];
       ensureStoreApprovalFlows(store);
       const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
@@ -8477,7 +8508,7 @@ export default function Home() {
       const eligible = (store.users as StaffUser[]).filter((row) =>
         row.enabled !== false && row.id !== actor.id && approvalsGate
         && hasItemPermission(row, approvalsGate, "approve") && rankOf(row) >= rankOf(actor));
-      const flow = configured.length ? configured : [];
+      const flow = configured.length ? configured.slice(0, 1) : [];
       const approvers = flow.length
         ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
         : eligible;
@@ -8495,6 +8526,7 @@ export default function Home() {
           ? `Please review my shortened clock-out (${attendanceTime(previousOut)} to ${attendanceTime(nextOutIso)}).`
           : `Please review the clock-out I added at ${attendanceTime(nextOutIso)} for an unclosed session.`,
         status: "Pending",
+        reviewOnly: true,
         flow,
         step: 0,
         history: [],
@@ -8517,7 +8549,7 @@ export default function Home() {
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify(reviewRequested
-      ? "Attendance record adjusted and sent to your leader for review."
+      ? "Attendance record adjusted. Your leader has been flagged to review it."
       : "Attendance record adjusted.");
     return true;
   }, [notify, refreshStaffEngine, accessUsers]);
@@ -9188,15 +9220,18 @@ export default function Home() {
   }, [notify]);
 
   /* Attendance corrections: a forgotten clock in/out, an unrecorded break, or
-     hours worked that the clock never captured. Added time is useful at once,
-     so it is written provisionally and visibly flagged for the normal approval
-     chain. Approval confirms it; revision replaces it; rejection reverses it. */
+     hours worked that the clock never captured. With approval off, time is
+     written at once and flagged for review. With approval on, it waits for a
+     decision. Rejection reverses time that was already recorded. */
   const submitCorrection = useCallback((draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
     date: string; from: string; to: string; reason: string; mode: string;
   }) => {
+    return (async () => {
     const actor = sessionUserRef.current;
     if (!actor) return false;
+    const approvalPolicy = await attendanceApprovalPolicy();
+    if (!approvalPolicy) { notify("Approval settings could not be checked. Please try again."); return false; }
     const store = parseStore("larsaStaffV8");
     if (!store) { notify("Requests are still loading. Please try again."); return false; }
     if (!draft.date || !draft.from || !draft.to) { notify("Enter the date and both times."); return false; }
@@ -9222,7 +9257,7 @@ export default function Home() {
     /* Employee-added hours are counted immediately. Route a single review
        flag to the first configured lead, without making the rest of the
        approval chain a condition for recording those hours. */
-    const reviewOnly = draft.kind === "Extra Hours" || draft.kind === "Missed Clock";
+    const reviewOnly = !approvalPolicy.add_hours_requires_approval;
     const flow = configured.length ? (reviewOnly ? configured.slice(0, 1) : configured) : [];
     const approvers = flow.length
       ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
@@ -9244,9 +9279,9 @@ export default function Home() {
       step: 0,
       history: [],
       createdAt: new Date().toISOString(),
-      materialised: true,
-      materialized: true,
-      provisional: true,
+      materialised: reviewOnly,
+      materialized: reviewOnly,
+      provisional: reviewOnly,
       reviewOnly,
     };
     const correctionPlan = planAttendanceCorrection(record, store.logs, serverNowMs());
@@ -9256,7 +9291,7 @@ export default function Home() {
     const states: [string, string][] = isBreak
       ? [["Break Start", correctionPlan.start], ["Break End", correctionPlan.end]]
       : [["In", correctionPlan.start], ["Out", correctionPlan.end]];
-    states.forEach(([status, time], position) => {
+    if (reviewOnly) states.forEach(([status, time], position) => {
       (store.logs as ClockLog[]).push({
         id: `correction:${record.id}:${position === 0 ? "in" : "out"}`,
         uid: actor.id,
@@ -9283,9 +9318,10 @@ export default function Home() {
     refreshStaffEngine();
     setStorageTick((value) => value + 1);
     notify(reviewOnly
-      ? "Hours added and counted now. Your lead has been flagged to review them."
-      : "Time added provisionally and sent for review. It remains counted unless an approver revises or rejects it.");
+      ? "Time saved and counted now. Your lead has been flagged to review it."
+      : "Time change sent for approval. It will count after approval.");
     return true;
+    })();
   // raiseNotification is a module-level function, so it is not a dependency.
   }, [notify, refreshStaffEngine]);
 
@@ -9394,20 +9430,31 @@ export default function Home() {
       }
     }
 
-    /* Approving at a step that is not the last advances the request instead of
-       closing it. Rejecting ends it wherever it stands -- a chain is a series
-       of people who must all agree, so any one of them can stop it. */
-    const advancing = status === "Approved" && !record.reviewOnly && flow.length > step + 1;
+    /* A higher manager covers all remaining lower steps they can act for.
+       Only a genuinely uncovered approver receives the next hand-off. */
+    const nextStep = status === "Approved" && !record.reviewOnly
+      ? nextUncoveredApprovalStep(store.users as StaffUser[], approvalOrg, flow, step, actor.id, isAdmin(actor))
+      : null;
+    const advancing = nextStep !== null;
+    const skippedApprovalSteps = status === "Approved" && !record.reviewOnly
+      ? [...(record.skippedApprovalSteps || []), ...flow.slice(step + 1, nextStep ?? flow.length).map((_, offset) => step + 1 + offset)]
+      : record.skippedApprovalSteps;
     const settled: "Approved" | "Rejected" | "Pending" = advancing ? "Pending" : status;
     const CORRECTIONS = ["Missed Clock", "Missed Break", "Extra Hours"];
-    const correctionPlan = settled === "Approved" && CORRECTIONS.includes(String(record.type))
+    const correctionPlan = settled === "Approved" && CORRECTIONS.includes(String(record.type)) && !record.materialised && !record.materialized
       ? planAttendanceCorrection(record, store.logs, serverNowMs()) : null;
     if (correctionPlan && !correctionPlan.ok) { notify(correctionPlan.reason); return false; }
+    const trimPlan = settled === "Approved" && record.type === "Trim Hours" && record.fromAt && record.toAt
+      ? planTrim(store.logs as ClockLog[], record.uid, record.fromAt, record.toAt, serverNowMs()) : null;
+    if (settled === "Approved" && record.type === "Trim Hours" && (!trimPlan || !trimPlan.ok)) {
+      notify("This shift changed while the trim was waiting. Review the current shift before deciding."); return false;
+    }
     const stamp = new Date().toISOString();
     store.approvals[index] = {
       ...record,
       status: settled,
-      step: advancing ? step + 1 : step,
+      step: advancing ? nextStep : step,
+      skippedApprovalSteps,
       /* Only a final decision names a decider. While a request is still moving
          through the chain, "decided by" would be a lie on the employee's copy. */
       ...(advancing ? {} : { decidedBy: actor.name, decidedAt: stamp }),
@@ -9417,8 +9464,8 @@ export default function Home() {
         at: stamp,
         note: overriding
           ? `${note ? `${note} · ` : ""}Decided by an administrator out of turn`
-          : executiveDelegate
-            ? `${note ? `${note} · ` : ""}Decided by ${actor.name} under higher organizational authority`
+          : executiveDelegate || (skippedApprovalSteps?.length || 0) > (record.skippedApprovalSteps?.length || 0)
+            ? `${note ? `${note} · ` : ""}Decided by ${actor.name} under higher organizational authority${skippedApprovalSteps?.length ? `; lower steps covered: ${skippedApprovalSteps.map((index) => (store.users as StaffUser[]).find((user) => user.id === flow[index])?.name || flow[index]).join(", ")}` : ""}`
             : note,
       }],
     };
@@ -9467,6 +9514,38 @@ export default function Home() {
       });
       updated.provisional = false;
     }
+    if (settled === "Approved" && CORRECTIONS.includes(String(record.type)) && (record.materialised || record.materialized)) {
+      (Array.isArray(store.logs) ? store.logs as ClockLog[] : []).forEach((log) => {
+        if (log.correctionId !== record.id) return;
+        log.provisionalReview = false;
+        log.note = `Reviewed correction (${record.type}) · ${record.reason || ""}`;
+        log.touchedAt = stamp;
+      });
+      updated.provisional = false;
+    }
+    if (trimPlan?.ok) {
+      const { inLog, outLog } = trimPlan.session;
+      const newOut = new Date(record.toAt as string).toISOString();
+      const previousOut = outLog?.time || null;
+      if (outLog) {
+        outLog.time = newOut;
+        outLog.lastSeen = newOut;
+        outLog.note = `${outLog.note ? `${outLog.note} · ` : ""}Trim approved by ${actor.name}`;
+        outLog.touchedAt = serverNowIso();
+      } else {
+        (store.logs as ClockLog[]).push({
+          id: `trim:${record.id}:out`, uid: record.uid, type: inLog.type || "Office", status: "Out",
+          time: newOut, lastSeen: newOut, active: false, note: `Trim approved by ${actor.name}`,
+          clockedBy: actor.id, touchedAt: serverNowIso(),
+        });
+        inLog.active = false;
+        inLog.touchedAt = serverNowIso();
+      }
+      logAccountEvent(actor, "attendance.session_trimmed", record.uid, record.uid, {
+        clockIn: inLog.time, previousClockOut: previousOut, newClockOut: newOut,
+        approvedRequest: record.id, closedOpenSession: !outLog,
+      });
+    }
 
     /* Approving is what actually writes the entry into the closed week. It lands
        as Submitted, not Approved: this decision was whether it may enter a week
@@ -9497,7 +9576,7 @@ export default function Home() {
        would be wrong twice over -- it is not approved, and there is nothing
        for them to do. */
     if (advancing) {
-      const next = (store.users as StaffUser[]).find((row) => row.id === flow[step + 1]);
+      const next = (store.users as StaffUser[]).find((row) => row.id === flow[nextStep]);
       if (next) {
         raiseNotification({
           event: "leave.raised",
@@ -9527,7 +9606,7 @@ export default function Home() {
     }
     setStorageTick((value) => value + 1);
     notify(record.reviewOnly && settled === "Approved" ? "Hours marked reviewed. They were counted when the employee added them." : advancing
-      ? `Approved. This request now goes to step ${step + 2} of ${flow.length}.`
+      ? `Approved. This request now goes to step ${Number(nextStep) + 1} of ${flow.length}.`
       : `Request ${settled.toLowerCase()}.`);
     return true;
   // raiseNotification is a module-level function, so it is not a dependency.
@@ -17696,10 +17775,10 @@ function RequestsCentre({
   );
   const nameOfUser = (id: string) => users.find((user) => user.id === id)?.name || id;
   const stateLabel: Record<ChainStep["state"], string> = {
-    approved: "Approved", rejected: "Rejected", pending: "With them now", waiting: "Waiting", skipped: "—",
+    approved: "Approved", rejected: "Rejected", pending: "With them now", waiting: "Waiting", skipped: "Not reached", covered: "Covered by higher manager",
   };
   const stateMark: Record<ChainStep["state"], string> = {
-    approved: "✓", rejected: "✗", pending: "•", waiting: "·", skipped: "·",
+    approved: "✓", rejected: "✗", pending: "•", waiting: "·", skipped: "·", covered: "✓",
   };
   /* The decision trail for one request: each approver and where they stand, so
      a person can see exactly who has acted and who is still to come. */
@@ -17868,10 +17947,13 @@ function RequestsCentre({
                           const who = users.find((user) => user.id === holder);
                           return <small>With {who?.name || "another approver"}{total > 1 ? ` · step ${step + 1} of ${total}` : ""}</small>;
                         }
+                        const nextHolderStep = viewer && !row.reviewOnly
+                          ? nextUncoveredApprovalStep(users, approvalOrg, row.flow || [], step, viewer.id, isAdmin(viewer))
+                          : null;
                         return (
                           <>
                             <button type="button" className="approve" onClick={() => decide(row.id, "Approved")}>
-                              {row.reviewOnly ? "Mark reviewed" : total > 1 && step + 1 < total ? "Approve · next step" : "Approve"}
+                              {row.reviewOnly ? "Mark reviewed" : nextHolderStep !== null ? "Approve · next step" : "Approve request"}
                             </button>
                             {["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) && (
                               <button type="button" onClick={async () => {
@@ -19643,9 +19725,9 @@ function QuickClock({
   submitCorrection: (draft: {
     kind: "Missed Clock" | "Missed Break" | "Extra Hours";
     date: string; from: string; to: string; reason: string; mode: string;
-  }) => boolean;
+  }) => Promise<boolean>;
   users: StaffUser[];
-  trimSession: (uid: string, clockIn: string, newClockOut: string, requestReview?: boolean) => boolean;
+  trimSession: (uid: string, clockIn: string, newClockOut: string) => Promise<boolean>;
   resetSession: (uid: string, clockIn: string) => boolean;
   go: (id: string) => void;
   method: SignInMethod | null;
@@ -19672,7 +19754,6 @@ function QuickClock({
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
   const [trimValue, setTrimValue] = useState("");
-  const [trimAskReview, setTrimAskReview] = useState(false);
   const [attentionPeriod, setAttentionPeriod] = useState<"week" | "month" | "all">("month");
   const [trimTimeZone, setTrimTimeZone] = useState<"America/Chicago" | "Asia/Baghdad">(ATTENDANCE_TIME_ZONE);
   const trimTimeFormatter = useMemo(() => new Intl.DateTimeFormat(undefined, {
@@ -20105,7 +20186,6 @@ function QuickClock({
               pickTrimPreset(attentionPeriod === "month" ? "this-month" : "all");
             }
             setTrimming(null);
-            setTrimAskReview(false);
           }}>Review {attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "all history"}</button>
         </section>
       )}
@@ -20173,7 +20253,7 @@ function QuickClock({
           <div className="report-panel trim-panel">
             <div className="section-head">
               <div><span className="eyebrow">{mayTrimOthers ? "Direct change · no approval" : "Your sessions · only ever shorter"}</span><h3>{mayTrimOthers ? "Clock sessions" : "Your recent sessions"}</h3></div>
-              <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); setTrimAskReview(false); }}>Close</button>
+              <button type="button" className="btn small" onClick={() => { setShowTrim(false); setTrimming(null); }}>Close</button>
             </div>
             {/* The flow the correction rules ask managers to follow: choose
                 the employee first, then the exact session — never guess a
@@ -20295,20 +20375,14 @@ function QuickClock({
                   {active ? (
                     <div className="session-edit">
                       <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
-                      <button type="button" className="primary" onClick={() => {
+                      <button type="button" className="primary" onClick={async () => {
                         const corrected = attendanceWallDateTimeUtc(trimValue, trimTimeZone);
-                        if (corrected && trimSession(session.uid, session.clockIn, corrected, session.uid === user?.id && trimAskReview)) {
+                        if (corrected && await trimSession(session.uid, session.clockIn, corrected)) {
                           setTrimming(null);
-                          setTrimAskReview(false);
                         }
                       }}>Save</button>
                       <button type="button" onClick={() => setTrimming(null)}>Cancel</button>
-                      {session.uid === user?.id && (
-                        <label className="trim-review-choice">
-                          <input type="checkbox" checked={trimAskReview} onChange={(event) => setTrimAskReview(event.target.checked)} />
-                          <span><b>Ask my leader to review</b><small>Sends this corrected record through your normal approval chain.</small></span>
-                        </label>
-                      )}
+                      {session.uid === user?.id && <small className="trim-close-note">Your leader receives a review flag when approval is off. If approval is on in Platform Settings, the trim waits for approval.</small>}
                       {(session.open || session.stale || session.unclosed) && (
                         <small className="trim-close-note">
                           {liveOpen
@@ -20321,7 +20395,6 @@ function QuickClock({
                     <div className="session-edit">
                       <button type="button" onClick={() => {
                         setTrimming({ uid: session.uid, clockIn: session.clockIn });
-                        setTrimAskReview(false);
                         /* A sensible starting value: a live shift closes "now",
                            a closed session starts from its own clock-out, and
                            an abandoned one starts a minute inside its hard
@@ -20396,12 +20469,12 @@ function QuickClock({
               <label className="wide">Reason<textarea value={correction.reason} onChange={(event) => setCorrection((c) => ({ ...c, reason: event.target.value }))} placeholder="What work did you do, or what was missed?" /></label>
             </div>
             <div className="correction-actions">
-              <span>{correction.kind !== "Missed Break" ? "Hours count when you save. Your lead receives a review flag and can revise or reject if needed." : "The correction is recorded now and sent for review."}</span>
+              <span>When approval is off, the change counts on Save and your lead receives a review flag. When approval is on, it takes effect after approval.</span>
               <button
                 type="button"
                 className="primary"
-                onClick={() => {
-                  if (submitCorrection(correction)) {
+                onClick={async () => {
+                  if (await submitCorrection(correction)) {
                     setShowCorrection(false);
                     setCorrection((c) => ({ ...c, reason: "" }));
                   }

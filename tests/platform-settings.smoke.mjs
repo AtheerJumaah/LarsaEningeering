@@ -50,6 +50,9 @@ try{
   const panel=page.locator('.native.active .platform-settings'),save=panel.getByRole('button',{name:'Save changes',exact:true});
   assert.equal(await save.isVisible(),true);assert.equal(await save.isDisabled(),true);
   const engineer=panel.getByRole('switch',{name:'Engineers on or off'}),privileged=panel.getByRole('switch',{name:'Accountants & admins on or off'}),pin=panel.getByRole('switch',{name:'PIN re-verification on or off'});
+  const addApproval=panel.getByRole('checkbox',{name:'Require approval before added hours count'}),trimApproval=panel.getByRole('checkbox',{name:'Require approval before a self-trim takes effect'});
+  assert.equal(await addApproval.isChecked(),false);assert.equal(await trimApproval.isChecked(),false);
+  await addApproval.check();await trimApproval.check();
   for(const control of [engineer,privileged,pin])assert.equal(await control.isChecked(),true);
   await panel.locator('#engineer-interval').fill('96');await engineer.uncheck();assert.equal(await panel.locator('#engineer-interval').isDisabled(),true);await engineer.check();assert.equal(await panel.locator('#engineer-interval').inputValue(),'96');
   await privileged.uncheck();await panel.locator('#pin-interval').fill('336');await pin.uncheck();
@@ -59,8 +62,8 @@ try{
   assert.equal(await panel.locator('#engineer-interval').isDisabled(),true,'lock policy while awaiting confirmation');
   await panel.getByRole('textbox',{name:'Confirmation code'}).fill('000000');await panel.getByRole('button',{name:'Confirm',exact:true}).click();await panel.getByText('Incorrect confirmation code.').waitFor();assert.equal(policy.engineer_hours,72,'rejected code cannot persist settings');
   await panel.getByRole('textbox',{name:'Confirmation code'}).fill('123456');await panel.getByRole('button',{name:'Confirm',exact:true}).click();await panel.getByText('All changes saved',{exact:true}).waitFor();
-  assert.equal(policy.engineer_hours,96);assert.equal(policy.privileged_hours,null);assert.equal(policy.pin_hours,336);assert.equal(policy.pin_verification_required,false);assert.equal(writes.at(-1).actorEmail,user.email);assert.equal(await save.isDisabled(),true);
-  await page.reload({waitUntil:'domcontentloaded'});await openSettings();assert.equal(await panel.locator('#engineer-interval').inputValue(),'96');assert.equal(await privileged.isChecked(),false);assert.equal(await pin.isChecked(),false);
+  assert.equal(policy.engineer_hours,96);assert.equal(policy.privileged_hours,null);assert.equal(policy.pin_hours,336);assert.equal(policy.pin_verification_required,false);assert.equal(policy.attendance_approval.add_hours_requires_approval,true);assert.equal(policy.attendance_approval.trim_hours_requires_approval,true);assert.equal(writes.at(-1).actorEmail,user.email);assert.equal(await save.isDisabled(),true);
+  await page.reload({waitUntil:'domcontentloaded'});await openSettings();assert.equal(await panel.locator('#engineer-interval').inputValue(),'96');assert.equal(await privileged.isChecked(),false);assert.equal(await pin.isChecked(),false);assert.equal(await addApproval.isChecked(),true);assert.equal(await trimApproval.isChecked(),true);
   await pin.check();await panel.locator('#pin-interval').fill('168');await engineer.uncheck();await panel.getByRole('button',{name:'Discard',exact:true}).click();assert.equal(await engineer.isChecked(),true);assert.equal(await pin.isChecked(),false);assert.equal(await panel.locator('#pin-interval').inputValue(),'336');
   const backupSave=panel.getByRole('button',{name:'Save backup settings',exact:true});assert.equal(await backupSave.count(),1);assert.equal(await backupSave.isDisabled(),true);
   await page.locator('.native.active').evaluate(el=>{el.scrollTop=700});

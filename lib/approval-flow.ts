@@ -118,6 +118,25 @@ export function canActForApprovalHolder(
   );
 }
 
+/** Skip only the remaining approvers whose authority the acting manager
+ * already holds. A team lead still hands off to the department head; a head
+ * acting for the lead completes their own later step; CEO/COO can settle the
+ * whole route. A manual cross-department route is preserved where the actor
+ * cannot represent its next holder. */
+export function nextUncoveredApprovalStep(
+  users: ApprovalFlowUser[],
+  org: ApprovalFlowOrg | null | undefined,
+  flow: string[],
+  currentStep: number,
+  actorId: string,
+  administratorOverride = false,
+): number | null {
+  for (let next = currentStep + 1; next < flow.length; next++) {
+    if (!administratorOverride && !canActForApprovalHolder(users, org, actorId, flow[next])) return next;
+  }
+  return null;
+}
+
 /**
  * Build the default route for one employee.
  *

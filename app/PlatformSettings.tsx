@@ -19,6 +19,7 @@ import { BellRing, Database, DownloadCloud, KeyRound, Mail, Save, ShieldCheck, S
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
 import { registerBackCloser } from "./backstack";
 import { normalizeReportingWeekStart, publishReportingWeekStart, REPORTING_WEEK_DAYS } from "../lib/reporting-week.mjs";
+import { publishPolicy } from "../lib/verification";
 
 type Policy = {
   enabled: boolean;
@@ -33,6 +34,10 @@ type Policy = {
   interval_unit?: "hours" | "days" | "business_days";
   week_start_day: number;
   attendance_notifications: AttendanceNotificationPolicy;
+  attendance_approval: {
+    add_hours_requires_approval: boolean;
+    trim_hours_requires_approval: boolean;
+  };
 };
 
 type AttendanceNotificationPolicy = {
@@ -278,6 +283,10 @@ function normalizePolicy(value: unknown): Policy | null {
     attendance_notifications: {
       ...DEFAULT_ATTENDANCE_NOTIFICATIONS,
       ...(policy.attendance_notifications || {}),
+    },
+    attendance_approval: {
+      add_hours_requires_approval: policy.attendance_approval?.add_hours_requires_approval === true,
+      trim_hours_requires_approval: policy.attendance_approval?.trim_hours_requires_approval === true,
     },
   };
 }
@@ -530,6 +539,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
       setCode("");
       setMessage("Saved.");
       if (result.policy) publishReportingWeekStart((result.policy as Policy).week_start_day);
+      if (result.policy) publishPolicy(result.policy as Policy);
       refresh();
     } else {
       setMessage(String((result && result.error) || "That code was not accepted."));
@@ -654,6 +664,22 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           </select>
         </label>
         <p className="ps-note">Saturday is the default. Use Save changes above to apply a different day.</p>
+      </section>
+
+      <section className="org-card">
+        <span className="org-eyebrow"><ShieldCheck size={14} /> Time records</span>
+        <h3>Approval for employee time changes</h3>
+        <p className="ps-note">Both options are off by default. With approval off, changes take effect when saved and are flagged for a leader to review, revise, or reject. Turning an option on holds that kind of change until a manager approves it.</p>
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_approval.add_hours_requires_approval}
+            onChange={(event) => setDraft({ ...draft, attendance_approval: { ...draft.attendance_approval, add_hours_requires_approval: event.target.checked } })} />
+          <span><b>Require approval before added hours count</b><small>Includes missed clock-in/out and missed breaks.</small></span>
+        </label>
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_approval.trim_hours_requires_approval}
+            onChange={(event) => setDraft({ ...draft, attendance_approval: { ...draft.attendance_approval, trim_hours_requires_approval: event.target.checked } })} />
+          <span><b>Require approval before a self-trim takes effect</b><small>Manager changes to a record remain direct and audited.</small></span>
+        </label>
       </section>
 
       <section className="org-card">
