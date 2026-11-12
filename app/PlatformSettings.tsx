@@ -37,6 +37,7 @@ type Policy = {
   attendance_approval: {
     add_hours_requires_approval: boolean;
     trim_hours_requires_approval: boolean;
+    long_hours_requires_approval: boolean;
   };
 };
 
@@ -287,6 +288,7 @@ function normalizePolicy(value: unknown): Policy | null {
     attendance_approval: {
       add_hours_requires_approval: policy.attendance_approval?.add_hours_requires_approval === true,
       trim_hours_requires_approval: policy.attendance_approval?.trim_hours_requires_approval === true,
+      long_hours_requires_approval: policy.attendance_approval?.long_hours_requires_approval === true,
     },
   };
 }
@@ -669,7 +671,7 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
       <section className="org-card">
         <span className="org-eyebrow"><ShieldCheck size={14} /> Time records</span>
         <h3>Approval for employee time changes</h3>
-        <p className="ps-note">Both options are off by default. With approval off, changes take effect when saved and are flagged for a leader to review, revise, or reject. Turning an option on holds that kind of change until a manager approves it.</p>
+        <p className="ps-note">These options are off by default. With approval off, an employee can confirm or adjust their hours and a leader gets a review flag. Turning an option on sends that kind of change for manager approval.</p>
         <label className="ps-row">
           <input type="checkbox" checked={draft.attendance_approval.add_hours_requires_approval}
             onChange={(event) => setDraft({ ...draft, attendance_approval: { ...draft.attendance_approval, add_hours_requires_approval: event.target.checked } })} />
@@ -679,6 +681,11 @@ export function PlatformSettings({ viewer, users }: { viewer: Person | null; use
           <input type="checkbox" checked={draft.attendance_approval.trim_hours_requires_approval}
             onChange={(event) => setDraft({ ...draft, attendance_approval: { ...draft.attendance_approval, trim_hours_requires_approval: event.target.checked } })} />
           <span><b>Require approval before a self-trim takes effect</b><small>Manager changes to a record remain direct and audited.</small></span>
+        </label>
+        <label className="ps-row">
+          <input type="checkbox" checked={draft.attendance_approval.long_hours_requires_approval}
+            onChange={(event) => setDraft({ ...draft, attendance_approval: { ...draft.attendance_approval, long_hours_requires_approval: event.target.checked } })} />
+          <span><b>Require approval for a shift over 10 hours</b><small>Employees can confirm the original clock times or trim the shift. With this off, confirmation counts immediately and is flagged for review.</small></span>
         </label>
       </section>
 

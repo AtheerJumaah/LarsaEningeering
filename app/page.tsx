@@ -7,7 +7,7 @@ import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
-import { findPunchSession, planTrim, isSuspiciousClosedSession, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
+import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { readReportingWeekStart, REPORTING_WEEK_DAYS, REPORTING_WEEK_STORAGE_KEY } from "../lib/reporting-week.mjs";
@@ -375,6 +375,7 @@ type ClockLog = {
   clockedBy?: string;
   correctionId?: string;
   provisionalReview?: boolean;
+  longHoursStatus?: "confirmed" | "pending" | "rejected";
   lastSeen?: string;
   active?: boolean;
   /* Recency stamp (ISO server time), written at punch time and refreshed by
@@ -422,6 +423,7 @@ type ClockSession = {
   stale?: boolean;
   unclosed?: boolean;
   long?: boolean;
+  longHoursStatus?: "confirmed" | "pending" | "rejected";
   /* A punch of this session carries a correction stamp ("Adjusted by …",
      "Fixed by …", "Manual entry by …") — surfaced so the trim panel can say
      a session has already been corrected before somebody corrects it again. */
@@ -3341,7 +3343,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
        trim and reset); the segment's own hours carry only what fell on `date`.
        Punch instants stay UTC and duration arithmetic stays millisecond-based;
        only the calendar boundary uses the attendance policy zone. */
-    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed" | "long", adjusted?: boolean) => {
+    const record = (start: string, end: string, mode: string, isOpen: boolean, flag?: "stale" | "unclosed" | "long", adjusted?: boolean, longHoursStatus?: ClockLog["longHoursStatus"]) => {
       const from = new Date(start).getTime();
       const to = Math.max(new Date(end).getTime(), from);
       const flagged = Boolean(flag);
@@ -3366,6 +3368,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           open: isOpen && segEnd >= to,
           ...(flag ? { [flag]: true, openHours: (to - from) / 3600000 } : {}),
           ...(adjusted ? { adjusted: true } : {}),
+          ...(longHoursStatus ? { longHoursStatus } : {}),
         });
       });
     };
@@ -3392,8 +3395,9 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
         if (row.status !== "Out" || !open?.time || !row.time) return;
         const reviewedCorrection = Boolean(open.correctionId && open.correctionId === row.correctionId);
         record(open.time, row.time, open.type || row.type || "Unspecified", false,
-          !reviewedCorrection && isSuspiciousClosedSession(open.time, row.time) ? "long" : undefined,
-          adjustedMark(open.note, row.note));
+          !reviewedCorrection && (row.longHoursStatus === "pending" || row.longHoursStatus === "rejected"
+            || (row.longHoursStatus !== "confirmed" && isSuspiciousClosedSession(open.time, row.time))) ? "long" : undefined,
+          adjustedMark(open.note, row.note), row.longHoursStatus);
         open = null;
       });
     /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
@@ -8460,6 +8464,12 @@ export default function Home() {
       return true;
     }
     const stamp = `Adjusted by ${actor.name} on ${new Date().toLocaleDateString(undefined, { timeZone: ATTENDANCE_TIME_ZONE })}`;
+    (Array.isArray(store.approvals) ? store.approvals as LeaveRequest[] : []).forEach((row) => {
+      if (row.type !== "Hours Review" || row.requestType !== "Long shift" || row.status !== "Pending"
+        || row.uid !== uid || row.fromAt !== inLog.time || row.toAt !== previousOut) return;
+      row.status = "Superseded";
+      row.history = [...(row.history || []), { by: actor.name, action: "Superseded by trim", at: serverNowIso() }];
+    });
     if (outLog) {
       /* This session's own clock-out, corrected in place: same record id,
          earlier time, the adjustment stamped beside any note it carried.
@@ -8467,6 +8477,7 @@ export default function Home() {
          keeps the trim final: a stale device still holding the longer
          pre-trim copy now loses to this record everywhere. */
       outLog.time = nextOutIso;
+      delete outLog.longHoursStatus;
       outLog.lastSeen = outLog.time;
       outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
       outLog.touchedAt = serverNowIso();
@@ -8553,6 +8564,73 @@ export default function Home() {
       : "Attendance record adjusted.");
     return true;
   }, [notify, refreshStaffEngine, accessUsers]);
+
+  /* Confirmation is deliberately separate from Clock Out. A long shift is
+     recorded immediately, then the employee can confirm its original punch
+     pair or trim it. No extra network wait is added to the clock button. */
+  const confirmLongSession = useCallback(async (clockIn: string) => {
+    const actor = sessionUserRef.current;
+    if (!actor) return false;
+    const policy = await attendanceApprovalPolicy();
+    if (!policy) { notify("Approval settings could not be checked. Please try again."); return false; }
+    const store = parseStore("larsaStaffV8");
+    if (!store || !Array.isArray(store.logs) || !Array.isArray(store.users)) {
+      notify("Attendance records are still loading."); return false;
+    }
+    const pair = findPunchSession(store.logs as ClockLog[], actor.id, clockIn);
+    const inLog = pair?.inLog as ClockLog | undefined;
+    const outLog = pair?.outLog as ClockLog | undefined;
+    if (!inLog?.time || !outLog?.time || !needsLongHoursConfirmation(inLog.time, outLog.time)) {
+      notify("That long shift has changed. Reopen the current record before confirming."); return false;
+    }
+    if (outLog.longHoursStatus === "confirmed") { notify("Those hours are already confirmed."); return true; }
+    if (outLog.longHoursStatus === "pending") { notify("Those hours are already waiting for approval."); return false; }
+    if (!Array.isArray(store.approvals)) store.approvals = [];
+    const existing = (store.approvals as LeaveRequest[]).some((row) =>
+      row.type === "Hours Review" && row.requestType === "Long shift"
+      && row.uid === actor.id && row.fromAt === inLog.time && row.toAt === outLog.time && row.status === "Pending");
+    if (existing) { notify("This shift is already waiting for review."); return false; }
+    ensureStoreApprovalFlows(store);
+    const configured = chainFor(store, actor.id, "Hours Review");
+    const requiresApproval = policy.long_hours_requires_approval === true;
+    const flow = configured.length ? (requiresApproval ? configured : configured.slice(0, 1)) : [];
+    const approvalsGate = ITEMS.find((item) => item.id === "staff-approvals");
+    const approvers = flow.length
+      ? (store.users as StaffUser[]).filter((row) => row.id === flow[0])
+      : (store.users as StaffUser[]).filter((row) => row.id !== actor.id && row.enabled !== false
+        && approvalsGate && hasItemPermission(row, approvalsGate, "approve") && rankOf(row) >= rankOf(actor));
+    if (requiresApproval && approvers.length === 0) {
+      notify("No manager is available in your approval flow. Ask an administrator to set one before confirming.");
+      return false;
+    }
+    const review: LeaveRequest = {
+      id: `long-hours:${actor.id}:${Date.now()}`,
+      type: "Hours Review", requestType: "Long shift", uid: actor.id,
+      date: attendanceDateKey(inLog.time),
+      from: attendanceTime(inLog.time), to: attendanceTime(outLog.time),
+      fromAt: inLog.time, toAt: outLog.time,
+      reason: `Confirmed original clock times for a shift over 10 hours (${formatHours((Date.parse(outLog.time) - Date.parse(inLog.time)) / 3600000)}).`,
+      status: "Pending", reviewOnly: !requiresApproval, flow, step: 0,
+      history: [], createdAt: serverNowIso(),
+    };
+    (store.approvals as LeaveRequest[]).unshift(review);
+    outLog.longHoursStatus = requiresApproval ? "pending" : "confirmed";
+    outLog.touchedAt = serverNowIso();
+    localStorage.setItem("larsaStaffV8", JSON.stringify(store));
+    void pushSyncedKeyNow("larsaStaffV8");
+    refreshStaffEngine();
+    setStorageTick((value) => value + 1);
+    raiseNotification({
+      event: "clock.correction",
+      title: requiresApproval ? `Long shift needs approval from ${actor.name}` : `Long shift to review from ${actor.name}`,
+      body: `${review.date} · ${review.from}–${review.to}`,
+      itemId: "my-requests", fromName: actor.name, recipients: approvers,
+    });
+    notify(requiresApproval
+      ? "Original times confirmed. This shift is waiting for manager approval."
+      : "Original times confirmed. The shift is counted and your leader has a review flag.");
+    return true;
+  }, [notify, refreshStaffEngine]);
 
   /* Removes a session outright -- the clock-in and its matching clock-out.
      For a punch that should never have existed at all. */
@@ -9449,6 +9527,13 @@ export default function Home() {
     if (settled === "Approved" && record.type === "Trim Hours" && (!trimPlan || !trimPlan.ok)) {
       notify("This shift changed while the trim was waiting. Review the current shift before deciding."); return false;
     }
+    const longHoursPair = record.type === "Hours Review" && record.requestType === "Long shift" && record.fromAt
+      ? findPunchSession(store.logs as ClockLog[], record.uid, record.fromAt) : null;
+    const longHoursOut = longHoursPair?.outLog as ClockLog | undefined;
+    if (record.type === "Hours Review" && record.requestType === "Long shift"
+      && (!longHoursPair || longHoursOut?.time !== record.toAt)) {
+      notify("This shift changed while review was pending. Reopen its current record."); return false;
+    }
     const stamp = new Date().toISOString();
     store.approvals[index] = {
       ...record,
@@ -9474,6 +9559,10 @@ export default function Home() {
        records. Guarded on `materialised` so re-approving can never double-count,
        and breaks keep their own status values so they stay out of hour totals. */
     const updated = store.approvals[index] as LeaveRequest & { materialised?: boolean };
+    if (longHoursOut && settled !== "Pending") {
+      longHoursOut.longHoursStatus = settled === "Approved" ? "confirmed" : "rejected";
+      longHoursOut.touchedAt = stamp;
+    }
     if (CORRECTIONS.includes(String(record.type)) && settled === "Rejected") {
       const removed = (Array.isArray(store.logs) ? store.logs as ClockLog[] : [])
         .filter((log) => log.correctionId === record.id)
@@ -9527,8 +9616,15 @@ export default function Home() {
       const { inLog, outLog } = trimPlan.session;
       const newOut = new Date(record.toAt as string).toISOString();
       const previousOut = outLog?.time || null;
+      (store.approvals as LeaveRequest[]).forEach((row) => {
+        if (row.type !== "Hours Review" || row.requestType !== "Long shift" || row.status !== "Pending"
+          || row.uid !== record.uid || row.fromAt !== inLog.time || row.toAt !== previousOut) return;
+        row.status = "Superseded";
+        row.history = [...(row.history || []), { by: actor.name, action: "Superseded by approved trim", at: serverNowIso() }];
+      });
       if (outLog) {
         outLog.time = newOut;
+        delete outLog.longHoursStatus;
         outLog.lastSeen = newOut;
         outLog.note = `${outLog.note ? `${outLog.note} · ` : ""}Trim approved by ${actor.name}`;
         outLog.touchedAt = serverNowIso();
@@ -11588,6 +11684,7 @@ export default function Home() {
               submitCorrection={submitCorrection}
               users={accessUsers}
               trimSession={trimSession}
+              confirmLongSession={confirmLongSession}
               resetSession={resetSession}
               go={goToItem}
               method={sessionMethod}
@@ -19713,7 +19810,7 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, resetSession, clockReady, connection, notify,
+  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, confirmLongSession, resetSession, clockReady, connection, notify,
 }: {
   clockReady: boolean;
   connection: AttendanceConnection;
@@ -19728,6 +19825,7 @@ function QuickClock({
   }) => Promise<boolean>;
   users: StaffUser[];
   trimSession: (uid: string, clockIn: string, newClockOut: string) => Promise<boolean>;
+  confirmLongSession: (clockIn: string) => Promise<boolean>;
   resetSession: (uid: string, clockIn: string) => boolean;
   go: (id: string) => void;
   method: SignInMethod | null;
@@ -19753,6 +19851,7 @@ function QuickClock({
   });
   const [showTrim, setShowTrim] = useState(false);
   const [trimming, setTrimming] = useState<{ uid: string; clockIn: string } | null>(null);
+  const [confirmingLong, setConfirmingLong] = useState(false);
   const [trimValue, setTrimValue] = useState("");
   const [attentionPeriod, setAttentionPeriod] = useState<"week" | "month" | "all">("month");
   const [trimTimeZone, setTrimTimeZone] = useState<"America/Chicago" | "Asia/Baghdad">(ATTENDANCE_TIME_ZONE);
@@ -19944,6 +20043,19 @@ function QuickClock({
     return true;
   }), [allAttentionSessions, attentionPeriod, attentionMonthStart, attentionToday, attentionWeekStart]);
   const attentionPeriodLabel = attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "across all history";
+  const longShifts = useMemo(() => {
+    const unique = new Map<string, ClockSession>();
+    sessions.forEach((session) => {
+      if (session.uid !== user?.id || session.open || session.unclosed) return;
+      if (!needsLongHoursConfirmation(session.clockIn, session.clockOut)) return;
+      const key = `${session.uid}|${session.clockIn}`;
+      if (!unique.has(key)) unique.set(key, session);
+    });
+    return [...unique.values()]
+      .filter((session) => session.longHoursStatus !== "confirmed")
+      .sort((left, right) => Date.parse(right.clockIn) - Date.parse(left.clockIn));
+  }, [sessions, user?.id]);
+  const longShift = longShifts[0];
   /* A one-second React state tick used to re-render this entire root page.
      That page owns the embedded engines, large reports, and attendance data,
      so every clock second could compete with a punch/navigation and make the
@@ -20152,6 +20264,36 @@ function QuickClock({
           </p>
         )}
       </section>
+
+      {longShift && (mayTrimOthers || maySelfTrim) && (
+        <section className="hours-attention long-hours-choice" role="status">
+          <div className="hours-attention-icon"><AlertTriangle size={20} /></div>
+          <div>
+            <span className="eyebrow">Check your hours</span>
+            <h3>{longShifts.length > 1 ? `${longShifts.length} long shifts to check` : "A shift lasted over 10 hours"}</h3>
+            <p>{attendanceDateLabel(attendanceDateKey(longShift.clockIn))} · {trimTime(longShift.clockIn)}–{trimTime(longShift.clockOut)}. {longShift.longHoursStatus === "pending"
+              ? "Your original times are waiting for manager approval."
+              : "Were these clock times correct? Confirm them or trim the clock-out time."}</p>
+          </div>
+          <div className="long-hours-actions">
+            {longShift.longHoursStatus !== "pending" && <button type="button" disabled={confirmingLong} onClick={async () => {
+              setConfirmingLong(true);
+              try { await confirmLongSession(longShift.clockIn); }
+              finally { setConfirmingLong(false); }
+            }}>{confirmingLong ? "Checking…" : "Confirm hours"}</button>}
+            <button type="button" onClick={() => {
+              setShowCorrection(false);
+              setShowTrim(true);
+              setTrimUser("");
+              setTrimPreset("custom");
+              const date = attendanceDateKey(longShift.clockIn, trimTimeZone);
+              setTrimFrom(date); setTrimTo(date);
+              setTrimming({ uid: longShift.uid, clockIn: longShift.clockIn });
+              setTrimValue(toLocalInput(longShift.clockOut));
+            }}>Trim instead</button>
+          </div>
+        </section>
+      )}
 
       {allAttentionSessions.length > 0 && (mayTrimOthers || maySelfTrim) && (
         <section className="hours-attention" role="alert">

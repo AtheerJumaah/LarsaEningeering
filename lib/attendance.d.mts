@@ -13,6 +13,7 @@ export type PunchLogLike = {
      by it. */
   touchedAt?: string;
   recovery?: string;
+  longHoursStatus?: "confirmed" | "pending" | "rejected";
   origUid?: string;
   origId?: string;
 };
@@ -38,6 +39,8 @@ export function isSuspiciousClosedSession(start: string, end: string): boolean;
 export function isActiveClockSession(session: { open: boolean; stale?: boolean; unclosed?: boolean } | null | undefined): boolean;
 export const SUSPICIOUS_CLOSED_SESSION_HOURS: number;
 export const OPEN_SESSION_STALE_HOURS: number;
+export const LONG_HOURS_CONFIRMATION_HOURS: number;
+export function needsLongHoursConfirmation(start: string, end: string): boolean;
 export function findPunchSession(logs: PunchLogLike[] | unknown, uid: string, clockIn: string): PunchSession | null;
 export function planTrim(
   logs: PunchLogLike[] | unknown,

@@ -39,6 +39,7 @@ export type VerificationPolicy = {
   attendance_approval?: {
     add_hours_requires_approval: boolean;
     trim_hours_requires_approval: boolean;
+    long_hours_requires_approval: boolean;
   };
 };
 
@@ -58,7 +59,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   force_relogin: true, self_signup_enabled: true, signup_requires_approval: false, initial_verification_required: true,
   pin_verification_required: true, pin_hours: 168,
   week_start_day: 6,
-  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false },
+  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false, long_hours_requires_approval: false },
 };
 
 let cachedPolicy: VerificationPolicy | null = null;

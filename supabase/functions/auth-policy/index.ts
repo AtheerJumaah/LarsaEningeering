@@ -52,6 +52,7 @@ type Policy = {
 type AttendanceApprovalPolicy = {
   add_hours_requires_approval: boolean;
   trim_hours_requires_approval: boolean;
+  long_hours_requires_approval: boolean;
 };
 
 type AttendanceNotificationPolicy = {
@@ -105,7 +106,7 @@ const FALLBACK: Policy = {
   interval_unit: "hours",
   week_start_day: 6,
   attendance_notifications: ATTENDANCE_FALLBACK,
-  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false },
+  attendance_approval: { add_hours_requires_approval: false, trim_hours_requires_approval: false, long_hours_requires_approval: false },
 };
 
 function normalizeAttendanceApproval(value: unknown): AttendanceApprovalPolicy {
@@ -113,6 +114,7 @@ function normalizeAttendanceApproval(value: unknown): AttendanceApprovalPolicy {
   return {
     add_hours_requires_approval: row.add_hours_requires_approval === true,
     trim_hours_requires_approval: row.trim_hours_requires_approval === true,
+    long_hours_requires_approval: row.long_hours_requires_approval === true,
   };
 }
 

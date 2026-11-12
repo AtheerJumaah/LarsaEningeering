@@ -39,6 +39,21 @@ const { mergeValues, mergeStoreText, deepEqual, keepNewestStamped, protectOutgoi
 
 const user = (id, extra = {}) => ({ id, name: id.toUpperCase(), enabled: true, ...extra });
 
+test("a confirmed long shift survives a stale device's attendance save", () => {
+  const base = { users: [user("u1")], logs: [
+    { id: "in1", uid: "u1", status: "In", time: "2026-11-10T08:00:00.000Z", touchedAt: "2026-11-10T08:00:00.000Z" },
+    { id: "out1", uid: "u1", status: "Out", time: "2026-11-10T19:00:00.000Z", touchedAt: "2026-11-10T19:00:00.000Z" },
+  ] };
+  const local = structuredClone(base);
+  local.logs[1].longHoursStatus = "confirmed";
+  local.logs[1].touchedAt = "2026-11-10T19:01:00.000Z";
+  const remote = structuredClone(base);
+  remote.logs.push({ id: "another", uid: "u1", status: "In", time: "2026-11-11T08:00:00.000Z" });
+  const merged = mergeValues(base, local, remote);
+  assert.equal(merged.logs.find((log) => log.id === "out1").longHoursStatus, "confirmed");
+  assert.equal(merged.logs.length, 3);
+});
+
 test("a just-created account survives a collision with another device's write", () => {
   /* Exactly the reported bug. Somebody signs up here while a colleague's
      browser pushes a clock punch. The colleague's copy has no idea the new
