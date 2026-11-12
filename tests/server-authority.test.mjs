@@ -24,7 +24,7 @@ test("engine navigation tolerates slow first paints without blocking the login t
 test("optional verification calls have a bounded timeout", async () => {
   const verification = await readFile(new URL("../lib/verification.ts", import.meta.url), "utf8");
   assert.match(verification, /Promise\.race\(\[/);
-  assert.match(verification, /const timeout = 4500/);
+  assert.match(verification, /const timeout = body\.op === "status" \? 30_000 : 4_500/);
 });
 
 test("every sign-in checks current policy without renewing local proof", () => {

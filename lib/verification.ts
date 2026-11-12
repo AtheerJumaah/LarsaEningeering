@@ -73,10 +73,12 @@ async function call(body: Record<string, unknown>): Promise<Record<string, unkno
   if (!supabaseConfigured()) return null;
   const client = getSupabaseClient();
   if (!client) return null;
-  /* Bound network waits. A failed lookup is unavailable, never evidence that
-     the account has verified. Sign-in offers retry; an existing session keeps
-     working while its background check retries. */
-  const timeout = 4500;
+  /* Bound network waits. The verification status is required for sign-in and
+     must never be treated as verified merely because a busy database missed
+     the deadline. Recent successful status requests took over 4.5 seconds,
+     so keep waiting for that result while leaving optional policy reads fast.
+     The common case still returns as soon as the server responds. */
+  const timeout = body.op === "status" ? 30_000 : 4_500;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const request = client.functions.invoke("auth-policy", { body })
