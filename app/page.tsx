@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, setLarsaSyncSessionActive, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
+import { initLarsaSync, serverNowIso, serverNowMs, pushSyncedKeyNow, refreshSharedStateNow, refreshCurrentViewNow, setLarsaSyncSessionActive, setLarsaSyncWritesPaused, SYNCED_KEYS } from "../lib/supabase/sync";
 import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
@@ -4662,6 +4662,9 @@ export default function Home() {
   }, []);
 
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
+  const [refreshStatus, setRefreshStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const refreshInFlightRef = useRef(false);
+  const refreshFeedbackTimer = useRef<number | null>(null);
   // Legacy engines are exclusive: only the engine for the current route is mounted.
   // Each document contains its own clocks, refresh loops, and render
   // hooks; keeping previously visited iframes hidden still consumes renderer
@@ -7785,6 +7788,46 @@ export default function Home() {
         // The engine picks the saved log up on its next render.
       }
     }, 0);
+  }, []);
+
+  const refreshCurrentPage = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    if (refreshFeedbackTimer.current !== null) window.clearTimeout(refreshFeedbackTimer.current);
+    setRefreshStatus("loading");
+    try {
+      const current = activeRef.current;
+      const keys: (typeof SYNCED_KEYS)[number][] = ["larsaStaffV8"];
+      if (current.engine === "hr") keys.push("larsa_hr_visual_counts_v5");
+      if (current.engine === "accounting" || ["accountingHub", "constructionFinancials", "projects", "salesCommissions", "myPay", "payrollPortal"].includes(current.native || "")) {
+        keys.push("larsa_enterprise_v3_new_account_20260630", "larsa_enterprise_v3_new_account_20260630_v34_clean");
+      }
+      if (["orgStructure", "performance", "development", "performanceHistory", "myPoints"].includes(current.native || "")) {
+        keys.push("larsaStaffGrowthV1");
+      }
+      if (current.native === "data") keys.push(...SYNCED_KEYS.filter((key) => !keys.includes(key)));
+      const updated = await refreshCurrentViewNow(keys);
+      if (!updated) throw new Error("Refresh unavailable");
+      // Keep this route, scroll position, and all saved data intact. Repaint
+      // only the visible engine; native views read the refreshed local store.
+      if (activeRef.current.engine === "staff") refreshStaffEngine();
+      else if (!activeRef.current.engine) queueStorageRefresh();
+      setNotifyTick((value) => value + 1);
+      setRefreshStatus("done");
+    } catch {
+      setRefreshStatus("error");
+      notify("Could not refresh right now. Please try again.");
+    } finally {
+      refreshInFlightRef.current = false;
+      refreshFeedbackTimer.current = window.setTimeout(() => {
+        refreshFeedbackTimer.current = null;
+        setRefreshStatus("idle");
+      }, 1800);
+    }
+  }, [notify, queueStorageRefresh, refreshStaffEngine]);
+
+  useEffect(() => () => {
+    if (refreshFeedbackTimer.current !== null) window.clearTimeout(refreshFeedbackTimer.current);
   }, []);
 
   /* Embedded staff pages already own their rendered state. Updating the
@@ -11530,6 +11573,16 @@ export default function Home() {
                 <b>Home</b>
               </button>
             )}
+            <button
+              type="button"
+              className={`top-refresh${refreshStatus === "loading" ? " is-loading" : ""}`}
+              onClick={refreshCurrentPage}
+              disabled={refreshStatus === "loading"}
+              aria-label={refreshStatus === "loading" ? "Refreshing current page" : "Refresh current page"}
+              title={refreshStatus === "done" ? "Up to date" : refreshStatus === "error" ? "Refresh failed — try again" : "Refresh current page"}
+            >
+              {refreshStatus === "done" ? <CheckCircle2 size={17} /> : refreshStatus === "error" ? <AlertTriangle size={17} /> : <RotateCcw size={17} />}
+            </button>
             <div className="page-heading">
               <h1>{active.label}</h1>
               <p>{active.description}</p>

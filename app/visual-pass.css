@@ -1737,6 +1737,28 @@ aside.sidebar .sidebar-account .account-open > span { border-radius: 12px; }
   transition: border-color .16s ease, background .16s ease;
 }
 .unified-app .top-home .larsa-mark { width: 17px; height: 17px; }
+.unified-app .top-refresh {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+.unified-app .top-refresh:hover,
+.unified-app .top-refresh:focus-visible { color: var(--accent); border-color: var(--accent); background: var(--soft); }
+.unified-app .top-refresh:disabled { cursor: progress; opacity: .75; }
+.unified-app .top-refresh.is-loading svg { animation: top-refresh-spin .85s linear infinite; }
+@keyframes top-refresh-spin { to { transform: rotate(-360deg); } }
+.unified-app.dark .top-refresh { background: #1b1f27; border-color: #333a46; }
+.unified-app.dark .top-refresh:hover,
+.unified-app.dark .top-refresh:focus-visible { background: #232833; border-color: #6b7484; }
 .unified-app :is(.top-back, .top-home):hover { border-color: var(--ink); background: var(--soft); }
 .unified-app.dark :is(.top-back, .top-home) { background: #1b1f27; border-color: #333a46; }
 .unified-app.dark :is(.top-back, .top-home):hover { border-color: #6b7484; background: #232833; }
@@ -1806,7 +1828,7 @@ aside.sidebar .nav-item:hover .nav-code svg { color: #0b0b0c !important; }
   /* Without a draggable region an overlay window cannot be moved at all. The
      heading is the one part of the bar with no control in it. */
   .topbar .page-heading { -webkit-app-region: drag; app-region: drag; }
-  .topbar button, .topbar .clocks, .topbar .top-home { -webkit-app-region: no-drag; app-region: no-drag; }
+  .topbar button, .topbar .clocks, .topbar .top-home, .topbar .top-refresh { -webkit-app-region: no-drag; app-region: no-drag; }
 }
 
 /* --- 22. The page heading ------------------------------------------------

@@ -696,16 +696,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      changed — a refresh now costs one tiny query, which is what makes it
      affordable to run on a timer as well as on focus. */
   async function refreshFromServer(reason: string, requestedKeys: readonly SyncedKey[] = SYNCED_KEYS) {
-    if (!syncSessionActive && (reason === "periodic revalidate" || reason === "attendance periodic revalidate")) return;
-    if (cancelled) return;
+    if (!syncSessionActive && (reason === "periodic revalidate" || reason === "attendance periodic revalidate")) return false;
+    if (cancelled) return false;
     const keys = requestedKeys.filter((key): key is SyncedKey =>
       (SYNCED_KEYS as readonly string[]).includes(key),
     );
-    if (!keys.length) return;
-    if (keys.some((key) => refreshingKeys.has(key))) return;
+    if (!keys.length) return true;
+    if (keys.some((key) => refreshingKeys.has(key))) return false;
     keys.forEach((key) => refreshingKeys.add(key));
     try {
-      if (!bootstrapped) { await bootstrap(); return; }
+      if (!bootstrapped) { await bootstrap(); return true; }
       await ensureSession();
       const { data: stamps, error: stampError } = await supabase
         .from("app_state")
@@ -730,14 +730,14 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           attendanceProbeFailures = 0;
           reportStatus("synced");
         }
-        return;
+        return true;
       }
       const { data: rows, error } = await supabase
         .from("app_state")
         .select("store_key, data, updated_at")
         .in("store_key", stale.map(({ key }) => key));
       if (error || !Array.isArray(rows)) throw error || new Error("Invalid sync response");
-      if (cancelled) return;
+      if (cancelled) return false;
       let appliedRows = 0;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
@@ -753,6 +753,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         attendanceProbeFailures = 0;
         reportStatus("synced");
       }
+      return true;
     } catch {
       if (keys.includes("larsaStaffV8")) {
         const attendanceProbe = reason === "attendance periodic revalidate";
@@ -762,6 +763,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         if (!attendanceProbe || attendanceProbeFailures >= 3) reportStatus("offline");
       }
       /* Offline or mid-reconnect: the next trigger tries again. */
+      return false;
     } finally {
       keys.forEach((key) => refreshingKeys.delete(key));
     }
@@ -836,6 +838,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      after the staff row is current, so this narrows the critical path without
      dropping any data. */
   refreshNowHook = () => { void refreshFromServer("login or explicit revalidation", ["larsaStaffV8"]); };
+  manualRefreshHook = async (keys) => {
+    // The one-second attendance probe may already own a key. Wait for it to
+    // finish so a deliberate refresh never silently loses the race.
+    const deadline = Date.now() + 5000;
+    while (keys.some((key) => refreshingKeys.has(key))) {
+      if (cancelled || Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return refreshFromServer("manual refresh", keys);
+  };
 
   return () => {
     cancelled = true;
@@ -850,6 +862,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     window.removeEventListener("storage", onStorageWrite);
     pushNowHook = null;
     refreshNowHook = null;
+    manualRefreshHook = null;
     cleanupChannel?.();
   };
 }
@@ -859,7 +872,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
    localStorage write has already made the UI state correct either way. */
 let pushNowHook: ((key: SyncedKey) => Promise<void>) | null = null;
 let refreshNowHook: (() => void) | null = null;
+let manualRefreshHook: ((keys: readonly SyncedKey[]) => Promise<boolean>) | null = null;
 export function refreshSharedStateNow() { refreshNowHook?.(); }
+export async function refreshCurrentViewNow(keys: readonly SyncedKey[]): Promise<boolean> {
+  return manualRefreshHook ? manualRefreshHook(keys) : !supabaseConfigured();
+}
 export async function pushSyncedKeyNow(key: SyncedKey): Promise<boolean> {
   if (!pushNowHook) return false;
   await pushNowHook(key);
