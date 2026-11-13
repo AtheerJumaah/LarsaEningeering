@@ -7808,6 +7808,15 @@ export default function Home() {
       if (current.native === "data") keys.push(...SYNCED_KEYS.filter((key) => !keys.includes(key)));
       const updated = await refreshCurrentViewNow(keys);
       if (!updated) throw new Error("Refresh unavailable");
+      if (current.engine === "accounting") {
+        const frame = accountingRef.current?.contentWindow;
+        const ledgerRefresh = frame?.eval(`
+          window.ACCT && typeof ACCT.manualRefresh === "function"
+            ? ACCT.manualRefresh()
+            : false;
+        `);
+        if (!ledgerRefresh || !(await ledgerRefresh)) throw new Error("Accounting refresh unavailable");
+      }
       // Keep this route, scroll position, and all saved data intact. Repaint
       // only the visible engine; native views read the refreshed local store.
       if (activeRef.current.engine === "staff") refreshStaffEngine();

@@ -639,7 +639,7 @@
   }
 
   function bootstrap(then) {
-    rpc("acct_get_bootstrap", { p_audit_limit: 300 }).then(function (b) {
+    return rpc("acct_get_bootstrap", { p_audit_limit: 300 }).then(function (b) {
       if (!b) throw new Error("empty bootstrap");
       ACCT.settings = b.settings || null;
       ACCT.projects = b.projects || [];
@@ -679,6 +679,16 @@
     if (keep !== false) keepContext();
     bootstrap(function () { restoreContext(); });
   }
+
+  // The shell's small Refresh button asks for the live accounting ledger
+  // only when this engine is open. It keeps the current section and never
+  // writes, imports, or changes any account records.
+  ACCT.manualRefresh = function () {
+    keepContext();
+    return bootstrap(function () { restoreContext(); }).then(function () {
+      return !ACCT.lastError;
+    });
+  };
 
   function blobHasAccountingData() {
     try {
