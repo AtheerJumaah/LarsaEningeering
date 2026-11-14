@@ -20327,6 +20327,7 @@ function QuickClock({
         )}
       </section>
 
+      <div className="hours-review-grid">
       {longShift && (mayTrimOthers || maySelfTrim) && (
         <section className="hours-attention long-hours-choice" role="status">
           <div className="hours-attention-icon"><AlertTriangle size={20} /></div>
@@ -20358,8 +20359,8 @@ function QuickClock({
       )}
 
       {allAttentionSessions.length > 0 && (mayTrimOthers || maySelfTrim) && (
-        <section className="hours-attention" role="alert">
-          <div className="hours-attention-icon"><AlertTriangle size={20} /></div>
+        <section className={`hours-attention${attentionSessions.length === 0 ? " is-clear" : ""}`} role="alert">
+          <div className="hours-attention-icon">{attentionSessions.length === 0 ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}</div>
           <div>
             <span className="eyebrow">Hours need attention</span>
             <h3>{attentionSessions.length === 0
@@ -20393,6 +20394,7 @@ function QuickClock({
           }}>Review {attentionPeriod === "week" ? "this week" : attentionPeriod === "month" ? "this month" : "all history"}</button>
         </section>
       )}
+      </div>
 
       {/* Breaks belong inside a shift, so the option only appears once the
           person is actually clocked in. An open break still shows its End
