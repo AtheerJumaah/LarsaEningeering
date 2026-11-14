@@ -11,6 +11,7 @@ import {
   attendanceWallTimeUtc,
   attendanceWeekKey,
   attendanceReportingWeekStart,
+  attendanceReportingWeekSessions,
   splitAttendanceInterval,
   validAttendanceTimeZone,
 } from "../lib/attendance-timezone.mjs";
@@ -50,6 +51,18 @@ test("reporting weeks default to Saturday and honor a saved first day across yea
   assert.equal(attendanceReportingWeekStart("2027-01-01T15:00:00Z"), "2026-12-26");
   assert.equal(attendanceReportingWeekStart("2026-03-08T09:00:00Z"), "2026-03-07");
   assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z", 99), "2026-11-07");
+});
+
+test("Home and Clock select the same attendance rows on the first day of a reporting week", () => {
+  const rows = [
+    { date: "2026-11-13", hours: 11.3 },
+    { date: "2026-11-14", hours: 3.5 },
+    { date: "2026-11-15", hours: 2 },
+  ];
+  const saturday = "2026-11-14T16:00:00Z";
+  assert.deepEqual(attendanceReportingWeekSessions(rows, saturday), [rows[1]]);
+  assert.equal(attendanceReportingWeekSessions(rows, saturday).reduce((sum, row) => sum + row.hours, 0), 3.5);
+  assert.deepEqual(attendanceReportingWeekSessions(rows, saturday, 1), [rows[0], rows[1]]);
 });
 
 test("overnight sessions split at canonical midnight without changing total duration", () => {

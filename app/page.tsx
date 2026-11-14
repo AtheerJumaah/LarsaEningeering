@@ -9,7 +9,7 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
-import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
+import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, attendanceReportingWeekSessions, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { readReportingWeekStart, REPORTING_WEEK_DAYS, REPORTING_WEEK_STORAGE_KEY } from "../lib/reporting-week.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
 import { getSupabaseClient, supabaseConfigured } from "../lib/supabase/client";
@@ -2598,6 +2598,7 @@ function buildHomeSummary(
   sessions: ClockSession[],
   users: StaffUser[],
   projectCount = 0,
+  reportingWeekStartDay = 6,
 ): HomeSummary {
   const empty: HomeSummary = {
     reminders: [], openClock: null, weekApproved: 0, weekSubmitted: 0,
@@ -2767,8 +2768,8 @@ function buildHomeSummary(
   )).length;
   const devOpen = growth.development.filter((record) => teamIds.has(record.employeeId) && record.status !== "Approved").length;
   const devMine = growth.development.filter((record) => record.employeeId === viewer.id && record.status !== "Approved").length;
-  const myHoursWeek = sessions
-    .filter((session) => session.uid === viewer.id && attendanceWeekKey(`${session.date}T12:00:00Z`) === week)
+  const myHoursWeek = attendanceReportingWeekSessions(sessions, new Date(), reportingWeekStartDay)
+    .filter((session) => session.uid === viewer.id)
     .reduce((sum, session) => sum + session.hours, 0);
 
   const access = viewer.access || "Engineer";
@@ -4650,6 +4651,7 @@ function visibleProjectIds(user: StaffUser | null, projects: AccountingProject[]
 }
 
 export default function Home() {
+  const reportingWeekStartDay = useReportingWeekStartDay();
   /* The visual shell used to be visible while React was hydrating and while
      the saved theme/surface was being restored. On a fast navigation that
      exposed the previous administration panel for a frame (and sometimes
@@ -11205,8 +11207,9 @@ export default function Home() {
     () => buildHomeSummary(
       sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers,
       visibleProjectIds(sessionUser, accountingSnapshot.projects).size,
+      reportingWeekStartDay,
     ),
-    [sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers, accountingSnapshot],
+    [sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers, accountingSnapshot, reportingWeekStartDay],
   );
   const homeGroup = GROUPS.find((group) => group.label === "Home")!;
   /* The same question the Engineering Management screen asks itself before it
@@ -20197,8 +20200,7 @@ function QuickClock({
   const mine = sessions.filter((session) => session.uid === user?.id);
   const todayKey = attendanceDateKey(new Date());
   const todaySessions = mine.filter((session) => session.date === todayKey);
-  const weekStart = attendanceReportingWeekStart(new Date(), reportingWeekStartDay);
-  const weekSessions = mine.filter((session) => session.date >= weekStart && session.date <= todayKey);
+  const weekSessions = attendanceReportingWeekSessions(mine, new Date(), reportingWeekStartDay);
   const todaySummary = summarizeClockHours(todaySessions);
   const weekSummary = summarizeClockHours(weekSessions);
   const todayHours = todaySummary.total;

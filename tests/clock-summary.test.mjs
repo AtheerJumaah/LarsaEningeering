@@ -10,7 +10,9 @@ test("employee clock summary reports hours by mode for today, week, and selected
   assert.match(page, /const selectedSummary = summarizeClockHours\(selectedPeriodSessions\)/);
   assert.match(page, /const \[period, setPeriod\] = useState\("month"\)/);
   assert.match(page, /<span>Today<\/span><small>Current day<\/small>/);
-  assert.match(page, /<span>This week<\/span><small>Monday–Sunday<\/small>/);
+  assert.match(page, /<span>This week<\/span><small>\{REPORTING_WEEK_DAYS\[reportingWeekStartDay\]\}–\{REPORTING_WEEK_DAYS\[\(reportingWeekStartDay \+ 6\) % 7\]\}<\/small>/);
+  assert.match(page, /const myHoursWeek = attendanceReportingWeekSessions\(sessions, new Date\(\), reportingWeekStartDay\)/);
+  assert.match(page, /const weekSessions = attendanceReportingWeekSessions\(mine, new Date\(\), reportingWeekStartDay\)/);
   assert.match(page, /\[\["month", "This month"\], \["custom", "Custom range"\]\]/);
   assert.doesNotMatch(page, /\[\["week", "This week"\]/);
   assert.match(page, /className="hours-summary-table"/);
