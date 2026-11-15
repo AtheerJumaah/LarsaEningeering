@@ -2770,6 +2770,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .top-left:has(:is(.top-back, .top-home)):has(.home-presence-trigger) > .page-heading { flex-basis: 100%; }
 }
 
+@media (min-width: 761px) and (max-width: 980px) {
+  .topbar:has(.top-home):has(.home-presence-trigger) { flex-direction: column; align-items: stretch; gap: 8px; }
+  .topbar:has(.top-home):has(.home-presence-trigger) .top-right { overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+}
+
 /* landscape phones and short windows */
 @media (max-height: 520px) and (orientation: landscape) {
   .clock-face { padding: 14px; gap: 10px; }
