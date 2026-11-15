@@ -6,6 +6,7 @@ export type PunchLogLike = {
   time?: string;
   note?: string;
   clockedBy?: string;
+  correctionId?: string;
   lastSeen?: string;
   active?: boolean;
   /* Recency stamp written at punch time and refreshed by corrections; the
@@ -30,11 +31,19 @@ export type TrimPlan =
   | { ok: true; mode: "move" | "close"; session: PunchSession }
   | {
       ok: false;
-      reason: "not-found" | "invalid-time" | "not-after-in" | "future" | "later-than-out" | "overlaps-next";
+      reason: "not-found" | "invalid-time" | "not-after-in" | "future" | "later-than-out" | "overlaps-next" | "changes-pairing";
     };
 
 export function orderedPunches(logs: PunchLogLike[] | unknown, uid: string): PunchLogLike[];
 export function pairPunchSessions(logs: PunchLogLike[] | unknown, uid: string): PunchSession[];
+export function preservesPunchPairing(
+  logs: PunchLogLike[] | unknown,
+  uid: string,
+  previous: Pick<PunchSession, "inLog" | "outLog"> | null,
+  proposed: Pick<PunchSession, "inLog" | "outLog">,
+  sessions?: PunchSession[],
+): boolean;
+export function attendanceBreakSpans(logs: PunchLogLike[], sessions: PunchSession[]): { start: number; end: number }[];
 export function isSuspiciousClosedSession(start: string, end: string): boolean;
 export function isActiveClockSession(session: { open: boolean; stale?: boolean; unclosed?: boolean } | null | undefined): boolean;
 export const SUSPICIOUS_CLOSED_SESSION_HOURS: number;

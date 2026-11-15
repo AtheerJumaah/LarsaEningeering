@@ -31,7 +31,8 @@ import {
   teamsVisibleTo, writeOrg,
 } from "../lib/org";
 import type { OrgUser, Team } from "../lib/org";
-import { formatHours } from "../lib/teamMetrics";
+import { formatHours } from "../lib/duration.mjs";
+import type { PresenceEntry } from "../lib/presence.mjs";
 
 type Summary = {
   user: { id: string; name: string; role?: string; access?: string };
@@ -40,16 +41,6 @@ type Summary = {
   submitted: number;
   target: number;
 };
-
-type Session = { uid: string; mode: string; open: boolean };
-
-/* Indexed by Date.getDay(), so Sunday must stay first. */
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-/* A shift code of OFF or standby means nobody is expected in, so their absence
-   is not an absence. Counting a scheduled day off as "absent" would make every
-   weekend look like a staffing crisis. */
-const NOT_EXPECTED = ["OFF", "STB"];
 
 const TONE_LABEL: Record<string, string> = {
   office: "In the office",
@@ -64,7 +55,7 @@ function Bars({ approved, target, present, people }: { approved: number; target:
   return Math.round((approved / target) * 100);
 }
 
-/* Today\u2019s shift codes come from the same synced blob the schedule screen   writes, so the dashboard never needs its own copy or its own prop. */function readSchedule(): Record<string, Record<string, { code?: string }[]>> {  try {    const raw = localStorage.getItem("larsaStaffV8");    const parsed = raw ? JSON.parse(raw) : null;    const schedule = parsed && typeof parsed === "object" ? parsed.schedule : null;    return schedule && typeof schedule === "object" ? schedule : {};  } catch {    return {};  }}function membersOf(team: Team): string[] {
+function membersOf(team: Team): string[] {
   return [...new Set((team.leadIds || []).concat(team.memberIds || []))];
 }
 
@@ -72,17 +63,15 @@ export function HierarchyDashboard({
   viewer,
   users,
   summaries,
-  sessions,
-
-  toneOf,
+  presence,
+  scheduledToday,
   periodLabel, from, to, onPeriod, onFrom, onTo,
 }: {
   viewer: OrgUser | null;
   users: OrgUser[];
   summaries: Summary[];
-  sessions: Session[];
-
-  toneOf: (value: unknown) => string;
+  presence: PresenceEntry[];
+  scheduledToday: ReadonlySet<string>;
   periodLabel: string; from: string; to: string; onPeriod: (period: "today" | "week" | "month" | "sixMonths" | "year") => void; onFrom: (value: string) => void; onTo: (value: string) => void;
 }) {
   const [orderTick, setOrderTick] = useState(0);  const org = useMemo(() => effectiveOrg(users), [users, orderTick]);
@@ -114,32 +103,15 @@ export function HierarchyDashboard({
     return (id: string) => map.get(id) || "";
   }, [users]);
 
-  /* Presence is "right now", not "during the reporting period", so it reads the
-     unfiltered session list: an open session is someone who is currently in. */
+  /* Show the same active shifts as Live Presence independently of report dates. */
   const presenceOf = useMemo(() => {
-    const open = new Map<string, Session>();
-    sessions.forEach((row) => {
-      if (row && row.open && row.uid) open.set(row.uid, row);
-    });
+    const currentById = new Map(presence.map((row) => [row.user.id, row]));
     return (id: string) => {
-      const session = open.get(id);
-      const tone = session ? String(toneOf(session.mode) || "other") : "off";
-      return { tone, label: TONE_LABEL[tone] || TONE_LABEL.other, present: Boolean(session) };
+      const row = currentById.get(id);
+      const tone = row?.tone || "off";
+      return { tone, label: TONE_LABEL[tone], present: row?.isIn ?? false };
     };
-  }, [sessions, toneOf]);
-
-  const expectedToday = useMemo(() => {
-    const today = WEEKDAYS[new Date().getDay()];
-    const schedule = readSchedule() as Record<
-      string,
-      Record<string, { code?: string }[]>
-    >;
-    return (id: string) => {
-      const day = schedule[id] ? schedule[id][today] : undefined;
-      const code = (day || []).map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
-      return NOT_EXPECTED.indexOf(code) < 0;
-    };
-  }, []);
+  }, [presence]);
 
   /* Membership of a team is what puts somebody in a branch. A team with nobody
      visible in it is not drawn, which is how scope shapes the tree. */
@@ -200,7 +172,7 @@ export function HierarchyDashboard({
       target += row.target;
       hours += row.hours;
       if (presenceOf(id).present) present += 1;
-      else if (expectedToday(id)) absent += 1;
+      else if (scheduledToday.has(id)) absent += 1;
     });
     return { approved, target, hours, present, absent, people: counted };
   }

@@ -11,7 +11,7 @@
  * cancelled, exactly as window.prompt did.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { registerBackCloser } from "./backstack";
 
@@ -64,13 +64,27 @@ function normalise(request: Request): DialogOptions {
 export function DialogProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [value, setValue] = useState("");
+  const active = useRef<Pending | null>(null);
+  const queue = useRef<Pending[]>([]);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const id = useId();
 
   const openDialog = useCallback(
     (kind: DialogKind, request: Request): Promise<boolean | string | null> => {
       const opts = normalise(request);
-      setValue(opts.defaultValue || "");
-      return new Promise((resolve) => setPending({ kind, ...opts, resolve }));
+      return new Promise((resolve) => {
+        const next = { kind, ...opts, resolve };
+        if (active.current) {
+          queue.current.push(next);
+          return;
+        }
+        active.current = next;
+        setValue(next.defaultValue ?? "");
+        setPending(next);
+      });
     },
     [],
   );
@@ -83,66 +97,75 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     [openDialog],
   );
 
-  /* Resolving clears the pending request; the cancel value depends on the
-     kind so a dismissed confirm reads false and a dismissed prompt reads
-     null, matching the native dialogs each site replaced. */
   const settle = useCallback((result: boolean | string | null) => {
-    setPending((current) => {
-      current?.resolve(result);
-      return null;
-    });
+    const current = active.current;
+    if (!current) return;
+    const next = queue.current.shift() ?? null;
+    active.current = next;
+    setValue(next?.defaultValue ?? "");
+    setPending(next);
+    current.resolve(result);
   }, []);
 
   const cancelValue = pending?.kind === "confirm" ? false : null;
 
-  useEffect(() => {
-    if (!pending) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") settle(pending?.kind === "confirm" ? false : null);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!pending) {
+      if (dialog.open) {
+        dialog.close();
+        if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+        opener.current = null;
+      }
+      return;
     }
-    document.addEventListener("keydown", onKey);
+    if (!dialog.open) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      dialog.showModal();
+    }
+    if (pending.kind === "prompt") inputRef.current?.focus();
+    else cancelRef.current?.focus();
     /* The phone's Back button closes an open dialog exactly like Escape does,
        instead of navigating (or leaving the app) underneath it. */
-    const unregister = registerBackCloser(() => settle(pending?.kind === "confirm" ? false : null));
-    return () => { document.removeEventListener("keydown", onKey); unregister(); };
-  }, [pending, settle]);
-
-  useEffect(() => {
-    if (pending?.kind === "prompt") {
-      const id = window.setTimeout(() => inputRef.current?.focus(), 30);
-      return () => window.clearTimeout(id);
-    }
-  }, [pending]);
+    return registerBackCloser(() => settle(cancelValue));
+  }, [pending, cancelValue, settle]);
 
   return (
     <DialogContext.Provider value={api}>
       {children}
-      {pending ? (
-        <div className="modal-layer" onMouseDown={() => settle(cancelValue)} role="presentation">
-          <section
-            className="dialog-card"
-            role="alertdialog"
-            aria-modal="true"
-            aria-label={pending.title || pending.message}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            {pending.title ? <h2 className="dialog-title">{pending.title}</h2> : null}
-            <p className="dialog-msg">{pending.message}</p>
+      <dialog
+        ref={dialogRef}
+        className="in-app-dialog"
+        role={pending?.kind === "confirm" ? "alertdialog" : "dialog"}
+        aria-labelledby={pending?.title ? `${id}-title` : `${id}-message`}
+        aria-describedby={pending?.title ? `${id}-message` : undefined}
+        onCancel={(event) => { event.preventDefault(); settle(cancelValue); }}
+        onClick={(event) => { if (event.target === event.currentTarget) settle(cancelValue); }}
+      >
+        {pending ? (
+          <section className="dialog-card">
+            {pending.title ? <h2 id={`${id}-title`} className="dialog-title">{pending.title}</h2> : null}
+            <p id={`${id}-message`} className="dialog-msg">{pending.message}</p>
             {pending.kind === "prompt" ? (
               <input
                 ref={inputRef}
                 className="dialog-input"
                 type="text"
+                aria-labelledby={`${id}-message`}
                 value={value}
                 placeholder={pending.placeholder || ""}
                 onChange={(event) => setValue(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") settle(value);
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    settle(value);
+                  }
                 }}
               />
             ) : null}
             <div className="dialog-actions">
-              <button type="button" className="dialog-cancel" onClick={() => settle(cancelValue)}>
+              <button ref={cancelRef} type="button" className="dialog-cancel" onClick={() => settle(cancelValue)}>
                 {pending.cancelLabel || "Cancel"}
               </button>
               <button
@@ -154,8 +177,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
               </button>
             </div>
           </section>
-        </div>
-      ) : null}
+        ) : null}
+      </dialog>
     </DialogContext.Provider>
   );
 }

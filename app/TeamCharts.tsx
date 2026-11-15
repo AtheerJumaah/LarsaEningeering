@@ -1,5 +1,7 @@
 "use client";
 
+import { formatHours as hoursLabel } from "../lib/duration.mjs";
+
 /* Charts for the Timesheets and Performance tabs.
  *
  * These sit above the existing tables rather than replacing them: the table is
@@ -21,15 +23,6 @@ type Summary = {
   approved: number;
   target: number;
 };
-
-function hoursLabel(hours: number): string {
-  if (!hours) return "0h";
-  const whole = Math.floor(hours);
-  const minutes = Math.round((hours - whole) * 60);
-  if (!whole) return minutes + "m";
-  if (!minutes) return whole + "h";
-  return whole + "h " + minutes + "m";
-}
 
 function tone(done: number): string {
   if (done >= 100) return "good";

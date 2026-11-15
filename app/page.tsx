@@ -7,9 +7,9 @@ import { mergeStoreText } from "../lib/supabase/merge";
 import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confirmClockState, captureApprovedCorrection, markAttendanceEventSent } from "../lib/ledger";
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
-import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
+import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS, pairPunchSessions, preservesPunchPairing, attendanceBreakSpans } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
-import { buildPresenceRoster, type PresenceEntry } from "../lib/presence.mjs";
+import { buildPresenceRoster, scheduledPresenceUsers, type PresenceEntry, type PresenceTone } from "../lib/presence.mjs";
 import { HomePresenceIndicator } from "./HomePresenceIndicator";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, attendanceReportingWeekSessions, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { readReportingWeekStart, REPORTING_WEEK_DAYS, REPORTING_WEEK_STORAGE_KEY } from "../lib/reporting-week.mjs";
@@ -412,6 +412,7 @@ type ClockSession = {
   presenceHours: number;
   breakHours: number;
   open: boolean;
+  ongoing?: boolean;
   /* The LOCAL calendar day these hours belong to. A session that crosses
      midnight becomes one segment per day, so 22:00–02:00 puts two hours on
      each date instead of four on the first — and a punch at 00:30 Baghdad
@@ -523,7 +524,7 @@ type CommissionRow = {
 };
 type PayrollRow = {
   id: string; employee: string; employeeId: string; payDate: string; period: string;
-  grossPay: number; totalCompanyCost: number; currency: string; status: string; region: string;
+  grossPay: number; totalCompanyCost: number; currency: string; fxRate: number; status: string; region: string;
 };
 /* The cost and income lines the accounting engine keeps per project. Only the
    fields the construction analysis needs are lifted out; the engine stays the
@@ -541,7 +542,12 @@ type LedgerLine = {
      waived for this particular payment. */
   consultancyFee: number;
   waived: boolean;
+  feeTreatment?: string;
   label: string;
+  paymentSource?: string;
+  costBearer?: string;
+  amountUsd?: number;
+  amountIqd?: number;
   /* The USD rate recorded on this line the day it was entered. 0 for lines
      written before the engine started asking, which fall back to the current
      setting. Storing it per line is what stops a rate change from silently
@@ -3017,12 +3023,7 @@ function PersonAvatar({ person, className }: {
 }
 
 function isoWeekLabel(date = new Date()) {
-  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = target.getUTCDay() || 7;
-  target.setUTCDate(target.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
-  const week = Math.ceil((((target.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+  return attendanceWeekKey(date);
 }
 
 /* Performance weeks are closed by hand -- somebody with the right permission
@@ -3070,7 +3071,7 @@ function entryLine(entry: PerformanceRow | undefined) {
 
 function weekOfDate(value: string) {
   if (!value) return isoWeekLabel();
-  const date = new Date(`${value}T12:00:00`);
+  const date = new Date(`${value}T12:00:00Z`);
   return Number.isNaN(date.getTime()) ? isoWeekLabel() : isoWeekLabel(date);
 }
 
@@ -3093,8 +3094,8 @@ function weekBounds(week: string) {
 function shiftWeek(week: string, byWeeks: number) {
   const bounds = weekBounds(week);
   if (!bounds.from) return isoWeekLabel();
-  const monday = new Date(`${bounds.from}T12:00:00`);
-  monday.setDate(monday.getDate() + byWeeks * 7);
+  const monday = new Date(`${bounds.from}T12:00:00Z`);
+  monday.setUTCDate(monday.getUTCDate() + byWeeks * 7);
   return isoWeekLabel(monday);
 }
 
@@ -3290,32 +3291,8 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
   });
   const sessions: ClockSession[] = [];
   grouped.forEach((rows, uid) => {
-    let open: ClockLog | null = null;
-    rows.sort((left, right) =>
-      new Date(left.time || 0).getTime() - new Date(right.time || 0).getTime());
-
-    /* Break spans for this person, merged so two overlapping breaks can never
-       be deducted twice. A break that was started but never ended is left open
-       and clamped to the session end below, so forgetting to end one costs the
-       rest of that shift rather than being ignored outright. */
-    const breaks: { start: number; end: number }[] = [];
-    let breakStart: number | null = null;
-    rows.forEach((row) => {
-      if (!row.time) return;
-      if (row.status === "Break Start") { breakStart ??= new Date(row.time).getTime(); return; }
-      if ((row.status === "Break End" || row.status === "Out" || row.status === "In") && breakStart !== null) {
-        breaks.push({ start: breakStart, end: new Date(row.time).getTime() });
-        breakStart = null;
-      }
-    });
-    if (breakStart !== null) breaks.push({ start: breakStart, end: Number.POSITIVE_INFINITY });
-    breaks.sort((left, right) => left.start - right.start);
-    const merged: { start: number; end: number }[] = [];
-    breaks.forEach((span) => {
-      const last = merged[merged.length - 1];
-      if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
-      else merged.push({ ...span });
-    });
+    const paired = pairPunchSessions(rows, uid);
+    const merged = attendanceBreakSpans(rows, paired);
     /* Milliseconds of break that fall inside the given window. Clamping each
        span to the window is what stops a lunch bleeding across a clock-out
        into the next shift. */
@@ -3369,6 +3346,7 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
           presenceHours: flagged ? 0 : grossMs / 3600000,
           breakHours: flagged ? 0 : breakMs / 3600000,
           open: isOpen && segEnd >= to,
+          ...(isOpen ? { ongoing: true } : {}),
           ...(flag ? { [flag]: true, openHours: (to - from) / 3600000 } : {}),
           ...(adjusted ? { adjusted: true } : {}),
           ...(longHoursStatus ? { longHoursStatus } : {}),
@@ -3376,37 +3354,20 @@ function buildClockSessions(store: Record<string, unknown> | null, users: StaffU
       });
     };
 
-    rows.forEach((row) => {
-        if (row.status === "In") {
-          if (open?.time && row.time) {
-            const gapHours = (new Date(row.time).getTime() - new Date(open.time).getTime()) / 3600000;
-            if (gapHours < 12) {
-              /* Same shift, pressed twice: the first press is the punch. The
-                 old behaviour silently replaced it, which threw away worked
-                 minutes with no trace. */
-              return;
-            }
-            /* A new day's clock-in after an open one from long ago: the old
-               session was abandoned, so it surfaces flagged for correction
-               rather than being silently discarded — or silently merged into
-               one enormous shift. */
-            record(open.time, row.time, open.type || "Unspecified", false, "unclosed", adjustedMark(open.note));
-          }
-          open = row;
-          return;
-        }
-        if (row.status !== "Out" || !open?.time || !row.time) return;
-        const reviewedCorrection = Boolean(open.correctionId && open.correctionId === row.correctionId);
-        record(open.time, row.time, open.type || row.type || "Unspecified", false,
-          !reviewedCorrection && (row.longHoursStatus === "pending" || row.longHoursStatus === "rejected"
-            || (row.longHoursStatus !== "confirmed" && isSuspiciousClosedSession(open.time, row.time))) ? "long" : undefined,
-          adjustedMark(open.note, row.note), row.longHoursStatus);
-        open = null;
-      });
-    /* Read through a fresh binding. TypeScript narrows `open` to `never` here,
-       because it cannot see that the callback above reassigns it, and a build
-       with type checking on then refuses the file. */
-    const stillOpen = open as ClockLog | null;
+    for (const { inLog, outLog, kind, nextTime } of paired) {
+      if (!inLog.time) continue;
+      if (kind === "unclosed" && nextTime !== null) {
+        record(inLog.time, new Date(nextTime).toISOString(), inLog.type || "Unspecified", false, "unclosed", adjustedMark(inLog.note));
+      }
+      if (!outLog?.time) continue;
+      const reviewedCorrection = Boolean(inLog.correctionId && inLog.correctionId === outLog.correctionId);
+      record(inLog.time, outLog.time, inLog.type || outLog.type || "Unspecified", false,
+        !reviewedCorrection && (outLog.longHoursStatus === "pending" || outLog.longHoursStatus === "rejected"
+          || (outLog.longHoursStatus !== "confirmed" && isSuspiciousClosedSession(inLog.time, outLog.time))) ? "long" : undefined,
+        adjustedMark(inLog.note, outLog.note), outLog.longHoursStatus);
+    }
+    const lastPair = paired.at(-1);
+    const stillOpen = lastPair?.kind === "open" ? lastPair.inLog : null;
     if (stillOpen?.time) {
       const openHours = (serverNowMs() - new Date(stillOpen.time).getTime()) / 3600000;
       /* Open under the stale threshold: a live shift, counted normally. Past
@@ -3666,32 +3627,52 @@ function roomMembers(projectId: string, staff: StaffUser[], projects: Accounting
     && visibleProjectIds(person, projects).has(projectId));
 }
 
-/* Mirrors usd() in public/engines/accounting.html exactly: an IQD figure is
-   divided by the rate captured on that line, or by the current setting when
-   the line predates that being recorded. Anything else is already USD. */
 const DEFAULT_IQD_RATE = 1310;
-function toUsd(amount: unknown, currency: unknown, rate: number, lineRate = 0) {
-  const value = finiteNumber(amount);
-  if (String(currency || "USD").toUpperCase() !== "IQD") return value;
-  return value / Math.max(1, lineRate > 0 ? lineRate : rate);
+type FinancialCurrency = "IQD" | "USD";
+function convertLedgerAmount(amount: number, row: Pick<LedgerLine, "currency" | "fxRate">, currency: FinancialCurrency, rate: number) {
+  const original = row.currency.toUpperCase() === "IQD" ? "IQD" : "USD";
+  if (original === currency) return amount;
+  const exchangeRate = row.fxRate > 0 ? row.fxRate : rate;
+  return currency === "IQD" ? amount * exchangeRate : amount / exchangeRate;
+}
+function payrollCompanyCostUsd(rows: PayrollRow[], rate: number) {
+  return rows.reduce((total, row) => total + convertLedgerAmount(row.totalCompanyCost, row, "USD", rate), 0);
+}
+function recordedLedgerAmount(row: LedgerLine, currency: FinancialCurrency, rate: number) {
+  const snapshot = currency === "IQD" ? row.amountIqd : row.amountUsd;
+  return snapshot ?? convertLedgerAmount(row.amount, row, currency, rate);
 }
 /* A line only counts once it is real money: the engine treats these as
    settled and excludes anything still requested, pending, or rejected. */
 const SETTLED = ["Approved", "Paid", "Received"];
 function readLedger(rows: unknown, amountKey: string): LedgerLine[] {
   if (!Array.isArray(rows)) return [];
-  return rows.map((row: Record<string, unknown>) => ({
-    id: String(row.id || ""),
-    projectId: String(row.projectId || ""),
-    date: String(row.date || ""),
-    status: String(row.status || ""),
-    currency: String(row.currency || "USD"),
-    amount: finiteNumber(row[amountKey]),
-    consultancyFee: finiteNumber(row.consultancyFee),
-    waived: row.waived === true,
-    fxRate: finiteNumber(row.fxRate),
-    label: String(row.itemName || row.trade || row.description || row.category || ""),
-  }));
+  return rows.filter((row) => row && typeof row === "object").map((row: Record<string, unknown>) => {
+    const ledger = row._acct as Record<string, unknown> | undefined;
+    const meta = ledger?.meta as Record<string, unknown> | undefined;
+    const feeRule = ledger?.fee_rule as Record<string, unknown> | undefined;
+    const snapshot = (key: string) => {
+      const value = ledger?.[key];
+      return value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : undefined;
+    };
+    return {
+      id: String(row.id || ""),
+      projectId: String(row.projectId || ""),
+      date: String(row.date || ""),
+      status: String(row.status || ""),
+      currency: String(row.currency || "USD"),
+      amount: finiteNumber(row[amountKey]),
+      consultancyFee: finiteNumber(row.consultancyFee),
+      waived: row.waived === true,
+      feeTreatment: String(feeRule?.treatment || ""),
+      fxRate: finiteNumber(row.fxRate),
+      label: String(row.itemName || row.trade || row.description || row.category || ""),
+      paymentSource: String(row.paymentSource || ledger?.payment_source || ""),
+      costBearer: String(meta?.cost_bearer || ""),
+      amountUsd: snapshot("amount_usd"),
+      amountIqd: snapshot("amount_iqd"),
+    };
+  });
 }
 
 function readAccountingSnapshot(): AccountingSnapshot {
@@ -3776,8 +3757,9 @@ function readAccountingSnapshot(): AccountingSnapshot {
         period: String(row.period || ""),
         grossPay: finiteNumber(row.grossPay ?? row.gross),
         // Company cost includes employer contributions; fall back to gross.
-        totalCompanyCost: finiteNumber(row.totalCompanyCost) || finiteNumber(row.grossPay ?? row.gross),
+        totalCompanyCost: finiteNumber(row.totalCompanyCost ?? row.grossPay ?? row.gross),
         currency: String(row.currency || "USD"),
+        fxRate: finiteNumber(row.fxRate),
         status: String(row.status || ""),
         region: String(row.region || ""),
       }));
@@ -3828,7 +3810,7 @@ type ProjectFinancials = {
   cost: number; workingCost: number; pendingCost: number;
   balance: number; workingBalance: number;
   /* B) Larsa company accounting */
-  revenue: number; larsaRevenue: number; companyExpenses: number;
+  revenue: number; feeRevenue: number; larsaRevenue: number; companyExpenses: number;
   companyNet: number; margin: number;
   /* reliability */
   unapproved: number; status: "green" | "yellow" | "red";
@@ -3838,21 +3820,21 @@ const ZERO_FINANCIALS: ProjectFinancials = {
   materials: 0, labor: 0, expenses: 0,
   cost: 0, workingCost: 0, pendingCost: 0,
   balance: 0, workingBalance: 0,
-  revenue: 0, larsaRevenue: 0, companyExpenses: 0,
+  revenue: 0, feeRevenue: 0, larsaRevenue: 0, companyExpenses: 0,
   companyNet: 0, margin: 0,
   unapproved: 0, status: "green",
 };
 /* `within` lets the same arithmetic serve a whole-company total, one region,
    one project, or a single month, without a second copy of the rules. */
 function sumLedger(
-  rows: LedgerLine[], ids: Set<string> | null, rate: number,
+  rows: LedgerLine[], ids: Set<string> | null, currency: FinancialCurrency, rate: number,
   within?: (row: LedgerLine) => boolean,
 ) {
   return rows.reduce((total, row) => {
     if (ids && !ids.has(row.projectId)) return total;
     if (!SETTLED.includes(row.status)) return total;
     if (within && !within(row)) return total;
-    return total + toUsd(row.amount, row.currency, rate, row.fxRate);
+    return total + recordedLedgerAmount(row, currency, rate);
   }, 0);
 }
 /* Every live saved entry, whether or not it has been approved: working
@@ -3864,12 +3846,15 @@ function isLive(status: string) {
 /* A cost only leaves the client's fund control when it is explicitly
    Larsa's own money — never by default. */
 function isLarsaBorne(row: LedgerLine) {
-  const src = String((row as { paymentSource?: unknown }).paymentSource || "").toLowerCase();
+  const bearer = row.costBearer?.toLowerCase();
+  if (bearer === "larsa" || bearer === "company") return true;
+  if (bearer === "client") return false;
+  const src = row.paymentSource?.toLowerCase() || "";
   return ["larsa", "larsa operating", "larsa funds", "company", "company funds",
     "company account", "larsa account", "operating", "overhead", "larsa overhead"].includes(src);
 }
 function sumLive(
-  rows: LedgerLine[], ids: Set<string> | null, rate: number,
+  rows: LedgerLine[], ids: Set<string> | null, currency: FinancialCurrency, rate: number,
   approvedOnly: boolean, larsaBorne: boolean,
   within?: (row: LedgerLine) => boolean,
 ) {
@@ -3878,38 +3863,42 @@ function sumLive(
     if (!(approvedOnly ? SETTLED.includes(row.status) : isLive(row.status))) return total;
     if (isLarsaBorne(row) !== larsaBorne) return total;
     if (within && !within(row)) return total;
-    return total + toUsd(row.amount, row.currency, rate, row.fxRate);
+    return total + recordedLedgerAmount(row, currency, rate);
   }, 0);
 }
 function financialsFor(
-  snapshot: AccountingSnapshot, ids: Set<string> | null,
+  snapshot: AccountingSnapshot, ids: Set<string> | null, currency: FinancialCurrency,
   within?: (row: LedgerLine) => boolean,
 ): ProjectFinancials {
   const rate = snapshot.rate;
   /* ---- A) client fund control ---- */
-  const funding = sumLedger(snapshot.funding, ids, rate, within);
-  const fees = snapshot.funding.reduce((total, row) => {
-    if (ids && !ids.has(row.projectId)) return total;
-    if (!SETTLED.includes(row.status) || row.waived) return total;
-    if (within && !within(row)) return total;
-    return total + toUsd(row.consultancyFee, row.currency, rate, row.fxRate);
-  }, 0);
-  const materials = sumLive(snapshot.materials, ids, rate, true, false, within);
-  const labor = sumLive(snapshot.labor, ids, rate, true, false, within);
-  const expenses = sumLive(snapshot.expenses, ids, rate, true, false, within);
+  const funding = sumLedger(snapshot.funding, ids, currency, rate, within);
+  let fees = 0;
+  let feeRevenue = 0;
+  for (const row of snapshot.funding) {
+    if (ids && !ids.has(row.projectId)) continue;
+    if (!SETTLED.includes(row.status) || row.waived) continue;
+    if (within && !within(row)) continue;
+    const fee = convertLedgerAmount(row.consultancyFee, row, currency, rate);
+    feeRevenue += fee;
+    if (!row.feeTreatment || row.feeTreatment === "deduct_from_funding") fees += fee;
+  }
+  const materials = sumLive(snapshot.materials, ids, currency, rate, true, false, within);
+  const labor = sumLive(snapshot.labor, ids, currency, rate, true, false, within);
+  const expenses = sumLive(snapshot.expenses, ids, currency, rate, true, false, within);
   const cost = materials + labor + expenses;
   const workingCost =
-    sumLive(snapshot.materials, ids, rate, false, false, within)
-    + sumLive(snapshot.labor, ids, rate, false, false, within)
-    + sumLive(snapshot.expenses, ids, rate, false, false, within);
+    sumLive(snapshot.materials, ids, currency, rate, false, false, within)
+    + sumLive(snapshot.labor, ids, currency, rate, false, false, within)
+    + sumLive(snapshot.expenses, ids, currency, rate, false, false, within);
   const netFunding = funding - fees;
   /* ---- B) Larsa company accounting ---- */
-  const revenue = sumLedger(snapshot.revenue, ids, rate, within);
+  const revenue = sumLedger(snapshot.revenue, ids, currency, rate, within);
   const companyExpenses =
-    sumLive(snapshot.materials, ids, rate, true, true, within)
-    + sumLive(snapshot.labor, ids, rate, true, true, within)
-    + sumLive(snapshot.expenses, ids, rate, true, true, within);
-  const larsaRevenue = fees + revenue;
+    sumLive(snapshot.materials, ids, currency, rate, true, true, within)
+    + sumLive(snapshot.labor, ids, currency, rate, true, true, within)
+    + sumLive(snapshot.expenses, ids, currency, rate, true, true, within);
+  const larsaRevenue = feeRevenue + revenue;
   const companyNet = larsaRevenue - companyExpenses;
   /* ---- reliability ---- */
   const ledgers = [snapshot.funding, snapshot.materials, snapshot.labor, snapshot.expenses, snapshot.revenue];
@@ -3925,7 +3914,7 @@ function financialsFor(
     cost, workingCost, pendingCost: workingCost - cost,
     balance: netFunding - cost,
     workingBalance: netFunding - workingCost,
-    revenue, larsaRevenue, companyExpenses, companyNet,
+    revenue, feeRevenue, larsaRevenue, companyExpenses, companyNet,
     margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
     unapproved,
     status: unapproved > 0 ? "yellow" : "green",
@@ -3942,7 +3931,7 @@ function monthKeysFor(snapshot: AccountingSnapshot, ids: Set<string> | null) {
     if (ids && !ids.has(row.projectId)) return;
     if (!SETTLED.includes(row.status)) return;
     const key = String(row.date || "").slice(0, 7);
-    if (/^\d{4}-\d{2}$/.test(key)) found.push(key);
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(key)) found.push(key);
   }));
   if (!found.length) return [] as string[];
   const sorted = found.sort();
@@ -3961,26 +3950,22 @@ function monthKeysFor(snapshot: AccountingSnapshot, ids: Set<string> | null) {
   return keys;
 }
 type MonthPoint = { key: string; label: string; figures: ProjectFinancials };
-function monthlySeries(snapshot: AccountingSnapshot, ids: Set<string> | null): MonthPoint[] {
+function monthlySeries(snapshot: AccountingSnapshot, ids: Set<string> | null, currency: FinancialCurrency): MonthPoint[] {
   return monthKeysFor(snapshot, ids).map((key) => ({
     key,
     label: new Date(`${key}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
-    figures: financialsFor(snapshot, ids, (row) => String(row.date || "").slice(0, 7) === key),
+    figures: financialsFor(snapshot, ids, currency, (row) => String(row.date || "").slice(0, 7) === key),
   }));
 }
 
-/* Figures are held in USD, matching the engine, and converted only for
-   display. IQD is shown whole; USD keeps no cents either, since these are
-   project totals rather than invoice lines. */
-function formatMoney(usdValue: number, currency: "IQD" | "USD", rate: number) {
-  const value = currency === "IQD" ? usdValue * rate : usdValue;
-  const text = Math.round(value).toLocaleString("en-US");
-  return currency === "IQD" ? `${text} IQD` : `$${text}`;
+function formatMoney(value: number, currency: FinancialCurrency) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency", currency, maximumFractionDigits: currency === "IQD" ? 0 : 2,
+  }).format(value);
 }
 /* Long IQD figures need to stay readable inside a card, so millions and
    billions are abbreviated on the summary tiles only. */
-function formatCompact(usdValue: number, currency: "IQD" | "USD", rate: number) {
-  const value = currency === "IQD" ? usdValue * rate : usdValue;
+function formatCompact(value: number, currency: FinancialCurrency) {
   const sign = value < 0 ? "-" : "";
   const size = Math.abs(value);
   const unit = currency === "IQD" ? " IQD" : "";
@@ -4092,18 +4077,17 @@ const COST_PARTS: { key: keyof ProjectFinancials; label: string; tint: string }[
 ];
 
 function MonthBars({
-  points, currency, rate,
+  points, currency,
 }: {
   points: MonthPoint[];
-  currency: "IQD" | "USD";
-  rate: number;
+  currency: FinancialCurrency;
 }) {
   if (!points.length) return null;
   const peak = Math.max(
     1,
     ...points.map((point) => Math.max(
       point.figures.netFunding + point.figures.fees + point.figures.revenue,
-      point.figures.workingCost,
+      point.figures.cost,
     )),
   );
   const column = (
@@ -4112,7 +4096,7 @@ function MonthBars({
     total: number,
     heading: string,
   ) => (
-    <span className="fin-stack" title={`${heading} ${formatMoney(total, currency, rate)}`}>
+    <span className="fin-stack" title={`${heading} ${formatMoney(total, currency)}`}>
       {parts.map((part) => {
         const value = figures[part.key] as number;
         if (value <= 0) return null;
@@ -4120,7 +4104,7 @@ function MonthBars({
           <i
             key={part.key}
             style={{ height: `${(value / peak) * 100}%`, background: part.tint }}
-            title={`${part.label} ${formatMoney(value, currency, rate)}`}
+            title={`${part.label} ${formatMoney(value, currency)}`}
           />
         );
       })}
@@ -4140,10 +4124,10 @@ function MonthBars({
             <span className="fin-month-bars">
               {column(point.figures, INFLOW_PARTS,
                 point.figures.netFunding + point.figures.fees + point.figures.revenue, "Received")}
-              {column(point.figures, COST_PARTS, point.figures.workingCost, "Spent")}
+              {column(point.figures, COST_PARTS, point.figures.cost, "Approved client costs")}
             </span>
             <b className={point.figures.companyNet < 0 ? "fin-month-net down" : "fin-month-net"}>
-              {point.figures.companyNet === 0 ? "\u2014" : formatCompact(point.figures.companyNet, currency, rate)}
+              {point.figures.companyNet === 0 ? "\u2014" : formatCompact(point.figures.companyNet, currency)}
             </b>
             <small>{point.label}</small>
           </div>
@@ -4201,30 +4185,32 @@ function num(source: unknown, path: string[]): number {
   const value = Number(node);
   return Number.isFinite(value) ? value : 0;
 }
-function fromServerRow(row: ServerFinancialRow): ProjectFinancials {
+function fromServerRow(row: ServerFinancialRow, currency: FinancialCurrency): ProjectFinancials {
   const ap = ["client_funds", "approved"];
   const wk = ["client_funds", "working"];
   const pn = ["client_funds", "pending"];
   const co = ["company"];
-  const larsaRevenue = num(row, [...co, "larsa_revenue_usd"]);
-  const companyNet = num(row, [...co, "company_net_profit_usd"]);
-  const status = String(num(row, ["review", "needs_correction_entries"]) > 0
-    ? "red" : num(row, ["review", "unapproved_entries"]) > 0 ? "yellow" : "green") as ProjectFinancials["status"];
+  const value = (group: string[], name: string) => num(row, [...group, `${name}_${currency.toLowerCase()}`]);
+  const larsaRevenue = value(co, "larsa_revenue");
+  const companyNet = value(co, "company_net_profit");
+  const status = num(row, ["review", "needs_correction_entries"]) > 0
+    ? "red" : num(row, ["review", "unapproved_entries"]) > 0 ? "yellow" : "green";
   return {
-    funding: num(row, [...ap, "gross_funding_usd"]),
-    fees: num(row, [...ap, "initial_fee_usd"]),
-    netFunding: num(row, [...ap, "net_construction_funding_usd"]),
-    materials: num(row, [...ap, "materials_usd"]),
-    labor: num(row, [...ap, "labor_usd"]),
-    expenses: num(row, [...ap, "other_costs_usd"]),
-    cost: num(row, [...ap, "construction_cost_usd"]),
-    workingCost: num(row, [...wk, "construction_cost_usd"]),
-    pendingCost: num(row, [...pn, "construction_cost_usd"]),
-    balance: num(row, [...ap, "remaining_balance_usd"]),
-    workingBalance: num(row, [...wk, "remaining_balance_usd"]),
-    revenue: num(row, [...co, "engineering_revenue_usd"]),
+    funding: value(ap, "gross_funding"),
+    fees: value(ap, "initial_fee"),
+    netFunding: value(ap, "net_construction_funding"),
+    materials: value(ap, "materials"),
+    labor: value(ap, "labor"),
+    expenses: value(ap, "other_costs"),
+    cost: value(ap, "construction_cost"),
+    workingCost: value(wk, "construction_cost"),
+    pendingCost: value(pn, "construction_cost"),
+    balance: value(ap, "remaining_balance"),
+    workingBalance: value(wk, "remaining_balance"),
+    revenue: value(co, "engineering_revenue"),
+    feeRevenue: value(co, "consultancy_fee_revenue"),
     larsaRevenue,
-    companyExpenses: num(row, [...co, "company_expenses_usd"]),
+    companyExpenses: value(co, "company_expenses"),
     companyNet,
     margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
     unapproved: num(row, ["review", "unapproved_entries"]),
@@ -4239,7 +4225,7 @@ function addFinancials(a: ProjectFinancials, b: ProjectFinancials): ProjectFinan
     materials: a.materials + b.materials, labor: a.labor + b.labor, expenses: a.expenses + b.expenses,
     cost: a.cost + b.cost, workingCost: a.workingCost + b.workingCost, pendingCost: a.pendingCost + b.pendingCost,
     balance: a.balance + b.balance, workingBalance: a.workingBalance + b.workingBalance,
-    revenue: a.revenue + b.revenue, larsaRevenue,
+    revenue: a.revenue + b.revenue, feeRevenue: a.feeRevenue + b.feeRevenue, larsaRevenue,
     companyExpenses: a.companyExpenses + b.companyExpenses, companyNet,
     margin: larsaRevenue > 0 ? (companyNet / larsaRevenue) * 100 : 0,
     unapproved: a.unapproved + b.unapproved,
@@ -4248,20 +4234,34 @@ function addFinancials(a: ProjectFinancials, b: ProjectFinancials): ProjectFinan
   };
 }
 
+function isConstructionProject(project: AccountingProject) {
+  return project.type === "Construction" || project.phase === "Execution";
+}
+
 function ConstructionFinancials({
-  snapshot, viewer,
+  snapshot, viewer, refreshRevision,
 }: {
   snapshot: AccountingSnapshot;
   viewer: StaffUser | null;
+  refreshRevision: number;
 }) {
   const [useSample, setUseSample] = useState(false);
   const [region, setRegion] = useState("All");
-  const [currency, setCurrency] = useState<"IQD" | "USD">("IQD");
+  const [currency, setCurrency] = useState<FinancialCurrency>("IQD");
   const [openProject, setOpenProject] = useState("");
+  const visibleConstructionIds = useMemo(() => {
+    const visible = visibleProjectIds(viewer, snapshot.projects);
+    return new Set(snapshot.projects
+      .filter((project) => visible.has(project.id) && isConstructionProject(project))
+      .map((project) => project.id));
+  }, [viewer, snapshot.projects]);
+  const projectScope = JSON.stringify([...visibleConstructionIds].sort());
   /* One authoritative calculation: when the shared ledger is reachable its
      figures replace the local sums entirely, so this page, the engine's
      summary, the client statement and every export agree by construction. */
-  const [serverRows, setServerRows] = useState<Record<string, ProjectFinancials> | null>(null);
+  const viewerId = viewer?.id;
+  const [ledgerRows, setLedgerRows] = useState<{ viewerId: string; scope: string; rows: Map<string, ServerFinancialRow> } | null>(null);
+  const serverRows = !useSample && ledgerRows?.viewerId === viewerId && ledgerRows?.scope === projectScope ? ledgerRows.rows : null;
   const [ledgerNote, setLedgerNote] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -4269,24 +4269,24 @@ function ConstructionFinancials({
     // the effect never sets state synchronously during render.
     const timer = window.setTimeout(() => {
       if (cancelled) return;
-      if (useSample) { setServerRows(null); setLedgerNote(""); return; }
+      if (useSample || !viewerId || projectScope === "[]") { setLedgerNote(""); return; }
       const client = supabaseConfigured() ? getSupabaseClient() : null;
       if (!client) { setLedgerNote("Offline figures — the shared accounting ledger is not connected."); return; }
-      client.rpc("acct_company_financials", { p_project_ids: null, p_region: null }).then(({ data, error }) => {
+      client.rpc("acct_company_financials", { p_project_ids: JSON.parse(projectScope), p_region: null }).then(({ data, error }) => {
         if (cancelled) return;
-        if (error || !data) { setLedgerNote("Offline figures — could not reach the shared accounting ledger."); return; }
+        if (error || !data) { setLedgerNote("Could not refresh the shared accounting ledger."); return; }
         const payload = data as { rows?: ServerFinancialRow[] };
-        const map: Record<string, ProjectFinancials> = {};
+        const map = new Map<string, ServerFinancialRow>();
         (payload.rows || []).forEach((row) => {
           const id = String((row as Record<string, unknown>).project_id || "");
-          if (id) map[id] = fromServerRow(row);
+          if (id) map.set(id, row);
         });
-        setServerRows(map);
+        setLedgerRows({ viewerId, scope: projectScope, rows: map });
         setLedgerNote("");
-      }, () => { if (!cancelled) setLedgerNote("Offline figures — could not reach the shared accounting ledger."); });
+      }, () => { if (!cancelled) setLedgerNote("Could not refresh the shared accounting ledger."); });
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [useSample]);
+  }, [useSample, viewerId, projectScope, refreshRevision]);
 
 
   const sample = useMemo(() => sampleConstructionSnapshot(snapshot.rate), [snapshot.rate]);
@@ -4294,33 +4294,23 @@ function ConstructionFinancials({
   /* Server figures win whenever the ledger answered for a project; the local
      sums remain as the offline fallback and for the worked example. */
   const figuresFor = useCallback((ids: Set<string>) => {
-    if (serverRows && !useSample) {
+    if (serverRows) {
       let total = ZERO_FINANCIALS;
-      let found = false;
       ids.forEach((id) => {
-        const row = serverRows[id];
-        if (row) { total = addFinancials(total, row); found = true; }
+        const row = serverRows.get(id);
+        if (row) total = addFinancials(total, fromServerRow(row, currency));
       });
-      if (found) return total;
+      return total;
     }
-    return financialsFor(live, ids);
-  }, [serverRows, useSample, live]);
-  const rate = live.rate;
-  const show = (value: number) => formatMoney(value, currency, rate);
-  const brief = (value: number) => formatCompact(value, currency, rate);
+    return financialsFor(live, ids, currency);
+  }, [serverRows, live, currency]);
+  const show = (value: number) => formatMoney(value, currency);
+  const brief = (value: number) => formatCompact(value, currency);
 
-  // Only projects this account may see, and only construction ones.
-  const allowed = useMemo(
-    () => (useSample
-      ? new Set(sample.projects.map((row) => row.id))
-      : visibleProjectIds(viewer, snapshot.projects)),
-    [useSample, sample, viewer, snapshot.projects],
-  );
-  const isConstruction = (row: AccountingProject) => row.type === "Construction" || row.phase === "Execution";
   const projects = useMemo(
-    () => live.projects.filter((row) => allowed.has(row.id) && isConstruction(row)
-      && (region === "All" || row.region === region)),
-    [live.projects, allowed, region],
+    () => live.projects.filter((row) => (useSample || visibleConstructionIds.has(row.id))
+      && (!serverRows || serverRows.has(row.id)) && (region === "All" || row.region === region)),
+    [live.projects, useSample, visibleConstructionIds, region, serverRows],
   );
   const scopeIds = useMemo(() => new Set(projects.map((row) => row.id)), [projects]);
 
@@ -4329,25 +4319,25 @@ function ConstructionFinancials({
       .map((project) => ({
         project,
         figures: figuresFor(new Set([project.id])),
-        months: monthlySeries(live, new Set([project.id])),
+        months: monthlySeries(live, new Set([project.id]), currency),
       }))
       .sort((a, b) => b.figures.funding - a.figures.funding),
-    [projects, live, figuresFor],
+    [projects, live, figuresFor, currency],
   );
   const totals = useMemo(
     () => (scopeIds.size ? figuresFor(scopeIds) : ZERO_FINANCIALS),
     [scopeIds, figuresFor],
   );
   const totalMonths = useMemo(
-    () => (scopeIds.size ? monthlySeries(live, scopeIds) : []),
-    [scopeIds, live],
+    () => (scopeIds.size ? monthlySeries(live, scopeIds, currency) : []),
+    [scopeIds, live, currency],
   );
-  const regionRows = useMemo(() => ["Iraq", "USA"].map((name) => {
-    const ids = new Set(live.projects
-      .filter((row) => allowed.has(row.id) && isConstruction(row) && row.region === name)
+  const regionRows = useMemo(() => [...new Set(projects.map((row) => row.region))].sort().map((name) => {
+    const ids = new Set(projects
+      .filter((row) => row.region === name)
       .map((row) => row.id));
-    return { name, count: ids.size, figures: ids.size ? figuresFor(ids) : ZERO_FINANCIALS };
-  }), [live, allowed, figuresFor]);
+    return { name: name || "Unassigned", count: ids.size, figures: figuresFor(ids) };
+  }), [projects, figuresFor]);
 
   const scale = Math.max(1, ...rows.map((row) => Math.max(row.figures.netFunding, row.figures.workingCost)));
 
@@ -4363,7 +4353,7 @@ function ConstructionFinancials({
     { label: "Client balance held", value: totals.balance, note: `Working: ${show(totals.workingBalance)}`, tone: "hold" },
   ];
   const companyTiles: { label: string; value: number; note: string; tone: string }[] = [
-    { label: "Consultancy fee revenue", value: totals.fees, note: "Earned by Larsa", tone: "in" },
+    { label: "Consultancy fee revenue", value: totals.feeRevenue, note: "Earned by Larsa", tone: "in" },
     { label: "Engineering revenue", value: totals.revenue, note: "Booked to projects", tone: "in" },
     { label: "Larsa revenue", value: totals.larsaRevenue, note: "Fees + engineering + other", tone: "in" },
     { label: "Larsa expenses", value: totals.companyExpenses, note: "Costs Larsa itself paid", tone: "out" },
@@ -4382,7 +4372,7 @@ function ConstructionFinancials({
           </p>
         </div>
         <span className="access-pill">
-          <CircleDollarSign size={16} /> {currency === "IQD" ? `1 USD = ${rate.toLocaleString("en-US")} IQD` : "US dollars"}
+          <CircleDollarSign size={16} /> {currency === "IQD" ? "Iraqi dinars" : "US dollars"}
         </span>
       </section>
 
@@ -4401,6 +4391,7 @@ function ConstructionFinancials({
               type="button"
               key={code}
               className={currency === code ? "active" : ""}
+              aria-pressed={currency === code}
               onClick={() => setCurrency(code)}
             >
               {code}
@@ -4431,7 +4422,7 @@ function ConstructionFinancials({
       {totals.unapproved > 0 && (
         <p className="fin-note" style={{ borderInlineStartColor: "#b58900", color: "#7a5c00" }}>
           ⏳ Contains {totals.unapproved} unapproved entr{totals.unapproved === 1 ? "y" : "ies"}. Working
-          figures include every saved entry — approval changes reliability, never the amounts.
+          costs include pending entries. Approved totals change when those entries are approved.
         </p>
       )}
 
@@ -4490,13 +4481,14 @@ function ConstructionFinancials({
           <span className="black-badge">{show(totals.companyNet)} company net</span>
         </div>
         {totalMonths.length
-          ? <MonthBars points={totalMonths} currency={currency} rate={rate} />
+          ? <><p className="fin-note">Monthly activity uses the dated entries available on this device.</p>
+            <MonthBars points={totalMonths} currency={currency} /></>
           : <div className="empty compact">No dated entries yet, so there is nothing to plot.</div>}
       </section>
 
       <section className="panel">
         <div className="section-head">
-          <div><span className="eyebrow">By region</span><h3>Iraq and USA side by side</h3></div>
+          <div><span className="eyebrow">By region</span><h3>Construction totals by region</h3></div>
         </div>
         <div className="table-wrap">
           <table className="data-table fin-table">
@@ -4525,7 +4517,7 @@ function ConstructionFinancials({
               ))}
               <tr className="fin-total-row">
                 <td><b>Total</b></td>
-                <td>{regionRows.reduce((sum, row) => sum + row.count, 0)}</td>
+                <td>{projects.length}</td>
                 <td>{show(totals.funding)}</td>
                 <td>{show(totals.netFunding)}</td>
                 <td>{show(totals.cost)}</td>
@@ -4568,7 +4560,7 @@ function ConstructionFinancials({
                   <small>{[project.clientName, project.region, project.status].filter(Boolean).join(" · ")}</small>
                 </span>
                 <span className="pf-figure"><small>Client funds</small><b>{brief(figures.netFunding)}</b></span>
-                <span className="pf-figure"><small>Spent</small><b>{brief(figures.workingCost)}</b></span>
+                <span className="pf-figure"><small>Working cost</small><b>{brief(figures.workingCost)}</b></span>
                 <span className="pf-figure">
                   <small>Larsa net</small>
                   <b className={figures.companyNet < 0 ? "fin-neg" : undefined}>{brief(figures.companyNet)}</b>
@@ -4617,7 +4609,7 @@ function ConstructionFinancials({
                       <span>Margin on Larsa revenue</span><b>{figures.margin.toFixed(1)}%</b>
                     </div>
                   </div>
-                  {months.length > 0 && <MonthBars points={months} currency={currency} rate={rate} />}
+                  {months.length > 0 && <MonthBars points={months} currency={currency} />}
                 </div>
               )}
             </article>
@@ -4667,6 +4659,7 @@ export default function Home() {
 
   const [active, setActive] = useState<Item>(DEFAULT_ITEM);
   const [refreshStatus, setRefreshStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [financialsRefreshRevision, setFinancialsRefreshRevision] = useState(0);
   const refreshInFlightRef = useRef(false);
   const refreshFeedbackTimer = useRef<number | null>(null);
   // Legacy engines are exclusive: only the engine for the current route is mounted.
@@ -7812,6 +7805,7 @@ export default function Home() {
       // only the visible engine; native views read the refreshed local store.
       if (activeRef.current.engine === "staff") refreshStaffEngine();
       else if (!activeRef.current.engine) queueStorageRefresh();
+      if (current.native === "constructionFinancials") setFinancialsRefreshRevision((value) => value + 1);
       setNotifyTick((value) => value + 1);
       setRefreshStatus("done");
     } catch {
@@ -8288,13 +8282,15 @@ export default function Home() {
         const row = rows.get(key) || {
           uid: session.uid, Employee: session.employee, Type: session.mode,
           In: session.clockIn, Out: session.clockOut, Hours: 0,
-          PresenceHours: 0, BreakHours: 0, Open: false, Review: false,
+          PresenceHours: 0, BreakHours: 0, Open: false, Review: false, Days: [],
+          MissingOut: Boolean(session.ongoing || session.unclosed),
         };
         row.Hours = Number(row.Hours) + session.hours;
         row.PresenceHours = Number(row.PresenceHours) + session.presenceHours;
         row.BreakHours = Number(row.BreakHours) + session.breakHours;
         row.Open = Boolean(row.Open || session.open);
         row.Review = Boolean(row.Review || session.stale || session.unclosed || session.long);
+        (row.Days as { Date: string; Hours: number }[]).push({ Date: session.date, Hours: session.hours });
         rows.set(key, row);
       });
       const projected = Array.from(rows.values());
@@ -8449,6 +8445,12 @@ export default function Home() {
       notify("That employee is outside your data scope.");
       return false;
     }
+    const approvalPolicy = uid === actor.id ? await attendanceApprovalPolicy() : null;
+    if (sessionUserRef.current?.id !== actor.id) return false;
+    if (uid === actor.id && !approvalPolicy) {
+      notify("Approval settings could not be checked. Please try again."); return false;
+    }
+    // Load the log after checking policy so a punch received during that request survives.
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
@@ -8467,16 +8469,14 @@ export default function Home() {
       else if (plan.reason === "not-after-in") notify("Clock-out has to be after clock-in.");
       else if (plan.reason === "future") notify("Clock-out cannot be in the future.");
       else if (plan.reason === "later-than-out") notify("You can only bring a clock-out earlier, not later. Use a correction request to add hours.");
+      else if (plan.reason === "changes-pairing") notify("That time would change another clock record. Review the punches in that time range.");
       else notify("That would run into the next session. Pick a time before the following clock-in.");
       return false;
     }
     const { inLog, outLog } = plan.session;
     const previousOut = outLog?.time || null;
     const nextOutIso = new Date(newClockOut).toISOString();
-    const approvalPolicy = uid === actor.id ? await attendanceApprovalPolicy() : null;
-    if (uid === actor.id && !approvalPolicy) {
-      notify("Approval settings could not be checked. Please try again."); return false;
-    }
+    if (previousOut && Date.parse(previousOut) === Date.parse(nextOutIso)) return true;
     if (uid === actor.id && approvalPolicy?.trim_hours_requires_approval) {
       if (!Array.isArray(store.approvals)) store.approvals = [];
       if ((store.approvals as LeaveRequest[]).some((row) => row.type === "Trim Hours" && row.uid === uid && row.fromAt === inLog.time && row.status === "Pending")) {
@@ -8908,12 +8908,6 @@ export default function Home() {
     const store = parseStore("larsaStaffV8");
     if (!store || !Array.isArray(store.logs)) { notify("Attendance records are still loading."); return false; }
     const logs = store.logs as ClockLog[];
-    const inAt = Date.parse(attendanceWallDateTimeUtc(newIn, ATTENDANCE_TIME_ZONE));
-    const outAt = newOut ? Date.parse(attendanceWallDateTimeUtc(newOut, ATTENDANCE_TIME_ZONE)) : null;
-    if (!Number.isFinite(inAt)) { notify("Enter a valid clock-in time."); return false; }
-    if (inAt > serverNowMs()) { notify("Clock-in cannot be in the future."); return false; }
-    if (outAt !== null && (!Number.isFinite(outAt) || outAt <= inAt)) { notify("Clock-out has to be after clock-in."); return false; }
-    if (outAt !== null && outAt > serverNowMs()) { notify("Clock-out cannot be in the future."); return false; }
     /* The one session that starts at clockIn, by the same pairing walk the
        session list makes (lib/attendance.mjs) — its own clock-out or none,
        plus the neighbouring-session boundaries. The old "first Out after
@@ -8922,6 +8916,15 @@ export default function Home() {
     const found = findPunchSession(logs, uid, clockIn);
     if (!found) { notify("That session could not be found."); return false; }
     const { inLog, outLog, prevTime, nextTime } = found;
+    const inIso = attendanceWallDateTimeUtc(newIn, ATTENDANCE_TIME_ZONE, inLog.time);
+    const outIso = newOut ? attendanceWallDateTimeUtc(newOut, ATTENDANCE_TIME_ZONE, outLog?.time) : outLog?.time || null;
+    const inAt = Date.parse(inIso);
+    const outAt = outIso === null ? null : Date.parse(outIso);
+    if (!Number.isFinite(inAt)) { notify("Enter a valid clock-in time."); return false; }
+    if (inAt > serverNowMs()) { notify("Clock-in cannot be in the future."); return false; }
+    if (outAt !== null && (!Number.isFinite(outAt) || outAt <= inAt)) { notify("Clock-out has to be after clock-in."); return false; }
+    if (outAt !== null && outAt > serverNowMs()) { notify("Clock-out cannot be in the future."); return false; }
+    if (inIso === inLog.time && outIso === (outLog?.time || null)) return true;
     /* A correction may move either punch in either direction, but never
        across a NEIGHBOURING session — that would splice two sessions into
        one and re-pair every punch after it. */
@@ -8933,22 +8936,34 @@ export default function Home() {
       notify("That clock-out would run into the next session. Pick an earlier time.");
       return false;
     }
+    if (nextTime !== null && inAt >= nextTime) {
+      notify("That clock-in would run into the next session. Pick an earlier time.");
+      return false;
+    }
+    const proposedIn = { ...inLog, time: inIso };
+    const proposedOut = outIso ? { ...outLog, uid, status: "Out", time: outIso } : null;
+    if (!preservesPunchPairing(logs, uid, found, { inLog: proposedIn, outLog: proposedOut })) {
+      notify("Those times would change how a neighbouring shift is paired. Pick times within this session's boundaries.");
+      return false;
+    }
     const previous = { clockIn: inLog.time || clockIn, clockOut: outLog?.time || null };
     const stamp = `Fixed by ${actor.name} on ${new Date().toLocaleDateString(undefined, { timeZone: ATTENDANCE_TIME_ZONE })}`;
-    inLog.time = new Date(inAt).toISOString();
-    inLog.lastSeen = inLog.time;
-    inLog.note = inLog.note ? `${inLog.note} · ${stamp}` : stamp;
-    inLog.touchedAt = serverNowIso();
-    if (outLog && outAt !== null) {
-      outLog.time = new Date(outAt).toISOString();
+    if (inIso !== inLog.time) {
+      inLog.time = inIso;
+      inLog.lastSeen = inIso;
+      inLog.note = inLog.note ? `${inLog.note} · ${stamp}` : stamp;
+      inLog.touchedAt = serverNowIso();
+    }
+    if (outLog && outIso && outIso !== outLog.time) {
+      outLog.time = outIso;
       outLog.lastSeen = outLog.time;
       outLog.note = outLog.note ? `${outLog.note} · ${stamp}` : stamp;
       outLog.touchedAt = serverNowIso();
-    } else if (!outLog && outAt !== null) {
+    } else if (!outLog && outIso) {
       logs.push({
         id: `l${uid}${Date.now()}${Math.random()}`, uid, type: inLog.type || "Office", status: "Out",
-        time: new Date(outAt).toISOString(), active: false,
-        lastSeen: new Date(outAt).toISOString(), note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
+        time: outIso, active: false,
+        lastSeen: outIso, note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
       });
       inLog.active = false;
     }
@@ -8957,7 +8972,7 @@ export default function Home() {
         previousClockIn: previous.clockIn,
         previousClockOut: previous.clockOut,
         newClockIn: inLog.time,
-        newClockOut: outAt !== null ? new Date(outAt).toISOString() : previous.clockOut,
+        newClockOut: outIso,
       });
     localStorage.setItem("larsaStaffV8", JSON.stringify(store));
     pushSyncedKeyNow("larsaStaffV8");
@@ -8984,20 +8999,20 @@ export default function Home() {
       notify("That employee is outside your data scope.");
       return false;
     }
-    const at = (time: string) => new Date(`${date}T${time}:00`);
-    const inDate = at(from); const outDate = at(to);
-    if (!date || Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) { notify("Enter a valid date and times."); return false; }
-    if (outDate.getTime() <= inDate.getTime()) { notify("Clock-out has to be after clock-in."); return false; }
-    if (outDate.getTime() > Date.now()) { notify("The session cannot end in the future."); return false; }
     const store = parseStore("larsaStaffV8");
     if (!store) { notify("Attendance records are still loading."); return false; }
+    const fromAt = attendanceWallTimeUtc(date, from, ATTENDANCE_TIME_ZONE);
+    const toDate = to < from ? attendanceDateOffset(date, 1) : date;
+    const toAt = attendanceWallTimeUtc(toDate, to, ATTENDANCE_TIME_ZONE);
+    const plan = planAttendanceCorrection({ id: "", uid, type: "Missed Clock", fromAt, toAt }, store.logs, serverNowMs());
+    if (!plan.ok) { notify(plan.reason); return false; }
     if (!Array.isArray(store.logs)) store.logs = [];
     const stamp = `Manual entry by ${actor.name}`;
-    const pair: [string, Date][] = [["In", inDate], ["Out", outDate]];
+    const pair = [["In", plan.start], ["Out", plan.end]];
     pair.forEach(([status, when], position) => {
       (store.logs as ClockLog[]).push({
         id: `l${Date.now()}${position}`, uid, type: mode || "Office", status,
-        time: when.toISOString(), active: false, lastSeen: when.toISOString(),
+        time: when, active: false, lastSeen: when,
         note: stamp, clockedBy: actor.name, touchedAt: serverNowIso(),
       });
     });
@@ -9352,6 +9367,7 @@ export default function Home() {
     const actor = sessionUserRef.current;
     if (!actor) return false;
     const approvalPolicy = await attendanceApprovalPolicy();
+    if (sessionUserRef.current?.id !== actor.id) return false;
     if (!approvalPolicy) { notify("Approval settings could not be checked. Please try again."); return false; }
     const store = parseStore("larsaStaffV8");
     if (!store) { notify("Requests are still loading. Please try again."); return false; }
@@ -9786,8 +9802,8 @@ export default function Home() {
       notify("Revision needs a date and both times."); return false;
     }
     const endDate = patch.to < patch.from ? attendanceDateOffset(patch.date, 1) : patch.date;
-    const fromAt = attendanceWallTimeUtc(patch.date, patch.from, ATTENDANCE_TIME_ZONE);
-    const toAt = attendanceWallTimeUtc(endDate, patch.to, ATTENDANCE_TIME_ZONE);
+    const fromAt = attendanceWallDateTimeUtc(`${patch.date}T${patch.from}`, ATTENDANCE_TIME_ZONE, record.fromAt);
+    const toAt = attendanceWallDateTimeUtc(`${endDate}T${patch.to}`, ATTENDANCE_TIME_ZONE, record.toAt);
     const revised: LeaveRequest = {
       ...record,
       date: patch.date,
@@ -9799,31 +9815,27 @@ export default function Home() {
     };
     const plan = planAttendanceCorrection(revised, store.logs, serverNowMs());
     if (!plan.ok) { notify(plan.reason); return false; }
-    const isBreak = record.type === "Missed Break";
-    const replacement: ClockLog[] = [
-      {
-        id: `correction:${record.id}:in`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
-        status: isBreak ? "Break Start" : "In", time: plan.start, lastSeen: plan.start,
-        note: `${record.reviewOnly ? "Lead-revised hours · flagged for review" : "Pending review correction"} (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
-        touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
-      },
-      {
-        id: `correction:${record.id}:out`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
-        status: isBreak ? "Break End" : "Out", time: plan.end, lastSeen: plan.end,
-        note: `${record.reviewOnly ? "Lead-revised hours · flagged for review" : "Pending review correction"} (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
-        touchedAt: serverNowIso(), correctionId: record.id, provisionalReview: true,
-      },
-    ];
-    store.logs = [
-      ...(Array.isArray(store.logs) ? store.logs as ClockLog[] : []).filter((log) => log.correctionId !== record.id),
-      ...replacement,
-    ];
     const stamp = serverNowIso();
+    const counted = Boolean(record.materialised || record.materialized);
+    if (counted && (fromAt !== record.fromAt || toAt !== record.toAt)) {
+      const isBreak = record.type === "Missed Break";
+      const punches = [
+        { suffix: "in", status: isBreak ? "Break Start" : "In", time: plan.start },
+        { suffix: "out", status: isBreak ? "Break End" : "Out", time: plan.end },
+      ];
+      const replacement: ClockLog[] = punches.map(({ suffix, status, time }) => ({
+        id: `correction:${record.id}:${suffix}`, uid: record.uid, type: isBreak ? "Break" : (record.requestType || "Office"),
+        status, time, lastSeen: time,
+        note: `Revised attendance correction (${record.type}) · ${revised.reason || ""}`, clockedBy: actor.id,
+        touchedAt: stamp, correctionId: record.id, provisionalReview: true,
+      }));
+      store.logs = [
+        ...(Array.isArray(store.logs) ? store.logs as ClockLog[] : []).filter((log) => log?.correctionId !== record.id),
+        ...replacement,
+      ];
+    }
     (store.approvals as LeaveRequest[])[index] = {
       ...revised,
-      materialised: true,
-      materialized: true,
-      provisional: true,
       history: [...(record.history || []), {
         by: actor.name,
         action: "Revised",
@@ -9839,11 +9851,11 @@ export default function Home() {
       raiseNotification({
         event: "clock.correction",
         title: `${actor.name} revised your attendance correction`,
-        body: `${patch.date} · ${patch.from}–${patch.to}. The revised hours are counted now${record.reviewOnly ? "; the review flag remains open" : " while review continues"}.`,
+        body: `${patch.date} · ${patch.from}-${patch.to}. ${counted ? "The revised hours are counted while review continues." : "The revised hours will count after approval."}`,
         itemId: "my-requests", fromName: actor.name, recipients: [requester],
       });
     }
-    notify("Correction revised. The updated time is counted provisionally and remains in review.");
+    notify(counted ? "Correction revised. The updated time is counted while review continues." : "Correction revised. The updated time is waiting for approval.");
     return true;
   }, [notify, refreshStaffEngine]);
 
@@ -10921,8 +10933,11 @@ export default function Home() {
   const attendanceMinute = Math.floor(serverNowMs() / 60_000);
   const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers, attendanceMinute]);
   const presenceRows = useMemo(() => buildPresenceRoster(
-    accessUsers, Array.isArray(staffStore?.logs) ? staffStore.logs as ClockLog[] : [], clockSessions, modeTone,
-  ), [accessUsers, staffStore, clockSessions]);
+    accessUsers, clockSessions, modeTone,
+  ), [accessUsers, clockSessions]);
+  const presenceSchedule = staffStore?.schedule;
+  const scheduledForPresence = useMemo(() => scheduledPresenceUsers(presenceSchedule, attendanceMinute * 60_000),
+    [presenceSchedule, attendanceMinute]);
   clockSessionsRef.current = clockSessions;
   const accountingSnapshot = useMemo(
     () => (hydrated
@@ -11787,9 +11802,9 @@ export default function Home() {
             />
           </NativePanel>
           <NativePanel active={active.native} view="orgStructure">
-            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
+            <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} presence={presenceRows} scheduledToday={scheduledForPresence} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
           </NativePanel><NativePanel active={active.native} view="platformSettings"><PlatformSettings viewer={sessionUser} users={accessUsers} /></NativePanel><NativePanel active={active.native} view="presence">
-            <LivePresence viewer={sessionUser} presence={presenceRows} store={staffStore} go={goToItem} />
+            <LivePresence viewer={sessionUser} presence={presenceRows} scheduledToday={scheduledForPresence} go={goToItem} />
           </NativePanel>
           <NativePanel active={active.native} view="settings">
             <MySettings
@@ -11868,6 +11883,7 @@ export default function Home() {
               users={accessUsers}
               commissions={accountingSnapshot.commissions}
               payroll={accountingSnapshot.payroll}
+              accountingRate={accountingSnapshot.rate}
             />
           </NativePanel>
           <NativePanel active={active.native} view="payrollPortal">
@@ -11877,7 +11893,7 @@ export default function Home() {
             <MyPay viewer={sessionUser} active={active.native === "myPay"} />
           </NativePanel>
           <NativePanel active={active.native} view="constructionFinancials">
-            <ConstructionFinancials snapshot={accountingSnapshot} viewer={sessionUser} />
+            <ConstructionFinancials snapshot={accountingSnapshot} viewer={sessionUser} refreshRevision={financialsRefreshRevision} />
           </NativePanel>
           <NativePanel active={active.native} view="projects">
             <ProjectPortal
@@ -12102,11 +12118,13 @@ export default function Home() {
 }
 
 function EngineeringManagementPortal({
-  viewer, users, sessions, rows, targets, go, onSaved, openTab,
+  viewer, users, sessions, presence, scheduledToday, rows, targets, go, onSaved, openTab,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
   sessions: ClockSession[];
+  presence: PresenceEntry<StaffUser>[];
+  scheduledToday: ReadonlySet<string>;
   rows: PerformanceRow[];
   targets: Record<string, number>;
   go: (id: string) => void;
@@ -12205,7 +12223,7 @@ function EngineeringManagementPortal({
         {manages && <button type="button" role="tab" aria-selected={tab === "performance"} className={tab === "performance" ? "active" : ""} onClick={() => setTab("performance")}>Performance</button>}
         {manages && <button type="button" onClick={() => go("my-requests")}>Leave & Requests</button>}
       </div>
-      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} sessions={sessions} toneOf={modeTone} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}
+      {tab === "dashboard" && <HierarchyDashboard viewer={viewer} users={users} summaries={summaries} presence={presence} scheduledToday={scheduledToday} periodLabel={from + " to " + to} from={from} to={to} onPeriod={setPeriod} onFrom={setFrom} onTo={setTo} />}
       {tab === "organization" && <OrgStructure2 viewer={viewer} users={users} onSaved={onSaved} />}
       {manages && (tab === "time" || tab === "performance") && <>
         <div className="period-presets" aria-label="Team report period">
@@ -13157,19 +13175,19 @@ function PerformanceCenter({
   const [lockNote, setLockNote] = useState("");
   const visibleUsers = scopedUsers(viewer, users);
   const visibleIds = new Set(visibleUsers.map((user) => user.id));
+  const visibleRows = rows.filter((row) => visibleIds.has(rowUserId(row, users)));
   const weeks = [...new Set([
     isoWeekLabel(),
-    ...rows.map((row) => {
+    ...visibleRows.map((row) => {
       if (row.Week) return String(row.Week);
       const date = rowDate(row);
-      return date ? isoWeekLabel(new Date(`${date}T12:00:00`)) : "";
+      return date ? weekOfDate(date) : "";
     }).filter(Boolean),
   ])].sort().reverse();
-  const weekRows = rows.filter((row) => {
-    const userId = rowUserId(row, users);
+  const weekRows = visibleRows.filter((row) => {
     const date = rowDate(row);
-    const rowWeek = String(row.Week || (date ? isoWeekLabel(new Date(`${date}T12:00:00`)) : ""));
-    return visibleIds.has(userId) && rowWeek === week;
+    const rowWeek = String(row.Week || (date ? weekOfDate(date) : ""));
+    return rowWeek === week;
   });
   const summaries = visibleUsers.map((user) => {
     const employeeRows = weekRows.filter((row) => rowUserId(row, users) === user.id);
@@ -15535,11 +15553,13 @@ function SalesCommissions({
   users,
   commissions,
   payroll,
+  accountingRate,
 }: {
   viewer: StaffUser | null;
   users: StaffUser[];
   commissions: CommissionRow[];
   payroll: PayrollRow[];
+  accountingRate: number;
 }) {
   const today = dateInputValue(new Date());
   const start = new Date();
@@ -15562,7 +15582,7 @@ function SalesCommissions({
       || (onlyPaid === "paid" && row.paid > 0)));
   const periodPayroll = payroll.filter((row) =>
     withinDates(row.payDate, from, to)
-    && !["Void", "Rejected"].includes(row.status)
+    && !["Void", "Rejected", "Reversed"].includes(row.status)
     && (wideScope || scopeNames.has(row.employee.toLowerCase())));
 
   // Every person who appears on either side of the ledger for this period.
@@ -15577,7 +15597,7 @@ function SalesCommissions({
     const pay = periodPayroll.filter((row) => row.employee.toLowerCase() === key);
     const due = mine.reduce((sum, row) => sum + row.due, 0);
     const paid = mine.reduce((sum, row) => sum + row.paid, 0);
-    const salary = pay.reduce((sum, row) => sum + row.totalCompanyCost, 0);
+    const salary = payrollCompanyCostUsd(pay, accountingRate);
     const staff = users.find((person) => person.name.toLowerCase() === key);
     return {
       name, staff, deals: mine.length, due, paid, outstanding: due - paid,
@@ -17764,46 +17784,28 @@ function ViewerAccountsPanel({
 }
 
 function LivePresence({
-  viewer, presence, store, go,
+  viewer, presence, scheduledToday, go,
 }: {
   viewer: StaffUser | null;
   presence: PresenceEntry<StaffUser>[];
-  store: Record<string, unknown> | null;
+  scheduledToday: ReadonlySet<string>;
   go: (id: string) => void;
 }) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((value) => value + 1), 30000);
-    return () => clearInterval(timer);
-  }, []);
-  void tick;
-
-  const todayName = WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
-  const schedule = (store?.schedule || {}) as Record<string, Record<string, { code?: string }[]>>;
-
-  const state = presence.map((row) => {
-    const planned = (schedule[row.user.id]?.[todayName] || [])
-      .map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
-    return { ...row, planned };
-  });
-
-  const GROUPS_LIVE = [
-    { id: "office", label: "In the office", tone: "office", hint: "Clocked in from the office" },
-    { id: "online", label: "Online", tone: "online", hint: "Working remotely or on USA hours" },
-    { id: "site", label: "On site", tone: "site", hint: "Working on a project site" },
-    { id: "off", label: "Not clocked in", tone: "off", hint: "No open session right now" },
-  ];
-  const counts = Object.fromEntries(GROUPS_LIVE.map((group) => [group.id, state.filter((row) => row.tone === group.id).length]));
-  const activeNow = state.filter((row) => row.isIn).length;
-  const expectedToday = state.filter((row) => !["OFF", "STB"].includes(row.planned)).length;
-  const renderPresenceGroup = (group: (typeof GROUPS_LIVE)[number]) => {
-    const rows = state.filter((row) => row.tone === group.id)
+  const labels: Record<PresenceTone, string> = {
+    office: "In the office", online: "Online", site: "On site", off: "Not clocked in", other: "Location not set",
+  };
+  const groupOrder: PresenceTone[] = ["office", "online", "site", "off", "other"];
+  const counts = Object.fromEntries(groupOrder.map((tone) => [tone, presence.filter((row) => row.tone === tone).length]));
+  const activeNow = presence.filter((row) => row.isIn).length;
+  const expectedToday = presence.filter((row) => scheduledToday.has(row.user.id)).length;
+  const renderPresenceGroup = (tone: PresenceTone) => {
+    const rows = presence.filter((row) => row.tone === tone)
       .sort((a, b) => a.user.name.localeCompare(b.user.name));
     return (
-      <article className="report-panel presence-column" key={group.id}>
+      <article className="report-panel presence-column" key={tone}>
         <div className="section-head">
-          <h3>{group.label}</h3>
-          <span className={`presence-count tone-${group.tone}`}>{rows.length}</span>
+          <h3>{labels[tone]}</h3>
+          <span className={`presence-count tone-${tone}`}>{rows.length}</span>
         </div>
         <div className="presence-list">
           {rows.map((row) => (
@@ -17813,7 +17815,7 @@ function LivePresence({
                 <b>{row.user.name}{row.user.id === viewer?.id ? " (you)" : ""}</b>
                 <small>{row.user.department || row.user.role || ""}</small>
               </span>
-              <span className="presence-meta"><em>{row.stale ? "Open too long — needs correction" : group.id === "off" ? "Not clocked in" : group.label.replace(/^In the |^On /, "")}</em></span>
+              <span className="presence-meta"><em>{row.stale ? "Open too long - needs correction" : labels[tone]}</em></span>
             </div>
           ))}
           {!rows.length && <div className="empty compact">Nobody right now.</div>}
@@ -17837,21 +17839,23 @@ function LivePresence({
       </section>
 
       <section className="presence-summary">
-        {GROUPS_LIVE.map((group) => (
-          <article className={`presence-stat tone-${group.tone}`} key={group.id}>
+        {groupOrder.filter((tone) => tone !== "other" || counts.other > 0).map((tone) => (
+          <article className={`presence-stat tone-${tone}`} key={tone}>
             <i aria-hidden="true" />
-            <div><small>{group.label}</small><b>{counts[group.id] || 0}</b></div>
+            <div><small>{labels[tone]}</small><b>{counts[tone]}</b></div>
           </article>
         ))}
         <article className="presence-stat tone-total">
           <i aria-hidden="true" />
-          <div><small>Active now</small><b>{activeNow} / {expectedToday}</b></div>
+          <div><small>Active now</small><b>{activeNow}</b><small>{expectedToday} scheduled today</small></div>
         </article>
       </section>
 
       <section className="presence-groups">
-        <div className="presence-stack">{renderPresenceGroup(GROUPS_LIVE[0])}{renderPresenceGroup(GROUPS_LIVE[2])}</div>
-        <div className="presence-stack">{renderPresenceGroup(GROUPS_LIVE[1])}{renderPresenceGroup(GROUPS_LIVE[3])}</div>
+        <div className="presence-stack">{renderPresenceGroup("office")}{renderPresenceGroup("site")}</div>
+        <div className="presence-stack">
+          {renderPresenceGroup("online")}{renderPresenceGroup("off")}{counts.other > 0 && renderPresenceGroup("other")}
+        </div>
       </section>
     </div>
   );
@@ -18097,14 +18101,21 @@ function RequestsCentre({
                             </button>
                             {["Missed Clock", "Missed Break", "Extra Hours"].includes(row.type) && (
                               <button type="button" onClick={async () => {
-                                const date = (await dialog.prompt(`Revised date (YYYY-MM-DD). Leave blank to keep ${row.date || "the current date"}:`)) || row.date || "";
-                                const from = (await dialog.prompt(`Revised start time (HH:MM). Leave blank to keep ${row.from || "the current time"}:`)) || row.from || "";
-                                const to = (await dialog.prompt(`Revised end time (HH:MM). Leave blank to keep ${row.to || "the current time"}:`)) || row.to || "";
-                                const reason = (await dialog.prompt("Revision note (optional; leave blank to keep the employee's reason):")) || row.reason || "";
-                                revise(row.id, { date, from, to, reason });
+                                const date = await dialog.prompt({ message: "Revised date (YYYY-MM-DD)", defaultValue: row.date });
+                                if (date === null) return;
+                                const from = await dialog.prompt({ message: "Revised start time (HH:MM)", defaultValue: row.from });
+                                if (from === null) return;
+                                const to = await dialog.prompt({ message: "Revised end time (HH:MM)", defaultValue: row.to });
+                                if (to === null) return;
+                                const reason = await dialog.prompt({ message: "Revision note", defaultValue: row.reason });
+                                if (reason === null) return;
+                                revise(row.id, { date: date.trim(), from: from.trim(), to: to.trim(), reason });
                               }}>Revise</button>
                             )}
-                            <button type="button" onClick={async () => decide(row.id, "Rejected", (await dialog.prompt("Reason for rejecting (optional):")) || "")}>Reject</button>
+                            <button type="button" onClick={async () => {
+                              const reason = await dialog.prompt({ title: "Reject request", message: "Reason for rejecting (optional)", confirmLabel: "Reject request", danger: true });
+                              if (reason !== null) decide(row.id, "Rejected", reason);
+                            }}>Reject</button>
                           </>
                         );
                       })()}
@@ -18648,15 +18659,18 @@ function CorrectionsCentre({
                 <th>Employee</th><th>Date</th><th>Mode</th><th>Clock in → out</th><th>Hours</th><th>Fix</th>
               </tr></thead><tbody>
                 {timeRows.map((session) => {
-                  const key = `${session.uid}|${session.clockIn}`;
+                  const key = `${session.uid}|${session.clockIn}|${session.date}`;
                   const editing = sessionEditKey === key;
+                  const missingClockOut = session.ongoing || session.unclosed;
                   return (
                     <tr key={key}>
                       <td><b>{session.employee}</b></td>
                       <td>{session.date}</td>
                       <td>{session.mode}</td>
                       <td>
-                        {attendanceDateTime(session.clockIn)} → {session.open ? "still clocked in" : attendanceDateTime(session.clockOut)}
+                        {attendanceDateTime(session.clockIn)} → {missingClockOut
+                          ? session.stale || session.unclosed ? "missing clock-out" : "still clocked in"
+                          : attendanceDateTime(session.clockOut)}
                         {editing && (
                           <div className="settings-fields" style={{ marginTop: 8 }}>
                             <label>Clock in<input type="datetime-local" value={sessionDraft.in} max={toLocalInput(new Date().toISOString())} onChange={(event) => setSessionDraft({ ...sessionDraft, in: event.target.value })} /></label>
@@ -18677,7 +18691,7 @@ function CorrectionsCentre({
                           <>
                             {canEdit && (
                               <button type="button" className="btn small" onClick={() => {
-                                setSessionDraft({ in: toLocalInput(session.clockIn), out: session.open ? "" : toLocalInput(session.clockOut) });
+                                setSessionDraft({ in: toLocalInput(session.clockIn), out: missingClockOut ? "" : toLocalInput(session.clockOut) });
                                 setSessionEditKey(key);
                               }}>Fix times</button>
                             )}
@@ -18721,7 +18735,7 @@ function CorrectionsCentre({
                   <Plus size={15} /> Add session
                 </button>
               </div>
-              <p className="ps-note">Added sessions are stamped as a manual entry with your name, exactly like an approved correction.</p>
+              <p className="ps-note">Enter U.S. Central times. An earlier end time falls on the next day. The entry is stamped with your name.</p>
             </section>
           )}
         </>
@@ -19926,12 +19940,15 @@ function QuickClock({
     return Array.isArray(raw) ? raw as ClockLog[] : [];
   }, [store]);
   const onBreak = useMemo(() => {
-    if (!user) return null;
+    const activeIn = Date.parse(summary.openClock?.clockIn || "");
+    if (!user || !Number.isFinite(activeIn)) return null;
     const last = logs
-      .filter((log) => log.uid === user.id && ["In", "Out", "Break Start", "Break End"].includes(log.status || ""))
-      .sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime())[0];
+      .filter((log) => log.uid === user.id && !log.correctionId && (log.status === "Break Start" || log.status === "Break End")
+        && Date.parse(log.time || "") >= activeIn)
+      .sort((left, right) => Date.parse(right.time || "") - Date.parse(left.time || "")
+        || Number(right.status === "Break Start") - Number(left.status === "Break Start"))[0];
     return last?.status === "Break Start" ? last : null;
-  }, [logs, user]);
+  }, [logs, summary.openClock?.clockIn, user]);
 
   const mayAdjustHours = Boolean(user && (() => {
     const item = ITEMS.find((row) => row.id === "staff-clock");
@@ -20089,7 +20106,7 @@ function QuickClock({
   const longShifts = useMemo(() => {
     const unique = new Map<string, ClockSession>();
     sessions.forEach((session) => {
-      if (session.uid !== user?.id || session.open || session.unclosed) return;
+      if (session.uid !== user?.id || session.ongoing || session.unclosed) return;
       if (!needsLongHoursConfirmation(session.clockIn, session.clockOut)) return;
       const key = `${session.uid}|${session.clockIn}`;
       if (!unique.has(key)) unique.set(key, session);
@@ -20116,8 +20133,8 @@ function QuickClock({
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
   const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
-  const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out"))
-    .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || ""))[0];
+  const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out") && Number.isFinite(Date.parse(log.time || "")))
+    .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || "") || Number(b.status === "In") - Number(a.status === "In"))[0];
   const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
@@ -20415,22 +20432,19 @@ function QuickClock({
             <ClipboardCheck size={18} />
             <span>
               <b>Add hours or fix a missed clock</b>
-              <small>Choose a date and time. Added hours count immediately and your lead gets a review flag.</small>
+              <small>Enter the time you missed. Your workspace settings determine whether approval is required.</small>
             </span>
           </button>
         )}
 
-        {/* Both changes save immediately; self-added hours also flag a lead. */}
         {(mayTrimOthers || maySelfTrim) && !showCorrection && (
           <button type="button" className="correction-open trim-open" onClick={() => setShowTrim((open) => !open)}>
             <Scissors size={18} />
             <span>
               <b>{mayAdjustHours ? "Trim or remove recorded hours" : mayTrimOthers ? "Trim recorded hours" : "Trim your recorded hours"}</b>
-              <small>{mayAdjustHours
-                ? "Close a forgotten clock-out or delete a session — applies straight away, no approval"
-                : mayTrimOthers
-                  ? "Close a forgotten clock-out or shorten a session for anyone you manage — applies straight away, and only ever shorter"
-                  : "Close a forgotten clock-out or shorten a session — applies straight away, your own records only, and only ever shorter"}</small>
+              <small>{mayTrimOthers
+                ? "Close or shorten a session for someone you manage. Changes to your own hours follow your approval settings."
+                : "Close or shorten one of your sessions. Your workspace settings determine whether approval is required."}</small>
             </span>
           </button>
         )}
@@ -20562,8 +20576,10 @@ function QuickClock({
                     <div className="session-edit">
                       <input type="datetime-local" value={trimValue} max={toLocalInput(new Date().toISOString())} onChange={(event) => setTrimValue(event.target.value)} aria-label="New clock-out time" />
                       <button type="button" className="primary" onClick={async () => {
-                        const corrected = attendanceWallDateTimeUtc(trimValue, trimTimeZone);
-                        if (corrected && await trimSession(session.uid, session.clockIn, corrected)) {
+                        const savedClockOut = session.ongoing || session.unclosed ? undefined : session.clockOut;
+                        const corrected = attendanceWallDateTimeUtc(trimValue, trimTimeZone, savedClockOut);
+                        if (!corrected) { notify("Enter a valid clock-out time in the selected timezone."); return; }
+                        if (await trimSession(session.uid, session.clockIn, corrected)) {
                           setTrimming(null);
                         }
                       }}>Save</button>
@@ -20614,7 +20630,7 @@ function QuickClock({
               </button>
             )}
             <p className="panel-footnote">
-              Trim only accepts an earlier clock-out, so this can reduce recorded time but never create it. Use Add hours above for time the clock missed; those hours count immediately and are flagged for your lead. Every trim is recorded in the audit trail with the before and after times.
+              Use Add hours for time the clock missed. The audit trail records each applied trim with the previous and new clock-out times.
             </p>
           </div>
         )}

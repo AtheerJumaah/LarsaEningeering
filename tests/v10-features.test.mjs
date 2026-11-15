@@ -311,11 +311,12 @@ test("commission and salary are totalled together per person", () => {
   // It reads the engine's own collections; nothing is written back.
   assert.match(page, /commissions: CommissionRow\[\]/);
   assert.match(page, /payroll: PayrollRow\[\]/);
+  assert.match(page, /const salary = payrollCompanyCostUsd\(pay, accountingRate\)/);
   assert.match(page, /total: salary \+ due/);
   // Pay is sensitive, so it follows the payroll permission.
   assert.match(page, /const payrollItem = ITEMS\.find\(\(row\) => row\.id === "acc-payroll"\);/);
-  // Voided payroll must never inflate the cost of a person.
-  assert.match(page, /!\["Void", "Rejected"\]\.includes\(row\.status\)/);
+  // Inactive payroll must never inflate the cost of a person.
+  assert.match(page, /!\["Void", "Rejected", "Reversed"\]\.includes\(row\.status\)/);
 });
 
 test("the new page is routed to the right module", () => {
@@ -371,7 +372,7 @@ test("nothing blocks a type-checked production build", () => {
   // Each of these stopped `next build` dead, and none of them showed up in the
   // Cloudflare build, so they would have surfaced only on the new host.
   assert.match(page, /function hasItemPermission\(user: StaffUser, item: Item, action: PermissionAction = "view"\): boolean/);
-  assert.match(page, /const stillOpen = open as ClockLog \| null;/);
+  assert.match(page, /const stillOpen = lastPair\?\.kind === "open" \? lastPair\.inLog : null;/);
   assert.match(page, /interface Window \{\s*\n\s*eval\(code: string\): unknown;/);
   assert.match(page, /typeof raw === "string" \? JSON\.parse\(raw\) : \[\]/);
   assert.match(page, /const user: StaffUser \| null = parsed\?\.user \|\| parsed;/);
@@ -486,7 +487,7 @@ test("Vercel gets its own build target that leaves next.config.ts untouched", ()
   const config = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
   /* The engine-integrity check was added in front deliberately: a build that
      would ship a broken engine file should fail before Next runs. */
-  assert.equal(pkg.scripts["build:vercel"], "node scripts/check-engines.mjs && next build");
+  assert.equal(pkg.scripts["build:vercel"], "node scripts/write-release.mjs && node scripts/check-engines.mjs && next build");
   assert.ok(pkg.dependencies["@supabase/supabase-js"], "missing the Supabase client dependency");
   // Vercel wants the same unmodified output as the Cloudflare default (no
   // `output` override) — this documents that so the two targets don't drift.

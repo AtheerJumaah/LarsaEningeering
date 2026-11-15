@@ -79,7 +79,7 @@ test("the Larsa refund rule is implemented verbatim — never a proportional sub
   assert.match(migrations, /Unused Net Funding/);
   assert.match(migrations, /Refundable Consultancy\s+=|refundable_fee/i);
   assert.match(migrations, /retained_fee/);
-  assert.match(core, /retained_fee_iqd: r2\(initialFee - refundableFee(?: - excessFee)?\)/);
+  assert.match(core, /retained_fee_iqd: r2\(Math\.max\(initialFee - previouslyRefunded - refundableFee - excessFee, 0\)\)/);
   assert.match(core, /total_refund_iqd: r2\(want \+ refundableFee(?: \+ excessFee)?\)/);
 });
 
@@ -335,7 +335,7 @@ test("client construction funding is never Larsa revenue or company profit", () 
     "the app shell must not add client funding into income");
   assert.ok(!/net = income - cost/.test(page),
     "company profit must never be funding minus construction spending");
-  assert.match(page, /const larsaRevenue = fees \+ revenue/);
+  assert.match(page, /const larsaRevenue = feeRevenue \+ revenue/);
   assert.match(page, /const companyNet = larsaRevenue - companyExpenses/);
   assert.match(page, /Client fund control/);
   assert.match(page, /Larsa company accounting/);

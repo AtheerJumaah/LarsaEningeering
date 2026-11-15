@@ -44,6 +44,13 @@ test("USD 1,000 at 1,500 plus USD 1,000 at 1,600 equals IQD 3,100,000 historical
   // functions of (amount, currency, historical rate); no default appears here.
 });
 
+test("money rounding matches PostgreSQL at positive and negative half-cents", () => {
+  assert.equal(Core.round2(1.005), 1.01);
+  assert.equal(Core.round2(-1.005), -1.01);
+  assert.equal(Core.round2(1.00499), 1);
+  assert.equal(Core.snapshot(-0.015, "USD", 1500).amount_usd, -0.02);
+});
+
 test("fee hierarchy: platform 8% default → project → category → transaction override", () => {
   assert.equal(Core.resolveFeeRule(platform, { fee_inherit: true }, "funding").rate, 0.08);
   assert.equal(Core.resolveFeeRule(platform, { fee_inherit: true }, "funding").source, "platform_default");
@@ -58,6 +65,15 @@ test("fee hierarchy: platform 8% default → project → category → transactio
   const ov = Core.resolveFeeRule(platform, project, "funding", "Special", { method: "percentage", rate: 0.1 });
   assert.equal(ov.rate, 0.1);
   assert.equal(ov.source, "transaction_override");
+});
+
+test("a transaction override inherits category scope unless it supplies its own", () => {
+  const p = { fee_inherit: false, fee_basis: "expense_categories", fee_basis_categories: ["Concrete"] };
+  const rule = Core.resolveFeeRule(platform, p, "material", "Concrete", { method: "percentage", rate: 0.1 });
+  assert.equal(Core.feeEligible("material", "Concrete", rule), true);
+  assert.equal(Core.feeEligible("material", "Steel", rule), false);
+  const empty = Core.resolveFeeRule(platform, p, "material", "Concrete", { method: "percentage", basis_categories: [] });
+  assert.equal(Core.feeEligible("material", "Concrete", empty), false);
 });
 
 test("incremental fees: 10,000,000 → 800,000; +2,000,000 → only +160,000 (total 960,000)", () => {
@@ -110,6 +126,30 @@ test("partial refunds reverse only the relevant fee", () => {
   assert.equal(refund.refundable_fee_iqd, 80_000);
   assert.equal(refund.total_refund_iqd, 1_080_000);
   assert.equal(refund.partial, true);
+});
+
+test("prior posted fee refunds are deducted from the projected retained fee", () => {
+  const entry = { amount_iqd: 10_000_000, fee_iqd: 800_000, fee_rate: 0.08, fee_method: "percentage",
+    fee_treatment: "deduct_from_funding", currency: "IQD", exchange_rate: 1310 };
+  const posted = { kind: "refund", status: "posted", meta: { fee_refund_iqd: 80_000 } };
+  const refund = Core.computeRefund([entry], 7_000_000, null, 1_000_000, { txns: [posted] });
+  assert.equal(refund.refundable_fee_iqd, 96_000);
+  assert.equal(refund.retained_fee_iqd, 624_000);
+});
+
+test("posted manual refunds consume their original funding allocation", () => {
+  const entries = [
+    { id: "old", amount_iqd: 10_000_000, fee_iqd: 800_000, fee_rate: 0.08, currency: "IQD", exchange_rate: 1500 },
+    { id: "new", amount_iqd: 5_000_000, fee_iqd: 250_000, fee_rate: 0.05, currency: "IQD", exchange_rate: 1600 },
+  ];
+  const refund = Core.computeRefund(entries, 4_000_000, null, 2_000_000, {
+    txns: [{ id: "r1", kind: "refund", status: "posted", meta: { fee_refund_iqd: 100_000 } }],
+    refunds: [{ refund_txn_id: "r1", status: "posted",
+      allocations: [{ funding_txn_id: "new", allocated_unused_iqd: 2_000_000 }] }],
+  });
+  assert.deepEqual(plain(refund.allocations.map(a => a.allocated_unused_iqd)), [5_200_000, 2_750_000]);
+  assert.equal(refund.refundable_fee_iqd, 553_500);
+  assert.equal(refund.retained_fee_iqd, 396_500);
 });
 
 test("multiple funding entries refund at EACH entry's snapshotted rate, FIFO", () => {
@@ -210,7 +250,39 @@ test("expense-based fees refund the unearned collected portion", () => {
   const refund = Core.computeRefund(entries, 2_000_000, null, 0, { fees, txns });
   assert.equal(refund.funding_based, false);
   assert.equal(refund.excess_fee_iqd, 800_000);
-  assert.equal(refund.total_refund_iqd, 8_576_000);
+  assert.equal(refund.refund_principal_iqd, 7_200_000);
+  assert.equal(refund.refundable_fee_iqd, 800_000);
+  assert.equal(refund.total_refund_iqd, 8_000_000);
+  assert.equal(refund.retained_fee_iqd, 0);
+
+  const alreadyPaid = { kind: "refund", status: "posted", meta: { fee_refund_iqd: 800_000 } };
+  const repeat = Core.computeRefund(entries, 2_000_000, null, 7_200_000, { fees, txns: [...txns, alreadyPaid] });
+  assert.equal(repeat.refundable_fee_iqd, 0);
+  assert.equal(repeat.total_refund_iqd, 0);
+});
+
+test("refund fee allocations cannot exceed the unreversed historical fee", () => {
+  const entry = { amount_iqd: 1000, fee_iqd: 80, fee_rate: 0.08, reversed_fee_iqd: 75,
+    fee_treatment: "deduct_from_funding", currency: "IQD", exchange_rate: 1500 };
+  const refund = Core.computeRefund([entry], 0, null, 0);
+  assert.equal(refund.refundable_fee_iqd, 5);
+  assert.equal(Core.computeRefund([{ ...entry, fee_iqd: 0 }], 0, null, 0).refundable_fee_iqd, 0);
+});
+
+test("Larsa-borne project-expense fees do not reduce client cash in IQD or USD", () => {
+  const project = { id: "p", currency: "IQD" };
+  const txns = [
+    { id: "fund", project_id: "p", kind: "funding", status: "received", original_currency: "IQD",
+      amount_iqd: 10_000_000, amount_usd: 7_633.59 },
+    { id: "expense", project_id: "p", kind: "expense", status: "approved", payment_source: "Larsa Operating",
+      amount_iqd: 1_000_000, amount_usd: 763.36 },
+  ];
+  const fees = [{ project_id: "p", entry_type: "fee", status: "posted", treatment: "project_expense",
+    source_txn_id: "expense", fee_iqd: 80_000, fee_usd: 61.07 }];
+  const summary = Core.projectSummary(project, txns, fees, []);
+  assert.equal(summary.total_used_iqd, 0);
+  assert.equal(summary.total_used_usd, 0);
+  assert.equal(summary.remaining_unused_iqd, 10_000_000);
 });
 
 test("no-budget cost progress is Not Available (null), never contract value or funding", () => {
@@ -224,6 +296,9 @@ test("amounts in words for receipts — English and Arabic, both currencies", ()
   assert.equal(Core.numberToWordsEn(960_000), "Nine Hundred Sixty Thousand");
   assert.equal(Core.amountInWords(2_376_000, "IQD", "en"), "Two Million Three Hundred Seventy-Six Thousand Iraqi Dinars Only");
   assert.equal(Core.amountInWords(1_500.25, "USD", "en"), "One Thousand Five Hundred US Dollars and Twenty-Five Cents Only");
+  assert.equal(Core.amountInWords(1.995, "USD", "en"), "Two US Dollars Only");
+  assert.equal(Core.amountInWords(-1.005, "USD", "en"), "Minus One US Dollar and One Cent Only");
+  assert.equal(Core.numberToWordsEn(1e12), "One Trillion");
   assert.equal(Core.numberToWordsAr(2_000_000), "مليونان");
   assert.equal(Core.numberToWordsAr(800_000), "ثمانمائة ألف");
   assert.ok(Core.amountInWords(10_000_000, "IQD", "ar").includes("دينار عراقي"));

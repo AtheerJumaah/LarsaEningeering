@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import {isSuspiciousClosedSession, OPEN_SESSION_STALE_HOURS} from '../lib/attendance.mjs';
+import {isSuspiciousClosedSession, OPEN_SESSION_STALE_HOURS, pairPunchSessions, attendanceBreakSpans, planTrim} from '../lib/attendance.mjs';
 import {planAttendanceCorrection} from '../lib/attendance-corrections.mjs';
-import {ATTENDANCE_TIME_ZONE, splitAttendanceInterval} from '../lib/attendance-timezone.mjs';
+import {ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceWallTimeUtc, attendanceWallDateTimeUtc, splitAttendanceInterval} from '../lib/attendance-timezone.mjs';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 function runtime(path, client, seed = {}) {
@@ -222,15 +222,104 @@ test('native missed-break correction must belong to a recorded shift',()=>{
   assert.equal(planAttendanceCorrection({...request,toAt:'2026-10-12T17:10:00Z'},logs,now).ok,false);
 });
 
+test('adding hours cannot turn a stray clock-out into the new session clock-out', () => {
+  const logs = [{ uid: 'e', status: 'Out', time: '2026-10-12T15:00:00Z' }];
+  const request = { id: 'c', uid: 'e', type: 'Missed Clock', fromAt: '2026-10-12T14:00:00Z', toAt: '2026-10-12T16:00:00Z' };
+  const now = Date.parse('2026-10-12T18:00:00Z');
+  assert.equal(planAttendanceCorrection(request, logs, now).ok, false);
+  assert.equal(planAttendanceCorrection({ ...request, toAt: '2026-10-12T14:45:00Z' }, logs, now).ok, true);
+});
+
+test('revising an approval-required correction changes the request without posting attendance', () => {
+  const page = read('app/page.tsx');
+  const source = page.slice(page.indexOf('const reviseAttendanceRequest'), page.indexOf('const saveGrowthStore'));
+  const pending = { id: 'c', uid: 'e', status: 'Pending', type: 'Missed Clock', reviewOnly: false,
+    date: '2026-10-12', from: '09:00', to: '10:00', fromAt: '2026-10-12T14:00:47Z', toAt: '2026-10-12T15:00:31Z' };
+  const log = { uid: 'e', status: 'In', time: '2026-10-12T17:00:00Z' };
+  const store = { users: [{ id: 'e', name: 'Employee' }], logs: [log], approvals: [pending] };
+  const notices = [];
+  const context = vm.createContext({ useCallback: callback => callback,
+    sessionUserRef: { current: { id: 'lead', name: 'Lead' } }, ITEMS: [{ id: 'staff-approvals' }],
+    hasItemPermission: () => true, parseStore: () => store, effectiveOrg: () => ({}),
+    requestStage: () => ({ holder: 'lead' }), canActForApprovalHolder: () => true,
+    attendanceDateOffset, attendanceWallDateTimeUtc, ATTENDANCE_TIME_ZONE, planAttendanceCorrection,
+    serverNowMs: () => Date.parse('2026-10-12T18:00:00Z'), serverNowIso: () => '2026-10-12T18:00:00Z',
+    localStorage: { setItem() {} }, pushSyncedKeyNow() {}, refreshStaffEngine() {}, setStorageTick() {},
+    raiseNotification() {}, notify: message => notices.push(message),
+  });
+  const compiled = ts.transpileModule(source + '\nthis.revise = reviseAttendanceRequest;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInContext(compiled, context);
+  assert.equal(context.revise('c', { date: pending.date, from: pending.from, to: '10:30', reason: 'Corrected' }), true);
+  assert.deepEqual(store.logs, [log]);
+  assert.equal(store.approvals[0].status, 'Pending');
+  assert.equal(store.approvals[0].materialized, undefined);
+  assert.equal(store.approvals[0].fromAt, pending.fromAt);
+  assert.equal(store.approvals[0].toAt, '2026-10-12T15:30:00.000Z');
+  assert.match(notices.at(-1), /waiting for approval/);
+});
+
+test('a self-trim retains punches synced while it fetches the approval policy', async () => {
+  const page = read('app/page.tsx');
+  const start = page.indexOf('const trimSession = useCallback');
+  const source = page.slice(start, page.indexOf('/* Removes a session outright', start));
+  const user = { id: 'e', name: 'Employee' };
+  const logs = [{ uid: 'e', status: 'In', time: '2026-10-12T14:00:00Z' },
+    { uid: 'e', status: 'Out', time: '2026-10-12T16:00:00Z' }];
+  const synced = { uid: 'e', status: 'In', time: '2026-10-12T17:00:00Z' };
+  let saved = { users: [user], approvals: [], logs };
+  let release;
+  const context = vm.createContext({ useCallback: callback => callback,
+    sessionUserRef: { current: user }, ITEMS: [{ id: 'staff-clock' }], hasItemPermission: () => true,
+    accessUsers: [user], attendanceApprovalPolicy: () => new Promise(resolve => { release = resolve; }),
+    parseStore: () => structuredClone(saved), planTrim, attendanceDateKey, attendanceTime: value => value,
+    serverNowMs: () => Date.parse('2026-10-12T18:00:00Z'), serverNowIso: () => '2026-10-12T18:00:00Z',
+    ensureStoreApprovalFlows() {}, chainFor: () => [],
+    localStorage: { setItem: (_key, value) => { saved = JSON.parse(value); } },
+    pushSyncedKeyNow() {}, refreshStaffEngine() {}, setStorageTick() {}, raiseNotification() {}, notify() {},
+  });
+  const compiled = ts.transpileModule(source + '\nthis.trim = trimSession;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInContext(compiled, context);
+  const pending = context.trim('e', logs[0].time, '2026-10-12T15:00:00Z');
+  saved = { ...saved, logs: [...logs, synced] };
+  release({ trim_hours_requires_approval: true });
+  assert.equal(await pending, true);
+  assert.deepEqual(saved.logs, [...logs, synced]);
+  assert.equal(saved.approvals[0].type, 'Trim Hours');
+});
+
+test('manual entry uses the reporting zone and refuses overlap before writing saved punches',()=>{
+  const source=ts.createSourceFile('page.tsx',read('app/page.tsx'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let handler;
+  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(source)==='addClockSession')handler=node.initializer.getText(source);ts.forEachChild(node,visit)}
+  visit(source);
+  assert.ok(handler);
+  const now='2026-10-12T19:00:00Z';
+  const store={logs:[{uid:'e',status:'In',time:'2026-10-11T14:00:00.000Z'},{uid:'e',status:'Out',time:'2026-10-11T17:00:00.000Z'}]};
+  let saves=0;
+  const context=vm.createContext({Date,ATTENDANCE_TIME_ZONE,attendanceDateOffset,attendanceWallTimeUtc,planAttendanceCorrection,
+    useCallback:fn=>fn,sessionUserRef:{current:{id:'e',name:'Test'}},ITEMS:[{id:'admin-corrections'}],accessUsers:[{id:'e'}],hasItemPermission:()=>true,
+    parseStore:()=>store,serverNowMs:()=>Date.parse(now),serverNowIso:()=>now,notify(){},refreshStaffEngine(){},pushSyncedKeyNow(){},setStorageTick(){},
+    localStorage:{setItem(){saves++;}}});
+  vm.runInContext(ts.transpileModule('var addClockSession = '+handler,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  assert.equal(context.addClockSession('e','2026-10-11','11:00','13:00','Office'),false);
+  assert.equal(saves,0);
+  assert.deepEqual(store.logs.map(log=>log.time),['2026-10-11T14:00:00.000Z','2026-10-11T17:00:00.000Z']);
+  assert.equal(context.addClockSession('e','2026-10-11','22:00','06:00','Office'),true);
+  assert.equal(saves,1);
+  assert.deepEqual(store.logs.map(log=>log.time),['2026-10-11T14:00:00.000Z','2026-10-11T17:00:00.000Z','2026-10-12T03:00:00.000Z','2026-10-12T11:00:00.000Z']);
+});
+
 function calculate(logs, now='2026-10-12T18:00:00Z') {
   const source=ts.createSourceFile('page.tsx',read('app/page.tsx'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const fn=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='buildClockSessions');
   assert.ok(fn);
-  const context=vm.createContext({Date,Map,Set,Number,isSuspiciousClosedSession,OPEN_SESSION_STALE_HOURS,ATTENDANCE_TIME_ZONE,splitAttendanceInterval,
+  const context=vm.createContext({Date,Map,Set,Number,isSuspiciousClosedSession,OPEN_SESSION_STALE_HOURS,ATTENDANCE_TIME_ZONE,splitAttendanceInterval,pairPunchSessions,attendanceBreakSpans,
     historyStartFor:()=>0,serverNowMs:()=>Date.parse(now),serverNowIso:()=>now,
     dateInputValue:d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`});
   vm.runInContext(ts.transpileModule(fn.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-  return Array.from(context.buildClockSessions({logs:logs.map(([status,time])=>({uid:'employee',status,time}))},[{id:'employee',name:'Test'}]));
+  return Array.from(context.buildClockSessions({logs:logs.map(([status,time,correctionId])=>({uid:'employee',status,time,correctionId}))},[{id:'employee',name:'Test'}]));
 }
 const sum=rows=>rows.reduce((n,row)=>n+row.hours,0);
 test('normal and multiple daily shifts preserve exact elapsed hours',()=>{
@@ -238,6 +327,24 @@ test('normal and multiple daily shifts preserve exact elapsed hours',()=>{
 });
 test('an unfinished break ends at clock-out and never deducts the next shift',()=>{
   assert.equal(sum(calculate([['In','2026-10-12T08:00Z'],['Break Start','2026-10-12T10:00Z'],['Out','2026-10-12T12:00Z'],['In','2026-10-12T13:00Z'],['Out','2026-10-12T17:00Z']])),6);
+});
+test('corrected and live break intervals are merged and duplicate In never ends a break',()=>{
+  const rows=calculate([
+    ['In','2026-10-12T08:00Z'], ['Break Start','2026-10-12T10:00Z'],
+    ['In','2026-10-12T10:10Z'], ['Break Start','2026-10-12T10:30Z','correction-a'],
+    ['Break End','2026-10-12T11:00Z'], ['Break End','2026-10-12T11:30Z','correction-a'],
+    ['Out','2026-10-12T12:00Z'],
+  ]);
+  assert.equal(sum(rows),2.5);
+  assert.equal(rows[0].breakHours,1.5);
+});
+test('adjacent shifts pair independently even when the earlier shift was entered later',()=>{
+  const rows=calculate([
+    ['In','2026-10-12T12:00Z'], ['Out','2026-10-12T16:00Z'],
+    ['In','2026-10-12T08:00Z'], ['Out','2026-10-12T12:00Z'],
+  ]);
+  assert.equal(rows.length,2);
+  assert.equal(sum(rows),8);
 });
 test('overnight shifts split into days without changing their total',()=>{
   assert.equal(sum(calculate([['In','2026-10-11T23:00Z'],['Out','2026-10-12T07:00Z']])),8);
@@ -255,6 +362,12 @@ test('forgotten and unusually long sessions are flagged, never auto-punched',()=
 test('open duration follows the server-corrected clock; invalid stamps are ignored',()=>{
   assert.equal(sum(calculate([['In','2026-10-12T16:00Z']])),2);
   assert.equal(sum(calculate([['In','invalid'],['In','2026-10-12T16:00Z'],['Out','2026-10-12T17:00Z']])),1);
+});
+test('both segments of a running overnight shift retain its ongoing state',()=>{
+  const rows=calculate([['In','2026-10-12T00:00Z']],'2026-10-12T11:00Z');
+  assert.equal(rows.length,2);
+  assert.ok(rows.every(row=>row.ongoing));
+  assert.equal(rows.filter(row=>row.open).length,1);
 });
 
 function correctionRuntime(logs=[]) {

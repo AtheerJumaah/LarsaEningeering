@@ -37,14 +37,15 @@ test('real parent bridge respects current employee scope and sums daily net segm
   function visit(node){if(ts.isCallExpression(node)&&node.expression.getText(source)==='useEffect'&&node.arguments[0]?.getText(source).includes('holder.__larsaAttendanceSessions = readSessions'))effect=node.arguments[0].getText(source);ts.forEachChild(node,visit);}
   visit(source);assert.ok(effect);
   const users=[{id:'e',name:'Test'},{id:'other',name:'Other'}];
-  const record={uid:'e',employee:'Test',mode:'Office',clockIn:'2026-10-11T23:00:00Z',clockOut:'2026-10-12T01:00:00Z',hours:0.5,presenceHours:1,breakHours:0.5,open:false};
+  const record={uid:'e',employee:'Test',mode:'Office',clockIn:'2026-10-12T04:00:00Z',clockOut:'2026-10-12T06:00:00Z',date:'2026-10-11',hours:0.5,presenceHours:1,breakHours:0.5,open:false};
   const window={};const sessionUserRef={current:{id:'e'}};
   const context=vm.createContext({window,sessionUserRef,Map,Set,Number,
     parseStore:()=>({users}),isAdmin:()=>false,scopedUsers:actor=>users.filter(user=>user.id===actor.id),
-    buildClockSessions:()=>[record,{...record,hours:0.75,breakHours:0.25},{...record,uid:'other',hours:8}]});
+    buildClockSessions:()=>[record,{...record,date:'2026-10-12',hours:0.75,breakHours:0.25},{...record,uid:'other',hours:8}]});
   vm.runInContext(ts.transpileModule(`(${effect})();`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const rows=window.__larsaAttendanceSessions();assert.equal(rows.length,1);
   assert.equal(rows[0].uid,'e');assert.equal(rows[0].Hours,1.25);assert.equal(rows[0].BreakHours,0.75);
+  assert.equal(JSON.stringify(rows[0].Days),JSON.stringify([{Date:'2026-10-11',Hours:0.5},{Date:'2026-10-12',Hours:0.75}]));
   sessionUserRef.current=null;assert.equal(window.__larsaAttendanceSessions().length,0);
   sessionUserRef.current={id:'e'};users[0].enabled=false;assert.equal(window.__larsaAttendanceSessions().length,0);
 });
@@ -52,8 +53,25 @@ test('real parent bridge respects current employee scope and sums daily net segm
 test('timesheet presentation reuses timezone formatters and does not add an artificial first-pass wait',()=>{
   assert.match(pulse,/var DATE_PARTS_FORMATTER=new Intl\.DateTimeFormat/);
   assert.match(pulse,/var TIME_FORMATTER=new Intl\.DateTimeFormat/);
-  assert.match(pulse,/function periodRows\(st\).*periodCache\.source===source/);
+  assert.match(pulse,/function periodRows\(st\)[\s\S]*?periodCache\.source===source/);
   assert.doesNotMatch(pulse,/__v33DataWarm/);
+});
+
+test('embedded timesheet totals only the overnight hours in the selected calendar range',()=>{
+  const source=ts.createSourceFile('pulse.js',pulse,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+  const wanted=[];
+  function visit(node){if(ts.isFunctionDeclaration(node)&&['iso','sessionDay','periodRows','byDay','num'].includes(node.name?.text))wanted.push(node.getText(source));ts.forEachChild(node,visit)}
+  visit(source);
+  const sessions=[{Type:'Site',Employee:'Test',In:'2026-10-12T04:00:00Z',Out:'2026-10-12T06:00:00Z',Hours:1.25,Days:[{Date:'2026-10-11',Hours:0.5},{Date:'2026-10-12',Hours:0.75}]}];
+  const context=vm.createContext({W:{},Date,Number,bounds:st=>({a:st.from,b:st.to}),mode:s=>s.Type,sourceSessions:()=>sessions});
+  vm.runInContext('var periodCache=null;\n'+wanted.join('\n'),context);
+  const secondDay=context.periodRows({from:'2026-10-12',to:'2026-10-12'});
+  assert.equal(secondDay.length,1);
+  assert.equal(secondDay[0].Hours,0.75);
+  assert.equal(secondDay[0].In,sessions[0].In);
+  assert.equal(context.byDay(secondDay)['2026-10-12'].Site,0.75);
+  assert.equal(context.periodRows({from:'2026-10-11',to:'2026-10-12'}).reduce((sum,row)=>sum+row.Hours,0),1.25);
+  assert.equal(sessions[0].Hours,1.25);
 });
 
 test('bar chart uses a dedicated fast render instead of building and hiding the calendar',()=>{

@@ -130,10 +130,11 @@ test("chainless requests route to approvers at or above the requester's rank", (
 });
 
 test("corrections and late points notify the configured first approver", () => {
-  const correction = page.slice(page.indexOf("const submitCorrection"), page.indexOf("const submitCorrection") + 2600);
+  const correction = page.slice(page.indexOf("const submitCorrection"), page.indexOf("const setWeekLock"));
   assert.match(correction, /const configured = chainFor\(store, actor\.id, draft\.kind\);/);
   assert.match(correction, /const approvers = flow\.length[\s\S]*?flow\[0\]/);
-  const unlock = page.slice(page.indexOf("const saveMyPoints"), page.indexOf("const saveMyPoints") + 4200);
+  const pointsStart = page.indexOf("const saveMyPoints");
+  const unlock = page.slice(pointsStart, page.indexOf("const roster =", pointsStart));
   assert.match(unlock, /const configured = chainFor\(store, user\.id, "Points"\);/);
   assert.match(unlock, /const reviewers = flow\.length[\s\S]*?flow\[0\]/);
 });

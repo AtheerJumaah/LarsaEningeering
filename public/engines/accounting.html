@@ -12,7 +12,7 @@
 <style>
 :root{
   --bg:#0a0a0d; --panel:#101015; --panel2:#16161c; --line:#23232c; --line2:#2c2c36;
-  --txt:#f2f2f5; --muted:#8a8a94; --muted2:#6a6a74;
+  --txt:#f2f2f5; --muted:#8a8a94; --muted2:#858592;
   --white:#ffffff; --accent:#ffffff;
   --green:#46d18a; --red:#ff6b6b; --blue:#5b9dff;
   --radius:14px; --radius-sm:10px;
@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 .nav-item:hover{background:var(--panel2);color:var(--txt)}
 .nav-item.active{background:var(--panel2);color:var(--white)}
 .nav-item.active::before{content:"";position:absolute;inset-inline-start:0;top:8px;bottom:8px;width:3px;background:var(--white);border-radius:3px}
-.badge{background:var(--red);color:#fff;font-size:10px;font-weight:800;border-radius:20px;padding:1px 7px}
+.badge{background:#a62e29;color:#fff;font-size:10px;font-weight:800;border-radius:20px;padding:1px 7px}
 
 .main{flex:1;display:flex;flex-direction:column;height:100%;overflow:hidden;min-width:0}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 22px;border-bottom:1px solid var(--line);background:var(--panel);flex-shrink:0}
@@ -104,6 +104,8 @@ input,select{font-family:inherit}
 @media(max-width:560px){.form-grid,.form-grid.tight{grid-template-columns:minmax(0,1fr)}}
 .field{display:flex;flex-direction:column;gap:5px}
 .field.wide{grid-column:span 2}
+.field, .field :is(input,select,textarea){min-width:0;max-width:100%}
+@media(max-width:560px){.form-grid>.field.wide{grid-column:1 / -1}}
 .field label{font-size:11.5px;color:var(--muted);font-weight:600}
 .field input,.field select{background:var(--panel2);border:1px solid var(--line2);color:var(--txt);padding:9px 11px;border-radius:9px;font-size:13px;width:100%}
 .field input:focus,.field select:focus{outline:none;border-color:#43434f}
@@ -195,19 +197,28 @@ textarea{background:var(--panel2);border:1px solid var(--line2);color:var(--txt)
 /* MODAL editor */
 body.modal-open{overflow:hidden}
 .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px}
-.modal{width:100%;max-width:680px;max-height:90vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.modal{width:100%;max-width:680px;max-height:calc(100dvh - 36px);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5)}
 .modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
 .modal-head h3{margin:0;font-size:15px;font-weight:800}
-.modal-body{padding:18px 20px;overflow-y:auto}
-.modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--panel2)}
+.modal-head, .modal-foot{flex:none}
+.modal-body{min-height:0;padding:18px 20px;overflow:auto;overscroll-behavior:contain}
+.modal-foot{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--panel2)}
 .inwrap{display:flex;align-items:center;gap:6px}
-@media(max-width:560px){.modal{max-height:94vh}.modal .form-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:560px){
+  .modal-back{padding:10px}
+  .modal{max-height:calc(100dvh - 20px)}
+  .modal-head,.modal-body,.modal-foot{padding-inline:14px}
+  .modal .form-grid{grid-template-columns:minmax(0,1fr)}
+  .modal :is(input,select,textarea){font-size:16px}
+  .modal-head button,.modal-foot button{min-height:44px}
+  .modal-head button{min-width:44px}
+}
 
 /* LIGHT THEME */
 body.light{
   --bg:#f4f5f7; --panel:#ffffff; --panel2:#f1f2f5; --line:#e3e5ea; --line2:#d4d7df;
-  --txt:#15161a; --muted:#5d616c; --muted2:#878c98; --white:#111317; --accent:#111317;
-  --green:#1f9d57; --red:#d8443a; --blue:#2d6fd6;
+  --txt:#15161a; --muted:#5d616c; --muted2:#626876; --white:#111317; --accent:#111317;
+  --green:#166c3e; --red:#a62e29; --blue:#225ba9;
 }
 body.light .btn{background:#111317;color:#fff}
 body.light .seg button.on{background:#111317;color:#fff}
@@ -222,6 +233,7 @@ body.light .pill.ok{color:var(--green)}
 .tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin-bottom:18px}
 .tabs .mini{white-space:nowrap;padding:7px 12px}
 .tabs .mini.on{background:var(--white);color:#000;border-color:var(--white)}
+body.light .tabs .mini.on{color:#fff}
 .detail-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .detail-hero h1{margin:0 0 4px;font-size:22px}.detail-hero .meta{color:var(--muted);font-size:12px}
 .detail-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -289,6 +301,9 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
 .sales-row .mini{width:34px;height:34px;line-height:1;padding:0}
 .sales-add{width:auto}
 @media(max-width:620px){.sales-row{grid-template-columns:minmax(0,1fr) 76px 16px 32px}}
+body :is(button,a,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+body .modal:focus-visible{outline-offset:-3px}
+.k-value,.pnl-cell b{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 </style>
 
 <link rel="manifest" href="manifest.json">
@@ -311,7 +326,7 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
     <input id="loginEmail" type="email" autocomplete="username">
     <input id="loginPass" type="password" autocomplete="current-password">
     <button id="loginBtn">Sign in</button>
-    <div id="loginErr"></div>
+    <div id="loginErr" role="status"></div>
     <div class="login-demos">Authorized access only.</div>
   </div>
 </div>
@@ -323,7 +338,7 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
       <img class="larsa-logo-img" alt="Larsa Engineering">
       <div><div class="sb-word">LARSA</div><div class="sb-sub">Engineering</div></div>
     </div>
-    <nav id="nav"></nav>
+    <nav id="nav" aria-label="Accounting"></nav>
   </aside>
   <div class="main">
     <header class="topbar">
@@ -339,7 +354,7 @@ body.light .ok-note{color:#17683b;background:#ebf8f1;border-color:#a8ddbf}
         <button id="signOutBtn">Sign out</button>
       </div>
     </header>
-    <div class="view-scroll"><div id="view"></div></div>
+    <main class="view-scroll"><div id="view" tabindex="-1"></div></main>
   </div>
 </div>
 
@@ -365,6 +380,7 @@ const $  = id => document.getElementById(id);
 const val = id => ($(id) ? String($(id).value).trim() : "");
 const num = v => Number(v || 0);
 const localDateISO = d => {
+  if(typeof d==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
   d=d instanceof Date?d:new Date(d);
   if(isNaN(d))return "";
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -375,6 +391,20 @@ const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&l
 const setHTML = (id,h)=>{ const e=$(id); if(e) e.innerHTML=h; };
 
 let state=null, currentUser=null;
+let unreadableAccountingStorage=null;
+
+function accountingStatePayload(value){
+  if(!value||typeof value!=="object"||Array.isArray(value)) return false;
+  if(!value.settings||typeof value.settings!=="object"||Array.isArray(value.settings)) return false;
+  if(!Array.isArray(value.projects)||!Array.isArray(value.users)) return false;
+  const defaults=blankState();
+  return Object.keys(defaults).every(k=>{
+    if(k==="settings"||value[k]==null) return true;
+    const defaultValue=defaults[k];
+    return !Array.isArray(defaultValue)||(Array.isArray(value[k])&&
+      value[k].every(row=>row&&typeof row==="object"&&!Array.isArray(row)));
+  });
+}
 
 /* ============================================================
    i18n  — UI labels (t) + data-value translation (dv)
@@ -533,8 +563,22 @@ function t(k){ const e=I18N[k]; return e? (isAR()?e[1]:e[0]) : k; }
 function rate(){ return Math.max(1, num(state?.settings?.rate)); }
 function usd(v,cur,fx){ return cur==="IQD" ? num(v)/(num(fx)>0?num(fx):rate()) : num(v); }
 /* Convert one stored line using the rate captured on it. */
-function usdRow(row,field){ if(!row) return 0; return usd(row[field||"amount"],row.currency,row.fxRate); }
-function toIQD(v,cur){ return cur==="USD" ? num(v)*rate() : num(v); }
+function usdRow(row,field){
+  if(!row) return 0;
+  const key=field||"amount", snapshot=row._acct?.amount_usd;
+  if((key==="amount"||key==="total")&&snapshot!=null&&snapshot!==""&&Number.isFinite(Number(snapshot))) return Number(snapshot);
+  return usd(row[key],row.currency,row.fxRate);
+}
+function toIQD(v,cur,fx){ return cur==="USD" ? num(v)*(num(fx)>0?num(fx):rate()) : num(v); }
+function ledgerInCurrency(row,currency,key="amount"){
+  if(currency==="USD") return usdRow(row,key);
+  const snapshot=row._acct?.amount_iqd;
+  if((key==="amount"||key==="total")&&snapshot!=null&&snapshot!==""&&Number.isFinite(Number(snapshot))) return Number(snapshot);
+  return toIQD(row[key],row.currency,row.fxRate);
+}
+function payrollIsIncluded(row){ return !["Void","Rejected","Reversed"].includes(row.status); }
+function payrollCost(row){ return row.totalCompanyCost??row.grossPay??row.gross; }
+function payrollCostUsd(row){ return usd(payrollCost(row),row.currency,row.fxRate); }
 function fmt(v,cur){
   cur=cur||"USD";
   const n=new Intl.NumberFormat("en-US",{maximumFractionDigits:cur==="IQD"?0:2}).format(num(v));
@@ -576,7 +620,7 @@ function periodRange(preset){
   if(preset==="year") return [iso(new Date(y,0,1)),iso(new Date(y,11,31))];
   return [iso(new Date(y,m,1)),iso(new Date(y,m+1,0))]; // monthly
 }
-function recDate(r){ return r.date||r.payDate||r.receivedDate||r.created||""; }
+function recDate(r){ return String(r.date||r.payDate||r.receivedDate||r.created||"").slice(0,10); }
 function inRange(r,a,b){ const d=recDate(r); return (!a||d>=a)&&(!b||d<=b); }
 
 /* ============================================================
@@ -631,7 +675,7 @@ function chBars(items,opts){ // horizontal bars, optional signed (profit/loss co
   opts=opts||{}; const max=Math.max(1,...items.map(i=>Math.abs(i.value)));
   return `<div class="hbars">`+items.map((it,i)=>{
     const w=Math.abs(it.value)/max*100, col=opts.signed?(it.value>=0?C.profit:C.exp):(opts.color||C.pie[(i+1)%C.pie.length]);
-    return `<div class="hbar"><div class="hbar-top"><span>${esc(it.label)}</span><span class="${opts.signed?(it.value>=0?'pos':'neg'):''}">${money(it.value)}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${w}%;background:${col}"></div></div></div>`;
+    return `<div class="hbar"><div class="hbar-top"><span>${esc(it.label)}</span><span class="${opts.signed?(it.value>=0?'pos':'neg'):''}">${opts.currency?fmt(it.value,opts.currency):money(it.value)}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${w}%;background:${col}"></div></div></div>`;
   }).join("")+`</div>`;
 }
 
@@ -810,7 +854,7 @@ function totals(){
     + (state.projectLabor||[]).filter(e=>actual(e.status)&&e.paymentSource==="Client Funding").reduce((s,e)=>s+usd(e.total,e.currency,e.fxRate),0);
   const opEx = state.operating.filter(o=>actual(o.status)).reduce((s,o)=>s+usd(o.amount,o.currency,o.fxRate),0)
     + state.expenses.filter(e=>actual(e.status)&&e.paymentSource==="Larsa Operating").reduce((s,e)=>s+usd(e.amount,e.currency,e.fxRate),0);
-  const payroll = state.payroll.filter(p=>!["Void","Rejected","Reversed"].includes(p.status)).reduce((s,p)=>s+usd(p.totalCompanyCost||p.grossPay||p.gross||0,p.currency),0);
+  const payroll = state.payroll.filter(payrollIsIncluded).reduce((s,p)=>s+payrollCostUsd(p),0);
   const commissions = state.commissions.filter(c=>!["Void","Rejected","Reversed"].includes(c.status)).reduce((s,c)=>s+num(c.due),0);
   const commDue = state.commissions.reduce((s,c)=>s+Math.max(0,num(c.due)-num(c.paid)),0);
   const fundingGross = state.funding.filter(f=>["Approved","Received"].includes(f.status)).reduce((s,f)=>s+usd(f.amount,f.currency,f.fxRate),0);
@@ -840,7 +884,7 @@ function buildNav(){
   setHTML("nav", NAV.map(g=>`
     <div class="nav-group">
       <div class="nav-group-title">${t(g.grp)}</div>
-      ${g.items.map(([id,key])=>`<button class="nav-item ${id===activeSection?"active":""}" data-sec="${id}">
+      ${g.items.map(([id,key])=>`<button class="nav-item ${id===activeSection?"active":""}" data-sec="${id}" ${id===activeSection?'aria-current="page"':''}>
         <span>${t(key)}</span>${id==="review"&&flagN?`<span class="badge">${flagN}</span>`:""}</button>`).join("")}
     </div>`).join(""));
   document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>showSection(b.dataset.sec));
@@ -1137,7 +1181,7 @@ function deriveRecord(coll,r){
       ? r.salesTeam
       : (r.salesman?[{person:r.salesman,rate:num(r.commissionRate)}]:[]);
     const region=(r.stream||"").indexOf("USA")>=0?"USA":"Iraq";
-    const base=usd(r.amount,r.currency);
+    const base=usdRow(r);
     const live=r.status==="Received"?team.filter(s=>s.person&&num(s.rate)>0):[];
     const keep=new Set(live.map(s=>s.person));
     state.commissions=state.commissions.filter(c=>
@@ -1167,7 +1211,7 @@ function fieldInput(f,rec){
      accountant only types when the day differs. */
   else if(f.type==="fx") inner=`<input id="${id}" type="number" step="1" min="1" value="${num(v)>0?v:rate()}">`;
   else if(f.type==="percent") inner=`<input id="${id}" type="number" step="0.5" value="${v!=null?(num(v)*100):0}">`;
-  else if(f.type==="date") inner=`<input id="${id}" type="date" value="${v||today()}">`;
+  else if(f.type==="date") inner=`<input id="${id}" type="date" value="${esc(v?String(v).slice(0,10):(id0?"":today()))}">`;
   else if(f.type==="textarea") inner=`<textarea id="${id}" rows="2">${esc(v||"")}</textarea>`;
   else if(f.type==="cur") inner=`<select id="${id}">${["USD","IQD"].map(o=>`<option ${o===(v||"")?"selected":""}>${o}</option>`).join("")}</select>`;
   else if(f.type==="checkbox") inner=`<label class="ck"><input id="${id}" type="checkbox" ${v?"checked":""}> ${T("Yes","نعم")}</label>`;
@@ -1277,14 +1321,15 @@ function edFundPreview(){
     <div class="prev-row"><span>${t("f_netc")}</span><b class="pos">${fmt(amt-fee,cur)}</b></div>`);
 }
 async function saveEditor(){
-  const coll=coll0, sch=SCHEMA[coll];
-  const rec = id0? state[coll].find(x=>x.id===id0) : {id:uid(coll.slice(0,3))};
+  const coll=coll0, recordId=id0, sch=SCHEMA[coll];
+  if(!sch) return false;
+  const before=state;
+  const original=recordId?before[coll].find(x=>x.id===recordId):null;
+  if(recordId&&!original) return false;
+  const rec=original?structuredClone(original):{id:uid(coll.slice(0,3))};
+  const receiptUpdate=sch.some(f=>f.type==="receipt")?edReceiptPending:null;
   for(const f of sch){
-    if(f.type==="receipt"){
-      if(edReceiptPending==="REMOVE"){ if(rec.receipt&&rec.receipt.ref) await idbDel(rec.receipt.ref); rec.receipt=null; }
-      else if(edReceiptPending){ const refId=uid("rcp"); await idbPut(refId,{name:edReceiptPending.name,data:edReceiptPending.data}); rec.receipt={name:edReceiptPending.name,ref:refId}; }
-      continue;
-    }
+    if(f.type==="receipt") continue;
     if(f.type==="salesTeam"){
       rec.salesTeam=edReadSalesTeam();
       // Keep the single-name fields in step so older screens and reports that
@@ -1297,6 +1342,7 @@ async function saveEditor(){
     if(f.type==="checkbox") rec[f.k]=el.checked;
     else if(f.type==="number"||f.type==="fx") rec[f.k]=num(el.value);
     else if(f.type==="percent") rec[f.k]=num(el.value)/100;
+    else if(f.type==="date"&&original&&el.value===String(original[f.k]||"").slice(0,10)) continue;
     else rec[f.k]=el.value;
   }
   /* An exchange rate is required on every line that records money, whatever
@@ -1304,15 +1350,45 @@ async function saveEditor(){
      silently inherit whatever the rate is at the moment someone reads the
      report, and no closed month would stay closed. Refuse the save rather than
      store a line whose USD value is a guess. */
-  if(XFX_COLLS.indexOf(coll)>=0 && num(rec.fxRate)<=0){
-    toast(T("Enter the USD exchange rate for this transaction before saving.",
+  if(XFX_COLLS.includes(coll)&&(!Number.isFinite(num(rec.fxRate))||num(rec.fxRate)<=0)){
+    alert(T("Enter the USD exchange rate for this transaction before saving.",
             "أدخل سعر صرف الدولار لهذه الحركة قبل الحفظ."));
-    return;
+    window.__edDirty=true;
+    return false;
   }
-  deriveRecord(coll,rec);
-  if(!id0) state[coll].unshift(rec);
-  log(id0?"Edited":"Added", coll+" "+rec.id);
-  save(); closeEditor(); render();
+  let receiptRef="";
+  if(receiptUpdate==="REMOVE") rec.receipt=null;
+  else if(receiptUpdate){
+    receiptRef=uid("rcp");
+    if(!await idbPut(receiptRef,receiptUpdate)){
+      alert(T("The receipt could not be saved. The record has not changed.","تعذر حفظ الإيصال. لم يتغير السجل."));
+      window.__edDirty=true;
+      return false;
+    }
+    rec.receipt={name:receiptUpdate.name,ref:receiptRef};
+  }
+  if(state!==before||coll0!==coll||id0!==recordId){
+    if(receiptRef) await idbDel(receiptRef);
+    return false;
+  }
+  state={...before,[coll]:before[coll].slice(),audit:before.audit.slice()};
+  if(coll==="revenue") state.commissions=structuredClone(before.commissions);
+  try{
+    deriveRecord(coll,rec);
+    if(original) state[coll][state[coll].indexOf(original)]=rec;
+    else state[coll].unshift(rec);
+    log(recordId?"Edited":"Added",coll+" "+rec.id);
+    if(!save()) throw new Error("Accounting record could not be saved");
+  }catch(error){
+    state=before;
+    console.error(error);
+    if(receiptRef) await idbDel(receiptRef);
+    window.__edDirty=true;
+    return false;
+  }
+  window.__edDirty=false;
+  closeEditor(); render();
+  return true;
 }
 function addNew(coll){ openEditor(coll,null); }
 
@@ -1909,31 +1985,6 @@ function renderReview(){
    SETTINGS & BACKUP
    ============================================================ */
 function saveSettings(){ state.settings.rate=num(val("set_rate"))||1310; state.settings.consultancyRate=num(val("set_rate2"))/100||DEFAULT_CONSULTANCY; save(); render(); }
-async function exportBackup(){
-  const clone=JSON.parse(JSON.stringify(state));
-  // embed receipts so the backup is fully portable & permanent
-  for(const coll of Object.keys(clone)){
-    if(!Array.isArray(clone[coll])) continue;
-    for(const r of clone[coll]){
-      if(r&&r.receipt&&r.receipt.ref){ const got=await idbGet(r.receipt.ref); if(got){ r.receipt.data=got.data; } }
-    }
-  }
-  downloadBlob(JSON.stringify(clone,null,2), `Larsa_backup_${today()}.json`, "application/json");
-}
-function importBackup(ev){ const f=ev.target.files[0]; if(!f) return; const rd=new FileReader();
-  rd.onload=async()=>{ try{
-    const data=JSON.parse(rd.result);
-    // restore receipts to IndexedDB, keep refs in state
-    for(const coll of Object.keys(data)){
-      if(!Array.isArray(data[coll])) continue;
-      for(const r of data[coll]){
-        if(r&&r.receipt&&r.receipt.data){ const ref=r.receipt.ref||uid("rcp"); await idbPut(ref,{name:r.receipt.name,data:r.receipt.data}); r.receipt={name:r.receipt.name,ref}; }
-      }
-    }
-    state=data; normalize(); save(); alert(T("Backup imported.","تم استيراد النسخة.")); render();
-  }catch(e){ alert(T("Invalid backup file.","ملف غير صالح.")); } };
-  rd.readAsText(f);
-}
 function resetData(){ if(confirm(T("Reset system data? This erases current local data.","إعادة تعيين بيانات النظام؟ سيتم مسح البيانات المحلية الحالية."))){ state=blankState(); normalize(); save(); render(); } }
 function setTheme(th){ state.settings.theme=th; save(); applyTheme(); render(); }
 function applyTheme(){ document.body.classList.toggle("light", state?.settings?.theme==="light"); }
@@ -2079,7 +2130,11 @@ function xDef(r,d){Object.keys(d).forEach(k=>{if(r[k]===undefined||r[k]===null)r
 function xFunding(r){const p=project(r.projectId);r.consultancyRate=(p&&p.region==="Iraq"&&p.type==="Construction")?(num(r.consultancyRate)||num(p.consultancyRate)||DEFAULT_CONSULTANCY):num(r.consultancyRate);r.consultancyFee=r.waived?0:round2(num(r.amount)*r.consultancyRate);r.netConstruction=round2(num(r.amount)-r.consultancyFee)}
 function xPayroll(p){
   xDef(p,{employeeId:"",periodStart:"",periodEnd:"",payDate:"",region:"Iraq",payType:"Salary",regularHours:0,regularRate:0,regularPay:num(p.regular),overtimeHours:0,overtimeRate:0,overtimePay:num(p.overtime),baseSalary:0,bonus:0,allowances:0,reimbursement:0,grossPay:num(p.gross),federalWithholding:0,socialSecurityEmployee:0,medicareEmployee:0,stateTaxEmployee:0,otherEmployeeDeductions:num(p.deductions),totalEmployeeDeductions:num(p.deductions),netPay:num(p.net),employerSocialSecurity:0,employerMedicare:0,federalUnemployment:0,stateUnemployment:0,workersComp:0,otherEmployerCost:0,totalEmployerTaxes:0,totalCompanyCost:num(p.gross),currency:"IQD",paymentMethod:"Bank Transfer",checkOrTransactionRef:"",status:"Draft",approvedBy:"",approvedAt:"",notes:"",projectId:"",createdBy:"",createdAt:""});
-  if(!p.periodStart&&/^\d{4}-\d{2}$/.test(p.period||"")){p.periodStart=p.period+"-01";const d=new Date(p.periodStart+"T12:00:00");p.periodEnd=new Date(d.getFullYear(),d.getMonth()+1,0).toISOString().slice(0,10)}
+  if(/^\d{4}-(0[1-9]|1[0-2])$/.test(p.period||"")){
+    const [year,month]=p.period.split("-").map(Number);
+    if(!p.periodStart) p.periodStart=p.period+"-01";
+    if(!p.periodEnd) p.periodEnd=localDateISO(new Date(year,month,0));
+  }
   p.regular=p.regularPay||p.baseSalary;p.overtime=p.overtimePay;p.deductions=p.totalEmployeeDeductions;p.gross=p.grossPay;p.net=p.netPay;
 }
 normalize=function(){
@@ -2088,7 +2143,13 @@ normalize=function(){
   state.users.forEach(u=>{xDef(u,{id:()=>uid("usr"),name:"",email:"",pass:"",role:"Viewer",region:"Shared",active:true,createdAt:()=>new Date().toISOString(),lastLogin:"",notes:"",permissions:{}});if(u.role==="Owner")u.role="Owner / Super Admin";if(u.role==="Manager")u.role="Management";if(u.password&&!u.pass)u.pass=u.password});
   if(false&&!state.users.some(u=>u.role==="Owner / Super Admin"))state.users.unshift({id:uid("usr"),name:"Larsa Engineering",email:"",pass:"",role:"Owner / Super Admin",region:"Shared",active:true,createdAt:new Date().toISOString(),lastLogin:"",notes:"",permissions:{}});
   state.projects.forEach(p=>{xDef(p,{code:"",name:"",clientName:"",clientPhone:"",clientEmail:"",clientAddress:"",projectAddress:"",city:"",country:"",region:"Iraq",type:"Construction",phase:"Execution",status:"Active",priority:"Normal",responsibleEngineer:"",projectManager:"",teamLeader:"",salesman:"",contractValue:0,currency:"IQD",consultancyRate:DEFAULT_CONSULTANCY,startDate:"",dueDate:"",closeDate:"",googleDriveLink:"",clickUpLink:"",invoiceLink:"",notes:"",internalNotes:""});p.clientName=p.clientName||p.client||"";p.client=p.clientName;if(p.type==="Design / Engineering")p.type="Design Engineering"});
-  state.funding.forEach(r=>{xDef(r,{date:"",payerName:"",fundingSource:"Client Payment",projectId:"",amount:0,currency:"IQD",method:"Bank Transfer",referenceNumber:"",receivedBy:"",status:"Received",waived:false,consultancyRate:0,consultancyFee:0,netConstruction:0,allocatedTo:"Construction Funds",notes:"",createdBy:"",createdAt:"",approvedBy:"",approvedAt:"",rejectedBy:"",rejectedAt:""});xFunding(r)});
+  state.funding.forEach(r=>{
+    const p=project(r.projectId);
+    const inheritsFee=p?.region==="Iraq"&&p.type==="Construction";
+    xDef(r,{date:"",payerName:"",fundingSource:"Client Payment",projectId:"",amount:0,currency:"IQD",method:"Bank Transfer",referenceNumber:"",receivedBy:"",status:"Received",waived:false,consultancyRate:inheritsFee?num(p.consultancyRate):0,allocatedTo:"Construction Funds",notes:"",createdBy:"",createdAt:"",approvedBy:"",approvedAt:"",rejectedBy:"",rejectedAt:""});
+    xDef(r,{consultancyFee:()=>r.waived?0:round2(num(r.amount)*num(r.consultancyRate))});
+    xDef(r,{netConstruction:()=>round2(num(r.amount)-num(r.consultancyFee))});
+  });
   state.expenses.forEach(r=>xDef(r,{date:"",projectId:"",expenseType:r.subtype==="Workforce"?"Labor":"Other",category:"Other",quantity:0,unit:"",unitPrice:0,amount:0,currency:"IQD",paymentSource:"Client Funding",supplierId:"",workforceId:"",supplier:r.supplier||"",invoiceNumber:"",status:r.status||"Approved",approvedBy:"",approvedAt:"",paidBy:"",dueDate:"",notes:"",createdBy:"",createdAt:""}));
   state.materials.forEach(r=>xDef(r,{date:"",projectId:"",supplierId:"",supplierName:"",materialCategory:"Site Miscellaneous",itemName:"",description:"",quantity:0,unit:"",unitPrice:0,amount:0,currency:"IQD",paymentSource:"Client Funding",paymentMethod:"",status:"Requested",invoiceNumber:"",deliveryNote:"",notes:"",createdBy:"",createdAt:"",approvedBy:"",approvedAt:""}));
   state.workforce.forEach(r=>{xDef(r,{name:"",trade:"",region:"Iraq",defaultUnit:r.unit||"day",defaultRate:num(r.rate),phone:"",supplierCompany:"",active:true,notes:"",currency:r.currency||"IQD"});r.unit=r.defaultUnit;r.rate=r.defaultRate});
@@ -2419,7 +2480,11 @@ function v32ReportFilter(a){
 }
 function v32ReportData(){
   const revenue=v32ReportFilter(state.revenue).filter(r=>r.status==="Received"),funding=v32ReportFilter(state.funding).filter(r=>["Approved","Received"].includes(r.status)),expenses=v32ReportFilter(state.expenses),materials=v32ReportFilter(state.materials),labor=v32ReportFilter(state.projectLabor),operating=v32ReportFilter(state.operating),payroll=v32ReportFilter(state.payroll);
-  const rev=revenue.reduce((s,r)=>s+usd(r.amount,r.currency),0),fees=funding.reduce((s,r)=>s+usd(r.consultancyFee,r.currency),0),op=operating.filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency),0),pay=payroll.filter(r=>!["Void","Rejected"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.gross,r.currency),0),projectCost=[...expenses.map(r=>({...r,amt:r.amount})),...materials.map(r=>({...r,amt:r.amount})),...labor.map(r=>({...r,amt:r.total}))].filter(r=>xActual(r.status)).reduce((s,r)=>s+usd(r.amt,r.currency),0);
+  const rev=revenue.reduce((s,r)=>s+usdRow(r),0),fees=funding.reduce((s,r)=>s+usdRow(r,"consultancyFee"),0);
+  const op=operating.filter(r=>xActual(r.status)).reduce((s,r)=>s+usdRow(r),0);
+  const pay=payroll.filter(payrollIsIncluded).reduce((s,r)=>s+payrollCostUsd(r),0);
+  const projectCost=[...expenses,...materials,...labor].filter(r=>xActual(r.status))
+    .reduce((s,r)=>s+usdRow(r,r.amount==null?"total":"amount"),0);
   return{revenue,funding,expenses,materials,labor,operating,payroll,rev,fees,op,pay,projectCost,net:rev+fees-op-pay};
 }
 function v32ReportBody(mode){
@@ -2438,7 +2503,11 @@ function v32ReportBody(mode){
 function v32SetReport(k,v){v32RF[k]=v;render()}
 function v32ReportCSV(){
   const d=v32ReportData(),rows=[["Section","Date","Project","Description","Amount","Currency","USD","Status"]];
-  [["Revenue",d.revenue,"amount"],["Funding",d.funding,"amount"],["Expenses",d.expenses,"amount"],["Materials",d.materials,"amount"],["Labor",d.labor,"total"],["Operating",d.operating,"amount"],["Payroll",d.payroll,"totalCompanyCost"]].forEach(([sec,a,key])=>a.forEach(r=>rows.push([sec,r.date||r.payDate,project(r.projectId)?.name||"",r.description||r.itemName||r.employee||r.category||"",num(r[key]??r.gross),r.currency,round2(usd(r[key]??r.gross,r.currency)),r.status||""])));
+  [["Revenue",d.revenue,"amount"],["Funding",d.funding,"amount"],["Expenses",d.expenses,"amount"],["Materials",d.materials,"amount"],["Labor",d.labor,"total"],["Operating",d.operating,"amount"],["Payroll",d.payroll,"totalCompanyCost"]].forEach(([sec,a,key])=>a.forEach(r=>{
+    const payroll=sec==="Payroll";
+    rows.push([sec,r.date||r.payDate,project(r.projectId)?.name||"",r.description||r.itemName||r.employee||r.category||"",
+      num(payroll?payrollCost(r):r[key]),r.currency,round2(payroll?payrollCostUsd(r):usdRow(r,key)),r.status||""]);
+  }));
   downloadBlob(rows.map(r=>r.map(xCell).join(",")).join("\n"),`Larsa_Report_Detailed_${today()}.csv`,"text/csv");log("Exported","Detailed report CSV","reports");save();
 }
 function v32ReportPDF(mode){const [a,b]=v32ReportRange(),title=`${v32Text("Larsa Company Report","تقرير شركة لارسا")} · ${a||v32Text("All history","كل الماضي")} ${b?"— "+b:""}`;printDoc(title,`${printHeader(title)}${v32ReportBody(mode)}`)}
@@ -2504,20 +2573,20 @@ function v33Totals(range){
   const revenue=v33Arr("revenue",range).filter(r=>r.status==="Received");
   const funding=v33Arr("funding",range).filter(r=>["Approved","Received"].includes(r.status));
   const expenses=v33Arr("expenses",range), materials=v33Arr("materials",range), labor=v33Arr("projectLabor",range), operating=v33Arr("operating",range), payroll=v33Arr("payroll",range), commissions=v33Arr("commissions",range);
-  const engineering=revenue.reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0), fees=funding.filter(f=>!f.waived).reduce((s,f)=>s+usd(f.consultancyFee,f.currency,f.fxRate),0);
-  const grossFunding=funding.reduce((s,f)=>s+usd(f.amount,f.currency,f.fxRate),0), netConstruction=funding.reduce((s,f)=>s+usd(f.netConstruction,f.currency,f.fxRate),0);
-  const expActual=expenses.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
-  const matActual=materials.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
-  const labActual=labor.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.total,r.currency,r.fxRate),0);
+  const engineering=revenue.reduce((s,r)=>s+usdRow(r),0), fees=funding.filter(f=>!f.waived).reduce((s,f)=>s+usdRow(f,"consultancyFee"),0);
+  const grossFunding=funding.reduce((s,f)=>s+usdRow(f),0), netConstruction=funding.reduce((s,f)=>s+usdRow(f,"netConstruction"),0);
+  const expActual=expenses.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usdRow(r),0);
+  const matActual=materials.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usdRow(r),0);
+  const labActual=labor.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usdRow(r,"total"),0);
   const clientSpend=expActual+matActual+labActual;
-  const op=operating.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usd(r.amount,r.currency,r.fxRate),0);
-  const pay=payroll.filter(r=>!["Void","Rejected","Reversed"].includes(r.status)).reduce((s,r)=>s+usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),0);
+  const op=operating.filter(r=>v33StatusActual(r.status)).reduce((s,r)=>s+usdRow(r),0);
+  const pay=payroll.filter(payrollIsIncluded).reduce((s,r)=>s+payrollCostUsd(r),0);
   const commissionCost=commissions.filter(r=>!["Void","Rejected","Reversed"].includes(r.status)).reduce((s,r)=>s+num(r.due),0);
   const pending=[...expenses,...materials,...labor].filter(r=>xPending(r.status)).reduce((s,r)=>s+usd(r.amount??r.total,r.currency,r.fxRate),0);
   const realRevenue=engineering+fees, companyCosts=op+pay+commissionCost, net=realRevenue-companyCosts;
   return {revenue,funding,expenses,materials,labor,operating,payroll,commissions,engineering,fees,realRevenue,grossFunding,netConstruction,clientSpend,op,pay,commissionCost,companyCosts,net,pending,fundsHeld:netConstruction-clientSpend};
 }
-function v33MonthlyItems(coll,range,amountFn,statusFn){const out={};(state[coll]||[]).filter(r=>v33InRange(r,coll,range)).forEach(r=>{if(statusFn&&!statusFn(r))return;const k=v33RecordDate(r,coll).slice(0,7)||"No date";out[k]=(out[k]||0)+amountFn(r)});return Object.keys(out).sort().slice(-12).map(k=>({label:k,value:out[k]}))}
+function v33MonthlyItems(coll,range,amountFn,statusFn){const out={};v33Arr(coll,range).forEach(r=>{if(statusFn&&!statusFn(r))return;const k=v33RecordDate(r,coll).slice(0,7)||"No date";out[k]=(out[k]||0)+amountFn(r)});return Object.keys(out).sort().slice(-12).map(k=>({label:k,value:out[k]}))}
 let v33Dash={preset:"month",from:"",to:""};
 function v33SetDash(p){v33Dash.preset=p;if(p==="custom"){v33Dash.from=val("dash33_from")||v33Dash.from;v33Dash.to=val("dash33_to")||v33Dash.to}state.settings.dashboardPeriod=v33Dash;save();render()}
 /* mean + population standard deviation over a set of {value} items (monthly series) */
@@ -2539,11 +2608,11 @@ function larsaStatLine(items){
 }
 function renderDashboardV33(){
   v33Dash=Object.assign(v33Dash,state.settings.dashboardPeriod||{});const range=v33PeriodRange(v33Dash.preset,v33Dash.from,v33Dash.to),z=v33Totals(range);
-  const revByMonth=v33MonthlyItems("revenue",range,r=>usd(r.amount,r.currency),r=>r.status==="Received");
-  v33MonthlyItems("funding",range,r=>usd(r.consultancyFee,r.currency),r=>["Approved","Received"].includes(r.status)&&!r.waived).forEach(x=>{const e=revByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else revByMonth.push(x)});revByMonth.sort((a,b)=>a.label.localeCompare(b.label));
-  const costByMonth=v33MonthlyItems("operating",range,r=>usd(r.amount,r.currency),r=>v33StatusActual(r.status));
-  v33MonthlyItems("payroll",range,r=>usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency),r=>!["Void","Rejected"].includes(r.status)).forEach(x=>{const e=costByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else costByMonth.push(x)});costByMonth.sort((a,b)=>a.label.localeCompare(b.label));
-  v33MonthlyItems("commissions",range,r=>num(r.due),r=>!["Void","Rejected"].includes(r.status)).forEach(x=>{const e=costByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else costByMonth.push(x)});costByMonth.sort((a,b)=>a.label.localeCompare(b.label));
+  const revByMonth=v33MonthlyItems("revenue",range,usdRow,r=>r.status==="Received");
+  v33MonthlyItems("funding",range,r=>usdRow(r,"consultancyFee"),r=>["Approved","Received"].includes(r.status)&&!r.waived).forEach(x=>{const e=revByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else revByMonth.push(x)});revByMonth.sort((a,b)=>a.label.localeCompare(b.label));
+  const costByMonth=v33MonthlyItems("operating",range,usdRow,r=>v33StatusActual(r.status));
+  v33MonthlyItems("payroll",range,payrollCostUsd,payrollIsIncluded).forEach(x=>{const e=costByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else costByMonth.push(x)});costByMonth.sort((a,b)=>a.label.localeCompare(b.label));
+  v33MonthlyItems("commissions",range,r=>num(r.due),payrollIsIncluded).forEach(x=>{const e=costByMonth.find(y=>y.label===x.label);if(e)e.value+=x.value;else costByMonth.push(x)});costByMonth.sort((a,b)=>a.label.localeCompare(b.label));
   const revMix={};z.revenue.filter(r=>r.status==="Received").forEach(r=>revMix[r.stream||"Engineering Revenue"]=(revMix[r.stream||"Engineering Revenue"]||0)+usd(r.amount,r.currency));if(z.fees)revMix[v33Text("Consultancy Fees","أتعاب الاستشارة")]=z.fees;
   const costMix={};z.operating.filter(r=>v33StatusActual(r.status)).forEach(r=>costMix[r.category||"Operating"]=(costMix[r.category||"Operating"]||0)+usd(r.amount,r.currency));if(z.pay)costMix[v33Text("Payroll","الرواتب")]=z.pay;if(z.commissionCost)costMix[v33Text("Sales Commissions","عمولات المبيعات")]=z.commissionCost;
   const pending=XAPP.reduce((n,c)=>n+v33Arr(c,range).filter(r=>xPending(r.status)).length,0),neg=state.projects.filter(p=>xTotals(p.id).balance<0).length,severe=state.reviewQueue.filter(f=>!f.resolved&&["Critical","High"].includes(f.severity)).length;
@@ -2694,23 +2763,166 @@ function x33ProjectSheet(pid){const p=project(pid);if(!p)return;const rows=v33Pr
 function renderProjectsV33(){const a=state.projects.filter(xVisible);setHTML("view",`<div class="page-head"><h1>${t("nav_projects")}</h1>${can("create","projects")?`<button class="btn" onclick="addNew('projects')">+ ${t("ed_add")}</button>`:""}</div>${card("",`<div class="table-wrap"><table><thead><tr><th>${v33Text("Code","الرمز")}</th><th>${v33Text("Project","المشروع")}</th><th>${v33Text("Client","الزبون")}</th><th>${v33Text("Region","المنطقة")}</th><th>${v33Text("Type","النوع")}</th><th>${v33Text("Phase","المرحلة")}</th><th>${v33Text("Due Date","تاريخ الاستحقاق")}</th><th class="right">${v33Text("Contract","العقد")}</th><th>${v33Text("Status","الحالة")}</th><th></th></tr></thead><tbody>${a.length?a.map(p=>`<tr class="clickable" onclick="openProjectDetail('${p.id}')"><td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.clientName||p.client||"—")}</td><td>${dv(p.region)}</td><td>${dv(p.type)}</td><td><span class="pill">${dv(p.phase)}</span></td><td>${p.dueDate||"—"}</td><td class="right">${fmt(p.contractValue,p.currency)}</td><td><span class="pill ${p.status==="Active"?"ok":""}">${dv(p.status)}</span></td><td class="right nowrap"><button class="mini" onclick="event.stopPropagation();x33ProjectSheet('${p.id}')">${v33Text("Sheet","شيت")}</button> ${rowActions("projects",p.id,p)}</td></tr>`).join(""):emptyRow(10)}</tbody></table></div>`)}`)}
 
 /* ---------- Backup/import and system check ---------- */
-async function exportBackup(){const clone=JSON.parse(JSON.stringify(state));clone.appSchemaVersion=V33_VERSION;clone.backupCreatedAt=new Date().toISOString();clone.backupAppName="Larsa Engineering";clone.backupCompatibilityNotes="Use Merge mode to preserve current data; Replace mode overwrites after confirmation.";for(const coll of Object.keys(clone)){if(!Array.isArray(clone[coll]))continue;for(const r of clone[coll]){if(r&&r.receipt&&r.receipt.ref){const got=await idbGet(r.receipt.ref);if(got)r.receipt.data=got.data}}}downloadBlob(JSON.stringify(clone,null,2),`Larsa_Backup_${today()}.json`,"application/json")}
-function v33MergeArray(cur,imp){const m=new Map((cur||[]).map(x=>[x.id,x]));(imp||[]).forEach(x=>{if(!x.id)x.id=uid("imp");m.set(x.id,Object.assign({},m.get(x.id)||{},x))});return [...m.values()]}
-function v33PreviewBackup(data){const rows=Object.keys(data).filter(k=>Array.isArray(data[k])).map(k=>[k,data[k].length]);setHTML("modalRoot",`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${v33Text("Backup Preview","معاينة النسخة")}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><table><tbody>${rows.map(r=>`<tr><td>${r[0]}</td><td class="right">${r[1]}</td></tr>`).join("")}</tbody></table></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${v33Text("Close","إغلاق")}</button></div></div></div>`);document.body.classList.add("modal-open")}
-function importBackup(ev){const f=ev.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=async()=>{try{let data=JSON.parse(String(rd.result).replace(/^\ufeff/,""));if(data&&data.data&&typeof data.data==="object"&&!Array.isArray(data.data)){data=data.data}v33PreviewBackup(data);const mode=prompt(v33Text("Type MERGE to combine, REPLACE to overwrite, or PREVIEW to only preview.","اكتب MERGE للدمج، REPLACE للاستبدال، أو PREVIEW للمعاينة فقط."),"MERGE");if(!mode||mode.toUpperCase()==="PREVIEW")return;
-  /* Transactional import: every step that can fail — receipt rehydration,
-     merge, normalize — happens on copies BEFORE the live state is touched.
-     The old order mutated `state` collection by collection, so a corrupt
-     receipt half-way left the books part-old, part-new with the original
-     already gone. Now the commit is a single assignment at the end. */
-  if(mode.toUpperCase()==="REPLACE"&&!confirm(v33Text("Replace all current data? This cannot be undone without another backup.","استبدال كل البيانات الحالية؟ لا يمكن التراجع بدون نسخة أخرى.")))return;
-  for(const coll of Object.keys(data)){if(!Array.isArray(data[coll]))continue;for(const r of data[coll]){if(r&&r.receipt&&r.receipt.data){const ref=r.receipt.ref||uid("rcp");await idbPut(ref,{name:r.receipt.name,data:r.receipt.data});r.receipt={name:r.receipt.name,ref}}}}
-  let staged;
-  if(mode.toUpperCase()==="REPLACE"){staged=data}
-  else{staged=JSON.parse(JSON.stringify(state));Object.keys(data).forEach(k=>{if(Array.isArray(data[k]))staged[k]=v33MergeArray(staged[k]||[],data[k])});if(data.settings)staged.settings=Object.assign(staged.settings||{},data.settings);if(data.taxSettings)staged.taxSettings=Object.assign(staged.taxSettings||{},data.taxSettings)}
-  const before=state;state=staged;
-  try{normalize();if(!save())throw new Error("save failed")}catch(err){state=before;try{normalize()}catch(e2){}throw err}
-  alert(v33Text("Backup imported successfully.","تم استيراد النسخة بنجاح."));render()}catch(e){alert(v33Text("Invalid backup file.","ملف النسخة غير صالح."));console.error(e)}};rd.readAsText(f)}
+function* accountingBackupRows(snapshot){
+  const snapshots=[snapshot];
+  while(snapshots.length){
+    const current=snapshots.pop();
+    for(const [key,rows] of Object.entries(current)){
+      if(!Array.isArray(rows)) continue;
+      if(key==="restorePoints"){
+        for(const point of rows){
+          if(point?.data&&typeof point.data==="object") snapshots.push(point.data);
+        }
+      }else{
+        for(const row of rows){if(row?.receipt) yield row;}
+      }
+    }
+  }
+}
+async function exportAccountingBackup(snapshot){
+  if(unreadableAccountingStorage?.raw!=null){
+    downloadBlob(unreadableAccountingStorage.raw, "Larsa_Accounting_recovery_"+today()+".json", "application/json");
+    return;
+  }
+  const receipts=new Map();
+  let missing=0;
+  for(const row of accountingBackupRows(snapshot)){
+    const receipt=row.receipt;
+    if(!receipt.ref||receipt.data) continue;
+    if(!receipts.has(receipt.ref)) receipts.set(receipt.ref,await idbGet(receipt.ref));
+    const saved=receipts.get(receipt.ref);
+    if(saved?.data) receipt.data=saved.data;
+    else missing++;
+  }
+  const backup={backupAppName:"Larsa Engineering",appSchemaVersion:snapshot.appSchemaVersion,
+    backupCreatedAt:new Date().toISOString(),missingReceipts:missing,data:snapshot};
+  downloadBlob(JSON.stringify(backup,null,2),"Larsa_Backup_"+today()+".json","application/json");
+  if(missing) alert(T("Backup exported, but "+missing+" receipt references had no available attachment.","تم تصدير النسخة، لكن بعض مرفقات الإيصالات غير متوفرة."));
+}
+function accountingRestorePoint(source,name){
+  const {restorePoints,...snapshot}=source;
+  const count=Object.values(snapshot).reduce((total,value)=>total+(Array.isArray(value)?value.length:0),0);
+  return {id:uid("rp"),createdAt:new Date().toISOString(),name,count,data:structuredClone(snapshot)};
+}
+function commitAccountingState(staged){
+  const before=state;
+  state=staged;
+  try{
+    normalize();
+    if(!save()) throw new Error("Accounting data could not be saved");
+  }catch(error){
+    state=before;
+    throw error;
+  }
+}
+async function applyAccountingBackup(data,replace,beforeLabel){
+  if(!accountingStatePayload(data)) throw new Error("Unsupported accounting backup format");
+  if(replace&&["funding","revenue","operating","expenses","payroll","commissions"].some(key=>!Array.isArray(data[key]))){
+    throw new Error("An accounting restore requires a complete backup");
+  }
+  const before=state;
+  const current=structuredClone(before);
+  const beforeSnapshot=JSON.stringify(before);
+  const incoming=structuredClone(data);
+  let staged=incoming;
+  if(replace){
+    // Portable exports omit credentials. Keep them for matching local identities.
+    for(const [collection,key] of [["users","email"],["clientAccounts","username"]]){
+      const priorByName=new Map((current[collection]||[]).filter(row=>row[key]).map(row=>[String(row[key]).toLowerCase(),row]));
+      for(const row of incoming[collection]||[]){
+        const prior=priorByName.get(String(row[key]||"").toLowerCase());
+        if(!prior) continue;
+        for(const field of ["pass","password","passHash","passSalt","passIterations"]){
+          if(row[field]==null&&prior[field]!=null) row[field]=prior[field];
+        }
+      }
+    }
+    const restoredPoints=incoming.restorePoints||[];
+    const currentPoints=current.restorePoints||[];
+    const history=new Map([...restoredPoints,...currentPoints].map(point=>[point.id,point]));
+    staged.restorePoints=[accountingRestorePoint(current,beforeLabel),...history.values()].slice(0,20);
+  }else{
+    staged=current;
+    const defaults=blankState();
+    for(const [key,value] of Object.entries(incoming)){
+      if(Array.isArray(value)&&Array.isArray(defaults[key])){
+        const existing=staged[key]||[];
+        const ids=new Set(existing.map(row=>row.id).filter(Boolean));
+        staged[key]=[...existing,...value.filter(row=>{
+          if(!row.id) row.id=uid("imp");
+          if(ids.has(row.id)) return false;
+          ids.add(row.id);
+          return true;
+        })];
+      }else if(!["__proto__","constructor","prototype"].includes(key)&&!Object.hasOwn(staged,key)){
+        staged[key]=value;
+      }
+    }
+  }
+  const created=[];
+  const receiptRefs=new Map();
+  try{
+    for(const row of accountingBackupRows(staged)){
+      const receipt=row.receipt;
+      if(!receipt.data) continue;
+      const oldRef=receipt.ref;
+      const prior=oldRef&&receiptRefs.get(oldRef);
+      if(prior?.data===receipt.data){
+        row.receipt={...receipt,ref:prior.ref};
+      }else{
+        const ref=uid("rcp");
+        const saved=await idbPut(ref,{name:receipt.name,data:receipt.data});
+        if(!saved) throw new Error("An accounting backup attachment could not be saved");
+        created.push(ref);
+        if(oldRef) receiptRefs.set(oldRef,{ref,data:receipt.data});
+        row.receipt={...receipt,ref};
+      }
+      delete row.receipt.data;
+    }
+    if(state!==before||JSON.stringify(state)!==beforeSnapshot){
+      throw new Error("Accounting data changed during import");
+    }
+    commitAccountingState(staged);
+  }catch(error){
+    await Promise.all(created.map(ref=>idbDel(ref)));
+    throw error;
+  }
+}
+function v33PreviewBackup(data){const rows=Object.keys(data).filter(k=>Array.isArray(data[k])).map(k=>[k,data[k].length]);setHTML("modalRoot",`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${v33Text("Backup Preview","معاينة النسخة")}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body"><table><tbody>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="right">${r[1]}</td></tr>`).join("")}</tbody></table></div><div class="modal-foot"><button class="btn ghost" onclick="closeEditor()">${v33Text("Close","إغلاق")}</button></div></div></div>`);document.body.classList.add("modal-open")}
+async function importBackup(ev){
+  const file=ev.target.files?.[0];
+  if(!file) return;
+  ev.target.value="";
+  let data;
+  try{
+    const parsed=JSON.parse((await file.text()).replace(/^\ufeff/,""));
+    data=parsed?.data??parsed?.state??parsed;
+    if(!accountingStatePayload(data)) throw new Error("Unsupported accounting backup format");
+  }catch(error){
+    console.error(error);
+    alert(T("Invalid accounting backup file.","ملف النسخة الاحتياطية للمحاسبة غير صالح."));
+    return;
+  }
+  v33PreviewBackup(data);
+  const mode=prompt(T("Type MERGE to add missing records, REPLACE to restore this backup, or PREVIEW to inspect it.","اكتب MERGE لإضافة السجلات المفقودة، أو REPLACE لاستعادة النسخة، أو PREVIEW للمعاينة."),"MERGE")?.trim().toUpperCase();
+  if(!mode||mode==="PREVIEW") return;
+  if(!["MERGE","REPLACE","FRESH"].includes(mode)){
+    alert(T("Choose MERGE, REPLACE, or PREVIEW.","اختر MERGE أو REPLACE أو PREVIEW."));
+    return;
+  }
+  const replace=mode!=="MERGE";
+  if(replace&&!confirm(T("Replace accounting data with this backup? A restore point will preserve your current records.","استبدال بيانات المحاسبة بهذه النسخة؟ سيتم حفظ السجلات الحالية في نقطة استرجاع."))) return;
+  try{
+    await applyAccountingBackup(data,replace,T("Before backup restore","قبل استعادة النسخة"));
+  }catch(error){
+    console.error(error);
+    alert(T("Backup could not be restored. Accounting records were kept.","تعذرت استعادة النسخة. تم الاحتفاظ بسجلات المحاسبة."));
+    return;
+  }
+  closeEditor();
+  render();
+  alert(T("Backup restored successfully.","تمت استعادة النسخة بنجاح."));
+}
 function resetData(){if(confirm(v33Text("Reset system data? This clears the current local data.","إعادة تعيين بيانات النظام؟ سيتم مسح البيانات المحلية الحالية."))){state=seedDemo();normalize();save();render()}}
 function v33SystemCheck(){const issues=[];const codes={};state.projects.forEach(p=>{if(!p.date&&!p.startDate){} if(!p.code)issues.push(["Project",p.name,"Missing project code"]);codes[p.code]=(codes[p.code]||0)+1;if(xTotals(p.id).balance<0)issues.push(["Project",p.name,"Negative client balance"])});Object.keys(codes).forEach(c=>{if(c&&codes[c]>1)issues.push(["Project",c,"Duplicate project code"])});["funding","expenses","materials","projectLabor","payroll"].forEach(coll=>(state[coll]||[]).forEach(r=>{if(!v33RecordDate(r,coll))issues.push([coll,r.id,"Missing date"]);if(r.projectId&&!project(r.projectId))issues.push([coll,r.id,"Missing linked project"])}));state.payroll.forEach(p=>{if(num(p.netPay)<0)issues.push(["Payroll",p.employee,"Net pay below zero"]);if(p.region==="USA"&&p.taxWarning)issues.push(["Payroll",p.employee,p.taxWarning])});const html=`<div class="table-wrap"><table><thead><tr><th>${v33Text("Module","القسم")}</th><th>${v33Text("Record","السجل")}</th><th>${v33Text("Issue","المشكلة")}</th></tr></thead><tbody>${issues.length?issues.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join(""):emptyRow(3)}</tbody></table></div>`;setHTML("modalRoot",`<div class="modal-back"><div class="modal"><div class="modal-head"><h3>${v33Text("System Check","فحص النظام")}</h3><button class="mini" onclick="closeEditor()">×</button></div><div class="modal-body">${html}</div><div class="modal-foot"><button class="btn" onclick="closeEditor()">${v33Text("Close","إغلاق")}</button></div></div></div>`);document.body.classList.add("modal-open")}
 function v33SaveTaxJSON(){try{state.taxSettings=JSON.parse(val("tax_json"));save();render()}catch(e){alert(v33Text("Invalid tax settings JSON.","إعدادات الضريبة غير صالحة."))}}
@@ -2759,6 +2971,17 @@ function boot(){
   if(LOGO){ document.querySelectorAll(".larsa-logo-img").forEach(img=>img.src=LOGO); }
   applyTheme();
   initLoginScreen();
+  if(unreadableAccountingStorage){
+    $("loginErr").textContent=T("Saved accounting data could not be opened. Your saved data is still in browser storage.","تعذر فتح بيانات المحاسبة المحفوظة. ما زالت البيانات المحفوظة في تخزين المتصفح.");
+    if(unreadableAccountingStorage.raw!==null){
+      const recoveryButton=document.createElement("button");
+      recoveryButton.type="button";
+      recoveryButton.className="mini";
+      recoveryButton.textContent=T("Download recovery copy","تنزيل نسخة للاسترجاع");
+      recoveryButton.onclick=exportBackup;
+      $("loginErr").append(" ",recoveryButton);
+    }
+  }
   const ci=$("curIqd"), cu=$("curUsd");
   if(ci) ci.onclick=()=>setDispCur("IQD");
   if(cu) cu.onclick=()=>setDispCur("USD");
@@ -2784,6 +3007,8 @@ document.addEventListener("DOMContentLoaded",boot);
   const V34_VERSION = "3.4";
   const V34_SAMPLE_MODE = false;
   const V34_STORE_KEY = STORE_KEY + (V34_SAMPLE_MODE ? "_v34_sample" : "_v34_clean");
+  // Cloud refresh and normalization can change the working copy without saving it.
+  let savedAccountingStorage;
   function v34Text(en, ar){ return (typeof isAR==="function" && isAR()) ? (ar||en) : en; }
   function v34N(v){ return isFinite(Number(v)) ? Number(v) : 0; }
   function v34R2(v){ return Math.round((v34N(v)+Number.EPSILON)*100)/100; }
@@ -2832,24 +3057,44 @@ document.addEventListener("DOMContentLoaded",boot);
     state.users.forEach(u=>{ if(u.password&&!u.pass)u.pass=u.password; if(!u.name)u.name=u.email||"User"; });
   };
   load = function(){
-    try{ const raw=localStorage.getItem(V34_STORE_KEY); if(raw){state=JSON.parse(raw); normalize(); return;} }catch(e){}
-    // This isolated edition intentionally does not import unknown legacy users.
-    for(const legacyKey of []){
-      try{
-        const raw=localStorage.getItem(legacyKey);
-        if(!raw)continue;
-        const parsed=JSON.parse(raw);
-        state=legacyKey===OLD_KEY?migrateOld(parsed):parsed;
-        normalize();save();
-        state.audit=state.audit||[];
-        state.audit.unshift({timestamp:new Date().toISOString(),action:"Migrated local data",summary:`Imported existing records from ${legacyKey}`});
-        save();return;
-      }catch(e){console.warn("Legacy data migration skipped",legacyKey,e)}
+    let raw=null;
+    savedAccountingStorage=undefined;
+    unreadableAccountingStorage=null;
+    try{
+      raw=localStorage.getItem(V34_STORE_KEY);
+      savedAccountingStorage=raw;
+      if(raw!==null){
+        const saved=JSON.parse(raw);
+        if(!accountingStatePayload(saved)) throw new Error("Unsupported accounting storage format");
+        state=saved;
+        normalize();
+        return;
+      }
+    }catch(e){
+      console.error("Could not load accounting data",e);
+      unreadableAccountingStorage={raw};
     }
     state = V34_SAMPLE_MODE ? v34RichSampleState() : blankState();
-    normalize(); save();
+    normalize();
   };
-  save = function(){ try{localStorage.setItem(V34_STORE_KEY,JSON.stringify(state));return true;}catch(e){console.error(e);alert(v34Text("Save failed. Export a backup and clear old browser storage if needed.","تعذر الحفظ. صدّر نسخة احتياطية وامسح تخزين المتصفح القديم إذا لزم."));return false;} };
+  save = function(){
+    if(unreadableAccountingStorage){
+      alert(v34Text("Save blocked because existing accounting data could not be opened.","تم إيقاف الحفظ لأن بيانات المحاسبة الحالية تعذر فتحها."));
+      return false;
+    }
+    if(savedAccountingStorage===undefined) return false;
+    try{
+      const next=JSON.stringify(state);
+      if(localStorage.getItem(V34_STORE_KEY)!==savedAccountingStorage){
+        alert(v34Text("Another tab changed the saved accounting data. Reload this page before saving again.","تم تعديل بيانات المحاسبة المحفوظة في تبويب آخر. أعد تحميل هذه الصفحة قبل الحفظ مجدداً."));
+        return false;
+      }
+      localStorage.setItem(V34_STORE_KEY,next);
+      savedAccountingStorage=next;
+      return true;
+    }
+    catch(e){console.error(e);alert(v34Text("Save failed. Export a backup before troubleshooting storage.","فشل الحفظ. صدّر نسخة احتياطية قبل معالجة مشكلة التخزين."));return false;}
+  };
 
   function v34Currency(){return state?.settings?.reportCurrency||"project";}
   function v34FmtUsd(usdValue, projectCurrency){
@@ -3273,17 +3518,47 @@ document.addEventListener("DOMContentLoaded",boot);
   const oldNotif=renderNotifications; renderNotifications=function(){ oldNotif(); const h=document.querySelector('#view .page-head .rpt-actions'); if(h && !byId('v35-target-btn')) h.insertAdjacentHTML('beforeend',`<button id="v35-target-btn" class="btn" onclick="v35OpenTargetNotification()">${L('Send Targeted Notification','إرسال إشعار محدد')}</button>`);}; try{RENDERERS.notifications=renderNotifications}catch(e){}
 
   // Backup restore points and advanced import
-  window.v35CreateRestorePoint=function(){const name=prompt(L('Restore point name','اسم نقطة الاسترجاع'),new Date().toLocaleString())||'Restore Point'; const snapshot=JSON.parse(JSON.stringify(state)); const count=Object.keys(snapshot).reduce((a,k)=>a+(Array.isArray(snapshot[k])?snapshot[k].length:0),0); state.restorePoints=state.restorePoints||[]; state.restorePoints.unshift({id:ID('rp'),createdAt:new Date().toISOString(),name,count,data:snapshot}); if(state.restorePoints.length>20)state.restorePoints.length=20; save(); render();};
-  window.v35Rollback=function(id){const rp=(state.restorePoints||[]).find(x=>x.id===id); if(!rp)return; if(!confirm(L('Rollback to this restore point? Current data will be stored as a restore point first.','هل تريد الرجوع إلى نقطة الاسترجاع؟ سيتم حفظ البيانات الحالية كنقطة استرجاع أولاً.')))return; const cur=JSON.parse(JSON.stringify(state)); state=JSON.parse(JSON.stringify(rp.data)); state.restorePoints=state.restorePoints||[]; state.restorePoints.unshift({id:ID('rp'),createdAt:new Date().toISOString(),name:'Before rollback',count:0,data:cur}); normalize(); save(); render();};
-  window.v35ImportBackupAdvanced=function(ev){ const file=ev.target.files?.[0]; if(!file)return; const reader=new FileReader(); reader.onload=function(){try{const imported=JSON.parse(reader.result); const mode=prompt(L('Type MERGE to merge, REPLACE to replace all, or FRESH to reset then import.','اكتب MERGE للدمج، REPLACE للاستبدال، أو FRESH للتصفير ثم الاستيراد.'),'MERGE'); if(!mode)return; v35CreateRestorePoint(); if(/^replace|fresh$/i.test(mode)){state=imported.data||imported.state||imported; normalize(); save(); render();} else {mergeState(imported.data||imported.state||imported); normalize(); save(); render();} alert(L('Import complete.','تم الاستيراد.'));}catch(e){alert(L('Invalid backup file.','ملف النسخة غير صحيح.'))}}; reader.readAsText(file); ev.target.value='';};
-  const oldExport=exportBackup; exportBackup=function(){ const data=JSON.stringify({backupAppName:'Larsa Engineering Web/Mobile App',appSchemaVersion:V35_VERSION,backupCreatedAt:new Date().toISOString(),data:state},null,2); downloadText('larsa_backup_'+today35()+'.json',data,'application/json'); };
+  window.v35CreateRestorePoint=function(){
+    const name=prompt(L('Restore point name','اسم نقطة الاسترجاع'),new Date().toLocaleString());
+    if(name===null) return;
+    const point=accountingRestorePoint(state,name.trim()||L('Restore point','نقطة استرجاع'));
+    const staged={...state,restorePoints:[point,...(state.restorePoints||[])].slice(0,20)};
+    try{commitAccountingState(structuredClone(staged));}
+    catch(error){console.error(error);return;}
+    render();
+  };
+  window.v35Rollback=async function(id){
+    const point=(state.restorePoints||[]).find(x=>x.id===id);
+    if(!point||!confirm(L('Restore this point? A new restore point will preserve your current records.','استعادة هذه النقطة؟ ستحتفظ نقطة استرجاع جديدة بسجلاتك الحالية.'))) return;
+    try{await applyAccountingBackup(point.data,true,L('Before rollback','قبل التراجع'));}
+    catch(error){
+      console.error(error);
+      alert(L('Restore point could not be applied. Accounting records were kept.','تعذر تطبيق نقطة الاسترجاع. تم الاحتفاظ بسجلات المحاسبة.'));
+      return;
+    }
+    render();
+  };
+  window.v35ImportBackupAdvanced=importBackup;
 
   // Supabase sync adapter: single-state JSON backup table for production readiness.
   async function loadSupabaseLib(){ if(window.supabase?.createClient)return window.supabase; await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';s.onload=res;s.onerror=rej;document.head.appendChild(s);}); return window.supabase; }
   async function getSupabase(){ const url=state.settings.supabaseUrl, key=state.settings.supabaseAnonKey; if(!url||!key){alert(L('Add Supabase URL and Anon Key first.','أضف Supabase URL وAnon Key أولاً.')); return null;} const sb=await loadSupabaseLib(); return sb.createClient(url,key); }
   window.v35SaveSupabaseSettings=function(){state.settings.supabaseUrl=byId('v35_surl').value.trim();state.settings.supabaseAnonKey=byId('v35_skey').value.trim();state.settings.deploymentMode=byId('v35_smode').value;state.settings.emailVerification=byId('v35_verify').value==='yes';state.settings.supabaseEnabled=!!(state.settings.supabaseUrl&&state.settings.supabaseAnonKey);save();alert(L('Supabase settings saved.','تم حفظ إعدادات Supabase.'));};
-  window.v35PushStateToSupabase=async function(){const sb=await getSupabase(); if(!sb)return; const payload={id:'primary',data:state,updated_at:new Date().toISOString(),schema_version:V35_VERSION}; const {error}=await sb.from('larsa_app_state').upsert(payload); if(error){alert(error.message);return;} await sb.from('larsa_backups').insert({name:'Manual backup '+new Date().toLocaleString(),data:state,schema_version:V35_VERSION}).catch?.(()=>{}); alert(L('State pushed to Supabase.','تم رفع البيانات إلى Supabase.'));};
-  window.v35PullStateFromSupabase=async function(replace){const sb=await getSupabase(); if(!sb)return; const {data,error}=await sb.from('larsa_app_state').select('*').eq('id','primary').single(); if(error){alert(error.message);return;} v35CreateRestorePoint(); if(replace){state=data.data;normalize();save();render();alert(L('State replaced from Supabase.','تم الاستبدال من Supabase.'));} else {mergeState(data.data);normalize();save();render();alert(L('State merged from Supabase.','تم الدمج من Supabase.'));}};
+  window.v35PushStateToSupabase=async function(snapshot=state){const sb=await getSupabase(); if(!sb)return; const payload={id:'primary',data:snapshot,updated_at:new Date().toISOString(),schema_version:V35_VERSION}; const {error}=await sb.from('larsa_app_state').upsert(payload); if(error){alert(error.message);return;} await sb.from('larsa_backups').insert({name:'Manual backup '+new Date().toLocaleString(),data:snapshot,schema_version:V35_VERSION}).catch?.(()=>{}); alert(L('State pushed to Supabase.','تم رفع البيانات إلى Supabase.'));};
+  window.v35PullStateFromSupabase=async function(replace){
+    if(replace&&!confirm(L('Replace accounting data with the remote backup? A restore point will preserve your current records.','استبدال بيانات المحاسبة بالنسخة البعيدة؟ ستحتفظ نقطة استرجاع بسجلاتك الحالية.'))) return;
+    const sb=await getSupabase();
+    if(!sb) return;
+    const {data,error}=await sb.from('larsa_app_state').select('*').eq('id','primary').single();
+    if(error){alert(error.message);return;}
+    try{await applyAccountingBackup(data.data,replace,L('Before remote backup restore','قبل استعادة النسخة البعيدة'));}
+    catch(restoreError){
+      console.error(restoreError);
+      alert(L('Remote backup could not be applied. Accounting records were kept.','تعذر تطبيق النسخة البعيدة. تم الاحتفاظ بسجلات المحاسبة.'));
+      return;
+    }
+    render();
+  };
 
   // Staff login: if Supabase is configured, allow email verification flow as optional sign-in fallback.
   const oldDoLogin=doLogin;
@@ -3457,33 +3732,12 @@ document.addEventListener("DOMContentLoaded",boot);
    - real XLSX workbook export without external libraries
    ============================================================ */
 (function(){
-  const V37_VERSION='3.7';
   const $id=(id)=>document.getElementById(id);
   const esc37=(v)=>String(v??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));
   const L37=(en,ar)=>{try{return (state?.settings?.language==='ar')?ar:en}catch(e){return en}};
   const n37=(v)=>{const x=Number(String(v??0).replace(/,/g,''));return isFinite(x)?x:0};
   const r37=(v)=>Math.round(n37(v)*100)/100;
   const today37=()=>{try{return today()}catch(e){return new Date().toISOString().slice(0,10)}};
-  function addAudit37(msg){try{if(typeof log==='function')log(msg,'v3.7','system','')}catch(e){} }
-
-  function normalizeV37(){
-    if(!window.state) return;
-    state.settings=state.settings||{};
-    state.settings.appSchemaVersion=V37_VERSION;
-    if(state.settings.consultancyRate==null || Number(state.settings.consultancyRate)===0.08) state.settings.consultancyRate=0;
-    (state.projects||[]).forEach(p=>{
-      if(p.consultancyRate==null || p.consultancyRate==='' || Number(p.consultancyRate)===0.08 && !p.consultancyRateConfirmed) p.consultancyRate = n37(p.consultancyRateConfirmed? p.consultancyRate : 0);
-      if(!p.executionLanguage) p.executionLanguage='system';
-    });
-    (state.funding||[]).forEach(f=>{
-      const p=(typeof project==='function')?project(f.projectId):null;
-      const rt=n37(f.consultancyRate!=null?f.consultancyRate:(p?p.consultancyRate:0));
-      f.consultancyRate=rt;
-      f.consultancyFee=f.waived?0:Math.round(n37(f.amount)*rt);
-      f.netConstruction=n37(f.amount)-n37(f.consultancyFee);
-    });
-    try{if(typeof save==='function')save()}catch(e){}
-  }
 
   // No assumed 8% fee: override labels and funding math.
   try{
@@ -3676,10 +3930,7 @@ document.addEventListener("DOMContentLoaded",boot);
   // Final render hook.
   const oldRender37=window.render;
   window.render=function(){const out=oldRender37?oldRender37():undefined; setTimeout(()=>{try{cleanupContactUI37(); if(activeSection==='notifications')renderNotifications();}catch(e){}},0); return out;};
-  const oldLoad37=window.load;
-  window.load=function(){const out=oldLoad37?oldLoad37():undefined; normalizeV37(); return out;};
-  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{try{normalizeV37();cleanupContactUI37(); if(!currentUser) v35ShowPublic();}catch(e){}},100));
-  try{normalizeV37();addAudit37('Applied v3.7 production fixes')}catch(e){}
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{try{cleanupContactUI37(); if(!currentUser) v35ShowPublic();}catch(e){}},100));
 })();
 </script>
 
@@ -4240,7 +4491,7 @@ document.addEventListener("DOMContentLoaded",boot);
     const pid=window.__larsaReturnProjectId;
     const tab=window.__larsaReturnProjectTab;
     const out=await oldSaveEditor311.apply(this,arguments);
-    if(pid){
+    if(pid&&out===true){
       setTimeout(()=>{
         try{ renderProject311(pid,tab||'summary'); }
         finally{ window.__larsaReturnProjectId=''; window.__larsaReturnProjectTab=''; }
@@ -4313,25 +4564,21 @@ document.addEventListener("DOMContentLoaded",boot);
     if(!set.size)set.add(startOfWeek312(today312()));
     return [...set].sort((a,b)=>b.localeCompare(a)).map(w=>[w,`${w} — ${endOfWeek312(w)}`]);
   }
-  function convert312(v,from,to){
-    const value=n312(v), src=from||'USD';
-    if(to==='USD'){try{return typeof usd==='function'?usd(value,src):(src==='IQD'?value/(state.settings?.rate||1):value)}catch(e){return value}}
-    if(to==='IQD'){try{return typeof toIQD==='function'?toIQD(typeof usd==='function'?usd(value,src):value, 'USD'):(src==='USD'?value*(state.settings?.rate||1):value)}catch(e){return value}}
-    return value;
+  function convert312(v,row,currency){
+    return currency==='IQD'?toIQD(v,row.currency||'USD',row.fxRate):usd(v,row.currency||'USD',row.fxRate);
   }
-  function money312(v,from,mode){
-    mode=mode||from||'USD';
-    try{
-      if(mode==='both')return `${fmt(convert312(v,from,'USD'),'USD')} / ${fmt(convert312(v,from,'IQD'),'IQD')}`;
-      if(mode==='IQD')return fmt(convert312(v,from,'IQD'),'IQD');
-      return fmt(convert312(v,from,'USD'),'USD');
-    }catch(e){return String(v??'')}
+  function money312(getAmount,mode){
+    if(mode==='both')return `${fmt(getAmount('USD'),'USD')} / ${fmt(getAmount('IQD'),'IQD')}`;
+    return fmt(getAmount(mode),mode);
   }
   function labelMode312(m){return {week:L312('Weekly','أسبوعي'),month:L312('Monthly','شهري'),year:L312('Yearly','سنوي'),all:L312('All History','كل السجل'),custom:L312('Custom','مخصص')}[m]||m;}
   function filterPayrollRows312(id,opts){
     const p=(state.payroll||[]).find(x=>x.id===id); if(!p)return [];
     const emp=p.employeeId; const mode=opts?.mode||'month';
-    let rows=(state.payroll||[]).filter(r=>r.employeeId===emp&&r.status!=='Void');
+    let rows=(state.payroll||[]).filter(r=>{
+      const sameEmployee=emp?r.employeeId===emp:r.id===id;
+      return sameEmployee&&r.status!=='Void';
+    });
     if(mode==='week'){
       const ws=opts.weekStart||startOfWeek312(payrollDate312(p)); const we=endOfWeek312(ws);
       rows=rows.filter(r=>{const d=payrollDate312(r);return d>=ws&&d<=we});
@@ -4395,18 +4642,19 @@ document.addEventListener("DOMContentLoaded",boot);
     const p=(state.payroll||[]).find(x=>x.id===id); if(!p)return;
     const e=(state.employees||[]).find(x=>x.id===p.employeeId)||{};
     const rows=filterPayrollRows312(id,opts);
-    const sum=k=>rows.reduce((s,r)=>s+convert312(r[k]||0,r.currency||p.currency,opts.currency==='both'?'USD':opts.currency),0);
-    const fmtCell=(v,cur)=>money312(v,cur||p.currency,opts.currency);
+    const included=rows.filter(payrollIsIncluded);
+    const sum=getValue=>money312(currency=>included.reduce((total,row)=>total+convert312(getValue(row),row,currency),0),opts.currency);
+    const fmtCell=(value,row)=>money312(currency=>convert312(value,row,currency),opts.currency);
     const title=L312('Employee Payroll Statement','كشف راتب الموظف');
     const body=`${typeof printHeader==='function'?printHeader(title):''}<div class="kgrid"><div class="kbox"><div class="l">${L312('Employee','الموظف')}</div><div class="v">${esc312(e.name||p.employee||'—')}</div></div><div class="kbox"><div class="l">${L312('Period','الفترة')}</div><div class="v">${esc312(periodText312(opts))}</div></div><div class="kbox"><div class="l">${L312('Currency','العملة')}</div><div class="v">${opts.currency==='both'?L312('USD + IQD','دولار + دينار'):opts.currency}</div></div><div class="kbox"><div class="l">${L312('Region','المنطقة')}</div><div class="v">${esc312(e.payrollRegion||p.region||'')}</div></div></div>
-    <table><thead><tr><th>${L312('Pay Date','تاريخ الدفع')}</th><th>${L312('Period','الفترة')}</th><th class="r">${L312('Gross','الإجمالي')}</th><th class="r">${L312('Deductions','الاستقطاعات')}</th><th class="r">${L312('Net','الصافي')}</th><th class="r">${L312('Company Cost','تكلفة الشركة')}</th><th>${L312('Status','الحالة')}</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc312(r.payDate||'')}</td><td>${esc312((r.periodStart||'')+' — '+(r.periodEnd||''))}</td><td class="r">${fmtCell(r.grossPay,r.currency)}</td><td class="r">${fmtCell(r.totalEmployeeDeductions,r.currency)}</td><td class="r">${fmtCell(r.netPay,r.currency)}</td><td class="r">${fmtCell(r.totalCompanyCost,r.currency)}</td><td>${esc312(r.status||'')}</td></tr>`).join(''):`<tr><td colspan="7" class="muted center">${L312('No payroll records in this period.','لا توجد قيود رواتب ضمن هذه الفترة.')}</td></tr>`}</tbody></table>
-    <table><tbody><tr class="tot"><td>${L312('Gross Total','إجمالي المستحقات')}</td><td class="r">${opts.currency==='both'?money312(rows.reduce((s,r)=>s+convert312(r.grossPay,r.currency,'USD'),0),'USD','both'):fmt(sum('grossPay'),opts.currency)}</td></tr><tr class="tot"><td>${L312('Total Deductions','إجمالي الاستقطاعات')}</td><td class="r">${opts.currency==='both'?money312(rows.reduce((s,r)=>s+convert312(r.totalEmployeeDeductions,r.currency,'USD'),0),'USD','both'):fmt(sum('totalEmployeeDeductions'),opts.currency)}</td></tr><tr class="tot"><td>${L312('Net Total','إجمالي الصافي')}</td><td class="r">${opts.currency==='both'?money312(rows.reduce((s,r)=>s+convert312(r.netPay,r.currency,'USD'),0),'USD','both'):fmt(sum('netPay'),opts.currency)}</td></tr><tr class="tot"><td>${L312('Total Company Cost','إجمالي تكلفة الشركة')}</td><td class="r">${opts.currency==='both'?money312(rows.reduce((s,r)=>s+convert312(r.totalCompanyCost,r.currency,'USD'),0),'USD','both'):fmt(sum('totalCompanyCost'),opts.currency)}</td></tr></tbody></table>`;
+    <table><thead><tr><th>${L312('Pay Date','تاريخ الدفع')}</th><th>${L312('Period','الفترة')}</th><th class="r">${L312('Gross','الإجمالي')}</th><th class="r">${L312('Deductions','الاستقطاعات')}</th><th class="r">${L312('Net','الصافي')}</th><th class="r">${L312('Company Cost','تكلفة الشركة')}</th><th>${L312('Status','الحالة')}</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc312(r.payDate||'')}</td><td>${esc312((r.periodStart||'')+' — '+(r.periodEnd||''))}</td><td class="r">${fmtCell(r.grossPay??r.gross,r)}</td><td class="r">${fmtCell(r.totalEmployeeDeductions??r.deductions,r)}</td><td class="r">${fmtCell(r.netPay??r.net,r)}</td><td class="r">${fmtCell(payrollCost(r),r)}</td><td>${esc312(r.status||'')}</td></tr>`).join(''):`<tr><td colspan="7" class="muted center">${L312('No payroll records in this period.','لا توجد قيود رواتب ضمن هذه الفترة.')}</td></tr>`}</tbody></table>
+    <table><tbody><tr class="tot"><td>${L312('Gross Total','إجمالي المستحقات')}</td><td class="r">${sum(r=>r.grossPay??r.gross)}</td></tr><tr class="tot"><td>${L312('Total Deductions','إجمالي الاستقطاعات')}</td><td class="r">${sum(r=>r.totalEmployeeDeductions??r.deductions)}</td></tr><tr class="tot"><td>${L312('Net Total','إجمالي الصافي')}</td><td class="r">${sum(r=>r.netPay??r.net)}</td></tr><tr class="tot"><td>${L312('Total Company Cost','إجمالي تكلفة الشركة')}</td><td class="r">${sum(payrollCost)}</td></tr></tbody></table>`;
     if(typeof printDoc==='function')printDoc(title,body); else window.print();
   };
   window.renderPayrollV312=function(){
-    const a=(state.payroll||[]).filter(r=>(!window.payEmp||r.employeeId===window.payEmp)&&((window.payRegion||'all')==='all'||r.region===window.payRegion)&&r.status!=='Void'&&(typeof xVisible==='function'?xVisible(r):true)).sort((x,y)=>String(y.payDate).localeCompare(x.payDate));
-    const cost=a.reduce((s,r)=>s+(typeof usd==='function'?usd(r.totalCompanyCost||r.grossPay||r.gross,r.currency):n312(r.totalCompanyCost||r.grossPay||r.gross)),0);
-    const html=`<div class="page-head"><h1>${typeof t==='function'?t('nav_payroll'):L312('Payroll','الرواتب')}</h1><div>${can312('export','payroll')?`<button class="btn ghost" onclick="xPayrollCSV()">CSV</button><button class="btn ghost" onclick="v33AdvancedExcel('payroll')">${L312('Excel','إكسل')}</button>`:''} ${can312('create','payroll')?`<button class="btn" onclick="addNew('payroll')">+ ${typeof t==='function'?t('ed_add'):L312('Add','إضافة')}</button>`:''}</div></div><div class="notice">${L312('Payroll printing uses dropdown choices for period and currency.','طباعة الرواتب تستخدم قوائم اختيار للفترة والعملة.')}</div><div class="kpi-row">${kpi(L312('Total Company Payroll Cost','إجمالي تكلفة الرواتب على الشركة'),money(cost),'','sal')}${kpi(L312('Pending Manager Approval','بانتظار اعتماد المدير'),a.filter(r=>r.status==='Pending Manager Approval').length,'','bad')}${kpi(L312('Paid Records','قيود مدفوعة'),a.filter(r=>r.status==='Paid').length,'','good')}</div>${card(typeof t==='function'?t('p_center'):L312('Payroll Center','مركز الرواتب'),`<div class="filter-bar"><select onchange="payEmp=this.value;render()"><option value="">${L312('All Employees','كل الموظفين')}</option>${(state.employees||[]).map(e=>`<option value="${e.id}" ${e.id===window.payEmp?'selected':''}>${esc312(e.name)}</option>`).join('')}</select><select onchange="payRegion=this.value;render()">${['all','Iraq','USA','International'].map(r=>`<option value="${r}" ${r===(window.payRegion||'all')?'selected':''}>${r==='all'?L312('All Regions','كل المناطق'):r}</option>`).join('')}</select></div><div class="table-wrap"><table><thead><tr><th>${typeof t==='function'?t('p_paydate'):L312('Pay Date','تاريخ الدفع')}</th><th>${typeof t==='function'?t('p_employee'):L312('Employee','الموظف')}</th><th>${typeof t==='function'?t('region'):L312('Region','المنطقة')}</th><th>${L312('Period','الفترة')}</th><th class="right">${L312('Gross','الإجمالي')}</th><th class="right">${L312('Deductions','الاستقطاعات')}</th><th class="right">${L312('Net','الصافي')}</th><th class="right">${L312('Company Cost','تكلفة الشركة')}</th><th>${typeof t==='function'?t('status'):L312('Status','الحالة')}</th><th></th></tr></thead><tbody>${a.length?a.map(r=>`<tr><td>${esc312(r.payDate||'')}</td><td>${esc312(r.employee||'—')}${r.taxWarning?`<div class="neg small">${esc312(r.taxWarning)}</div>`:''}</td><td>${esc312(r.region||'')}</td><td>${esc312((r.periodStart||'—')+' — '+(r.periodEnd||'—'))}</td><td class="right">${fmt(r.grossPay,r.currency)}</td><td class="right neg">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="right sal">${fmt(r.netPay,r.currency)}</td><td class="right">${fmt(r.totalCompanyCost,r.currency)}</td><td><span class="pill ${r.status==='Paid'?'ok':''}">${esc312(r.status||'')}</span></td><td class="right nowrap">${r.region==='USA'?`<button class="mini" onclick="x33CalcUSPayroll('${r.id}')">${L312('Calc Tax','حساب الضريبة')}</button>`:''} <button class="mini" onclick="x33AskStatement('${r.id}')">${L312('Print','طباعة')}</button> <button class="mini" onclick="printPaystub('${r.id}')">${typeof t==='function'?t('p_paystub'):L312('Paystub','قسيمة الراتب')}</button> <button class="mini" onclick="x33SubmitPayroll('${r.id}')">${L312('Submit','إرسال')}</button> ${can312('approve','payroll')?`<button class="mini approve" onclick="x33ApprovePayroll('${r.id}')">${L312('Approve','اعتماد')}</button>`:''} <button class="mini" onclick="x33PaidPayroll('${r.id}')">${L312('Paid','مدفوع')}</button> ${can312('edit','payroll')?`<button class="mini" onclick="openEditor('payroll','${r.id}')">✎</button>`:''} ${can312('delete','payroll')?`<button class="mini flagged" onclick="deletePayroll312('${r.id}')">${L312('Delete','حذف')}</button>`:''}</td></tr>`).join(''):emptyRow(10)}</tbody></table></div>`)}`;
+    const a=(state.payroll||[]).filter(r=>(!payEmp||r.employeeId===payEmp)&&((payRegion||'all')==='all'||r.region===payRegion)&&r.status!=='Void'&&(typeof xVisible==='function'?xVisible(r):true)).sort((x,y)=>String(y.payDate).localeCompare(x.payDate));
+    const currency=dispCur(), cost=a.filter(payrollIsIncluded).reduce((s,r)=>s+convert312(payrollCost(r),r,currency),0);
+    const html=`<div class="page-head"><h1>${typeof t==='function'?t('nav_payroll'):L312('Payroll','الرواتب')}</h1><div>${can312('export','payroll')?`<button class="btn ghost" onclick="xPayrollCSV()">CSV</button><button class="btn ghost" onclick="v33AdvancedExcel('payroll')">${L312('Excel','إكسل')}</button>`:''} ${can312('create','payroll')?`<button class="btn" onclick="addNew('payroll')">+ ${typeof t==='function'?t('ed_add'):L312('Add','إضافة')}</button>`:''}</div></div><div class="notice">${L312('Payroll printing uses dropdown choices for period and currency.','طباعة الرواتب تستخدم قوائم اختيار للفترة والعملة.')}</div><div class="kpi-row">${kpi(L312('Total Company Payroll Cost','إجمالي تكلفة الرواتب على الشركة'),fmt(cost,currency),'','sal')}${kpi(L312('Pending Manager Approval','بانتظار اعتماد المدير'),a.filter(r=>r.status==='Pending Manager Approval').length,'','bad')}${kpi(L312('Paid Records','قيود مدفوعة'),a.filter(r=>r.status==='Paid').length,'','good')}</div>${card(typeof t==='function'?t('p_center'):L312('Payroll Center','مركز الرواتب'),`<div class="filter-bar"><select onchange="payEmp=this.value;render()"><option value="">${L312('All Employees','كل الموظفين')}</option>${(state.employees||[]).map(e=>`<option value="${e.id}" ${e.id===payEmp?'selected':''}>${esc312(e.name)}</option>`).join('')}</select><select onchange="payRegion=this.value;render()">${['all','Iraq','USA','International'].map(r=>`<option value="${r}" ${r===(payRegion||'all')?'selected':''}>${r==='all'?L312('All Regions','كل المناطق'):r}</option>`).join('')}</select></div><div class="table-wrap"><table><thead><tr><th>${typeof t==='function'?t('p_paydate'):L312('Pay Date','تاريخ الدفع')}</th><th>${typeof t==='function'?t('p_employee'):L312('Employee','الموظف')}</th><th>${typeof t==='function'?t('region'):L312('Region','المنطقة')}</th><th>${L312('Period','الفترة')}</th><th class="right">${L312('Gross','الإجمالي')}</th><th class="right">${L312('Deductions','الاستقطاعات')}</th><th class="right">${L312('Net','الصافي')}</th><th class="right">${L312('Company Cost','تكلفة الشركة')}</th><th>${typeof t==='function'?t('status'):L312('Status','الحالة')}</th><th></th></tr></thead><tbody>${a.length?a.map(r=>`<tr><td>${esc312(r.payDate||'')}</td><td>${esc312(r.employee||'—')}${r.taxWarning?`<div class="neg small">${esc312(r.taxWarning)}</div>`:''}</td><td>${esc312(r.region||'')}</td><td>${esc312((r.periodStart||'—')+' — '+(r.periodEnd||'—'))}</td><td class="right">${fmt(r.grossPay,r.currency)}</td><td class="right neg">${fmt(r.totalEmployeeDeductions,r.currency)}</td><td class="right sal">${fmt(r.netPay,r.currency)}</td><td class="right">${fmt(r.totalCompanyCost,r.currency)}</td><td><span class="pill ${r.status==='Paid'?'ok':''}">${esc312(r.status||'')}</span></td><td class="right nowrap">${r.region==='USA'?`<button class="mini" onclick="x33CalcUSPayroll('${r.id}')">${L312('Calc Tax','حساب الضريبة')}</button>`:''} <button class="mini" onclick="x33AskStatement('${r.id}')">${L312('Print','طباعة')}</button> <button class="mini" onclick="printPaystub('${r.id}')">${typeof t==='function'?t('p_paystub'):L312('Paystub','قسيمة الراتب')}</button> <button class="mini" onclick="x33SubmitPayroll('${r.id}')">${L312('Submit','إرسال')}</button> ${can312('approve','payroll')?`<button class="mini approve" onclick="x33ApprovePayroll('${r.id}')">${L312('Approve','اعتماد')}</button>`:''} <button class="mini" onclick="x33PaidPayroll('${r.id}')">${L312('Paid','مدفوع')}</button> ${can312('edit','payroll')?`<button class="mini" onclick="openEditor('payroll','${r.id}')">✎</button>`:''} ${can312('delete','payroll')?`<button class="mini flagged" onclick="deletePayroll312('${r.id}')">${L312('Delete','حذف')}</button>`:''}</td></tr>`).join(''):emptyRow(10)}</tbody></table></div>`)}`;
     if(typeof setHTML==='function')setHTML('view',html); else document.getElementById('view').innerHTML=html;
   };
   window.renderPayrollV33=window.renderPayrollV312;
@@ -4506,12 +4754,10 @@ document.addEventListener("DOMContentLoaded",boot);
   }
   const priorPush=window.v35PushStateToSupabase;
   if(typeof priorPush==="function")window.v35PushStateToSupabase=async function(){
-    const original=state;state=safeStateCopy();
-    try{return await priorPush()}finally{state=original}
+    return priorPush(safeStateCopy());
   };
   window.exportBackup=function(){
-    const data=JSON.stringify({backupAppName:"Larsa Engineering Web/Mobile App",appSchemaVersion:"3.12-fixed",backupCreatedAt:new Date().toISOString(),data:safeStateCopy()},null,2);
-    downloadText("larsa_backup_"+today()+".json",data,"application/json");
+    return exportAccountingBackup(safeStateCopy());
   };
 })();
 </script>
@@ -4945,7 +5191,7 @@ function v35Series(scope, from, to) {
     const k = r.status === "Received" ? bucket(r.date) : null;
     if (!k) return;
     const region = (r.stream || "").indexOf("USA") >= 0 ? "USA" : "Iraq";
-    if (matches(region)) rev[k] += usd(r.amount, r.currency);
+    if (matches(region)) rev[k] += usdRow(r);
   });
   if (scope === "all" || scope === "Iraq") {
     (state.funding || []).forEach((f) => {
@@ -4956,14 +5202,14 @@ function v35Series(scope, from, to) {
   const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
   (state.operating || []).forEach((o) => {
     const k = actual(o.status) ? bucket(o.date) : null;
-    if (k && v35OperatingInScope(scope, o.region)) cost[k] += usd(o.amount, o.currency);
+    if (k && v35OperatingInScope(scope, o.region)) cost[k] += usdRow(o);
   });
   (state.payroll || []).forEach((p) => {
-    const k = !["Void", "Rejected"].includes(p.status) ? bucket(p.payDate) : null;
-    if (k && matches(p.region)) cost[k] += usd(p.totalCompanyCost || p.grossPay || p.gross || 0, p.currency);
+    const k = payrollIsIncluded(p) ? bucket(p.payDate) : null;
+    if (k && matches(p.region)) cost[k] += payrollCostUsd(p);
   });
   (state.commissions || []).forEach((c) => {
-    const k = !["Void", "Rejected"].includes(c.status) ? bucket(c.date) : null;
+    const k = !["Void", "Rejected", "Reversed"].includes(c.status) ? bucket(c.date) : null;
     if (k && matches(c.region)) cost[k] += num(c.due);
   });
 
@@ -5029,54 +5275,53 @@ function v35ChartsBlock(scope, title) {
    ============================================================ */
 Object.assign(C, { mat: "#f0b429", lab: "#9c6ade" });
 
-/* Revenue / Materials / Labor / Total / Net for whichever projects
-   `matchesProject(projectId)` accepts -- one project, or every construction
-   project at once. Mirrors xTotals()'s own field names (gross funding as
-   revenue, exp+mat+lab as total, revenue+fee-direct as the project's result)
-   but split by month, so this reads as the same numbers the Summary tab and
-   Client Statement already show, just over time instead of as one snapshot.
-   Larsa's own consultancy fee is included in revenue here for the same
-   reason it is in xTotals.result -- it is money the project earned Larsa,
-   even though it never reaches the construction trust balance. */
-function v35ProjectLikeSeries(matchesProject, from, to) {
+/* Separate project construction spending from the expenses that reduce
+   company profit. Contractor projects recognize funding and project costs. */
+function v35ProjectLikeSeries(matchesProject, from, to, currency = dispCur()) {
   const keys = v35MonthKeys(from, to);
   const rev = Object.fromEntries(keys.map((k) => [k, 0]));
   const mat = Object.fromEntries(keys.map((k) => [k, 0]));
   const lab = Object.fromEntries(keys.map((k) => [k, 0]));
   const exp = Object.fromEntries(keys.map((k) => [k, 0]));
+  const companyCost = Object.fromEntries(keys.map((k) => [k, 0]));
   const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in rev ? k : null; };
   const actual = (s) => ["Approved", "Paid", "Received"].includes(s);
+  const inScope = (r) => matchesProject(r.projectId) && xVisible(r);
+  const contractor = (r) => project(r.projectId)?._acct?.accounting_mode === "contractor";
 
   /* Each line converts at the rate captured on it (row.fxRate), falling back
      to the current setting for lines entered before that was recorded, so a
      past month stops being re-valued every time the rate moves. */
   (state.funding || []).forEach((f) => {
-    const k = (matchesProject(f.projectId) && ["Approved", "Received"].includes(f.status)) ? bucket(f.date) : null;
-    if (k) rev[k] += f.waived ? 0 : usd(f.consultancyFee, f.currency, f.fxRate);
+    const k = (inScope(f) && ["Approved", "Received", "Paid"].includes(f.status)) ? bucket(f.date) : null;
+    if (!k) return;
+    if (contractor(f)) rev[k] += ledgerInCurrency(f,currency);
+    else if (!f.waived) rev[k] += ledgerInCurrency(f,currency,"consultancyFee");
   });
   (state.revenue || []).forEach((r) => {
-    const k = (matchesProject(r.projectId) && r.status === "Received") ? bucket(r.date) : null;
-    if (k) rev[k] += usd(r.amount, r.currency, r.fxRate);
+    const k = (inScope(r) && actual(r.status)) ? bucket(r.date) : null;
+    if (k) rev[k] += ledgerInCurrency(r,currency);
   });
-  (state.expenses || []).forEach((e) => {
-    const k = (matchesProject(e.projectId) && actual(e.status)) ? bucket(e.date) : null;
-    if (k) exp[k] += usd(e.amount, e.currency, e.fxRate);
-  });
-  (state.materials || []).forEach((m) => {
-    const k = (matchesProject(m.projectId) && actual(m.status)) ? bucket(m.date) : null;
-    if (k) mat[k] += usd(m.amount, m.currency, m.fxRate);
-  });
-  (state.projectLabor || []).forEach((l) => {
-    const k = (matchesProject(l.projectId) && actual(l.status)) ? bucket(l.date) : null;
-    if (k) lab[k] += usd(l.total, l.currency, l.fxRate);
-  });
+  for (const [collection, kind, field, totals] of [
+    ["expenses", "expense", "amount", exp], ["materials", "material", "amount", mat],
+    ["projectLabor", "labor", "total", lab],
+  ]) {
+    (state[collection] || []).forEach((row) => {
+      const k = (inScope(row) && actual(row.status)) ? bucket(row.date) : null;
+      if (!k) return;
+      const amount = ledgerInCurrency(row,currency,field);
+      totals[k] += amount;
+      const bearer = row._acct || { kind, payment_source: row.paymentSource };
+      if (contractor(row) || !window.LarsaAcctCore.isClientCost(bearer)) companyCost[k] += amount;
+    });
+  }
 
   return {
     revenue: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k]) })),
     materials: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(mat[k]) })),
     labor: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(lab[k]) })),
     total: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(exp[k] + mat[k] + lab[k]) })),
-    net: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k] - (exp[k] + mat[k] + lab[k])) })),
+    net: keys.map((k) => ({ label: v35MonthLabel(k), value: round2(rev[k] - companyCost[k]) })),
   };
 }
 function v35ProjectSeries(pid, from, to) {
@@ -5094,16 +5339,17 @@ function v35ConstructionSeries(from, to) {
 
 function v35FiveChartsBlock(rangeKey, seriesFn, title) {
   const cur = v35RangeState(rangeKey);
+  const currency = dispCur();
   const s = seriesFn(cur.from, cur.to);
   return `<div class="page-head"><h2>${esc(title)}</h2></div>${v35RangeControls(rangeKey, cur)}
     <div class="grid-3">
-      ${card(T("Monthly Revenue", "الإيراد الشهري"), chBars(s.revenue, { color: C.rev }))}
-      ${card(T("Monthly Total Expenses", "إجمالي المصاريف الشهرية"), chBars(s.total, { color: C.exp }))}
-      ${card(T("Monthly Net Profit", "صافي الربح الشهري"), chBars(s.net, { signed: true }))}
+      ${card(T("Monthly Larsa Revenue", "الإيراد الشهري"), chBars(s.revenue, { color: C.rev, currency }))}
+      ${card(T("Monthly Construction Spending", "إجمالي المصاريف الشهرية"), chBars(s.total, { color: C.exp, currency }))}
+      ${card(T("Monthly Larsa Net Profit", "صافي الربح الشهري"), chBars(s.net, { signed: true, currency }))}
     </div>
     <div class="grid-2" style="margin-top:18px">
-      ${card(T("Monthly Materials", "المواد الشهرية"), chBars(s.materials, { color: C.mat }))}
-      ${card(T("Monthly Labor", "العمالة الشهرية"), chBars(s.labor, { color: C.lab }))}
+      ${card(T("Monthly Materials", "المواد الشهرية"), chBars(s.materials, { color: C.mat, currency }))}
+      ${card(T("Monthly Labor", "العمالة الشهرية"), chBars(s.labor, { color: C.lab, currency }))}
     </div>`;
 }
 
@@ -5117,11 +5363,11 @@ function v35PayrollSeries(from, to) {
   const com = Object.fromEntries(keys.map((k) => [k, 0]));
   const bucket = (d) => { const k = String(d || "").slice(0, 7); return k in sal ? k : null; };
   (state.payroll || []).forEach((p) => {
-    const k = !["Void", "Rejected"].includes(p.status) ? bucket(p.payDate) : null;
-    if (k) sal[k] += usd(p.totalCompanyCost || p.grossPay || p.gross || 0, p.currency);
+    const k = payrollIsIncluded(p) ? bucket(p.payDate) : null;
+    if (k) sal[k] += payrollCostUsd(p);
   });
   (state.commissions || []).forEach((c) => {
-    const k = !["Void", "Rejected"].includes(c.status) ? bucket(c.date) : null;
+    const k = !["Void", "Rejected", "Reversed"].includes(c.status) ? bucket(c.date) : null;
     if (k) com[k] += num(c.due);
   });
   return {
@@ -5149,12 +5395,15 @@ function v35PayrollChartsBlock() {
 // whatever the CURRENT renderer is for that id, however many earlier patches
 // already replaced it -- payroll alone has been reassigned four times before
 // this file reaches here.
-function v35AppendHTML(rendererName, htmlFn) {
+function v35AppendHTML(rendererName, htmlFn, blockId) {
   const prev = RENDERERS[rendererName];
   RENDERERS[rendererName] = function () {
     prev();
     const head = document.querySelector("#view .page-head");
-    if (head) head.insertAdjacentHTML("afterend", htmlFn());
+    if (head) {
+      const html = htmlFn();
+      head.insertAdjacentHTML("afterend", blockId ? `<div id="${blockId}">${html}</div>` : html);
+    }
   };
 }
 function v35AppendAll(rendererName, blocks) {
@@ -5184,10 +5433,10 @@ v35AppendHTML("funding", () => v35FiveChartsBlock(
   "construction",
   (from, to) => v35ConstructionSeries(from, to),
   T("Construction Financial Trend — All Projects", "الاتجاه المالي للتنفيذ — كل المشاريع"),
-));
+), "v35-construction-charts");
 
 // Payroll -- salaries, commissions, and the two combined, month by month.
-v35AppendHTML("payroll", () => v35PayrollChartsBlock());
+v35AppendHTML("payroll", () => v35PayrollChartsBlock(), "v35-payroll-charts");
 
 // Each construction project gets its own copy of the same five charts, on
 // its Summary tab only -- Materials/Labor/etc. already have their own ledger
@@ -5202,13 +5451,13 @@ v35AppendHTML("payroll", () => v35PayrollChartsBlock());
     if (window.xTab && window.xTab !== "summary") return;
     const pid = window.xProject;
     if (!pid) return;
-    const head = document.querySelector("#view .page-head");
-    if (head) {
-      head.insertAdjacentHTML("afterend", v35FiveChartsBlock(
+    const view = document.querySelector("#view");
+    if (view?.querySelector(".page-head")) {
+      view.insertAdjacentHTML("beforeend", `<div id="v35-project-charts-${esc(pid)}">${v35FiveChartsBlock(
         `project:${pid}`,
         (from, to) => v35ProjectSeries(pid, from, to),
         T("Financial Trend", "الاتجاه المالي"),
-      ));
+      )}</div>`);
     }
   };
 })();
@@ -5368,22 +5617,12 @@ function v35cEnsureCharts() {
         return;
       }
     }
-    window.__edDirty = false;
     return oldSaveEditor14.apply(this, arguments);
   };
 
-  // --- 2 + 3. editor lifecycle ----------------------------------------
-  document.addEventListener("input", function(ev){
-    const root = document.getElementById("modalRoot");
-    if(root && root.contains(ev.target)) window.__edDirty = true;
-  }, true);
-
+  // Programmatic closes after a successful save must also release the project lock.
   const oldCloseEditor = window.closeEditor;
   window.closeEditor = function(){
-    if(window.__edDirty){
-      const stay = !confirm(T("Discard unsaved changes?","تجاهل التغييرات غير المحفوظة؟"));
-      if(stay) return;
-    }
     window.__edDirty = false;
     /* Cancelling a linked add must release the project lock; without this
        the NEXT editor for any collection opened anywhere was force-locked
@@ -5392,6 +5631,95 @@ function v35cEnsureCharts() {
     window.__larsaReturnProjectTab = "";
     return oldCloseEditor.apply(this, arguments);
   };
+
+  const root = document.getElementById("modalRoot");
+  const background = [document.getElementById("app"), document.getElementById("loginScreen")];
+  const focusable = 'button, a[href], input:not([type="hidden"]), select, textarea, [tabindex]';
+  let modal = null;
+  let returnFocus = null;
+  let originalInert;
+
+  function canDismiss(){
+    return !window.__edDirty || confirm(T("Discard unsaved changes?","تجاهل التغييرات غير المحفوظة؟"));
+  }
+
+  function isCloseButton(button){
+    return /^closeEditor\(\);?$/.test(button?.getAttribute("onclick")?.trim() || "");
+  }
+
+  root.addEventListener("input", () => { window.__edDirty = true; });
+  root.addEventListener("change", () => { window.__edDirty = true; });
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    const closesOnBackdrop = target.matches(".modal-back[onclick]") && target.getAttribute("onclick").includes("closeEditor()");
+    if((closesOnBackdrop || isCloseButton(target.closest("button"))) && !canDismiss()){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+
+  root.addEventListener("keydown", (event) => {
+    if(!modal || event.defaultPrevented) return;
+    if(event.key === "Escape"){
+      event.preventDefault();
+      if(canDismiss()) window.closeEditor();
+      return;
+    }
+    if(event.key !== "Tab") return;
+    const controls = [...modal.querySelectorAll(focusable)].filter(element =>
+      element.tabIndex >= 0 && !element.matches(":disabled") && element.getClientRects().length);
+    const first = controls[0];
+    const last = controls.at(-1);
+    const focused = document.activeElement;
+    if(!first || focused === modal || focused === (event.shiftKey ? first : last)){
+      event.preventDefault();
+      (event.shiftKey ? last || modal : first || modal).focus();
+    }
+  });
+
+  function labelDialog(dialog){
+    const heading = dialog.querySelector(".modal-head h3");
+    if(heading){
+      heading.id ||= "accounting-dialog-title";
+      dialog.setAttribute("aria-labelledby", heading.id);
+    }
+    const close = [...dialog.querySelectorAll(".modal-head button")].find(isCloseButton);
+    close?.setAttribute("aria-label", T("Close dialog", "إغلاق النافذة"));
+
+    dialog.querySelectorAll(".field").forEach((field, index) => {
+      const label = field.querySelector(":scope > label:not([for])");
+      const inputs = field.querySelectorAll('input:not([type="hidden"]), select, textarea');
+      if(label && inputs.length === 1 && !label.contains(inputs[0])){
+        const input = inputs[0];
+        input.id ||= `accounting-dialog-field-${index}`;
+        label.htmlFor = input.id;
+      }
+    });
+  }
+
+  new MutationObserver(() => {
+    const next = root.querySelector(".modal");
+    if(next) labelDialog(next);
+    if(next === modal) return;
+    if(next){
+      if(!modal){
+        returnFocus = document.activeElement;
+        originalInert = background.map(element => element.inert);
+        background.forEach(element => { element.inert = true; });
+      }
+      next.tabIndex = -1;
+      next.setAttribute("role", "dialog");
+      next.setAttribute("aria-modal", "true");
+      if(!next.contains(document.activeElement)) next.focus({ preventScroll: true });
+    } else {
+      background.forEach((element, index) => { element.inert = originalInert[index]; });
+      const target = returnFocus?.isConnected && returnFocus !== document.body ? returnFocus : document.getElementById("view");
+      target?.focus({ preventScroll: true });
+      returnFocus = null;
+    }
+    window.__edDirty = false;
+    modal = next;
+  }).observe(root, { childList: true, subtree: true });
 })();
 </script>
 </body>

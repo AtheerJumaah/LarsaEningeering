@@ -5,6 +5,7 @@ import vm from "node:vm";
 import {
   ATTENDANCE_TIME_ZONE,
   attendanceDateKey,
+  attendanceDateOffset,
   attendanceDateTimeInput,
   attendanceMonthKey,
   attendanceWallDateTimeUtc,
@@ -45,6 +46,13 @@ test("calendar grouping uses the canonical zone, not the browser zone", () => {
   assert.equal(attendanceWeekKey(instant), "2026-W27");
 });
 
+test("ISO week numbers stay correct when January first is Friday", () => {
+  assert.equal(attendanceWeekKey("2021-01-03T17:00:00Z"), "2020-W53");
+  assert.equal(attendanceWeekKey("2021-01-04T17:00:00Z"), "2021-W01");
+  assert.equal(attendanceWeekKey("2027-01-04T17:00:00Z"), "2027-W01");
+  assert.equal(attendanceWeekKey("2027-12-31T17:00:00Z"), "2027-W52");
+});
+
 test("reporting weeks default to Saturday and honor a saved first day across year and DST boundaries", () => {
   assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z"), "2026-11-07");
   assert.equal(attendanceReportingWeekStart("2026-11-11T15:00:00Z", 1), "2026-11-09");
@@ -82,6 +90,8 @@ test("DST changes do not create a false extra calendar segment", () => {
 test("an invalid configured zone falls back safely to the proposed canonical zone", () => {
   assert.equal(validAttendanceTimeZone("Not/AZone"), false);
   assert.equal(attendanceDateKey("2026-07-01T04:30:00.000Z", "Not/AZone"), "2026-06-30");
+  assert.deepEqual(splitAttendanceInterval("2026-07-01T04:30:00Z", "2026-07-01T07:30:00Z", "Not/AZone")
+    .map((row) => row.date), ["2026-06-30", "2026-07-01"]);
 });
 
 test("correction wall times become UTC instants using Central standard and daylight offsets", () => {
@@ -94,6 +104,23 @@ test("datetime-local attendance controls round-trip in the canonical zone", () =
   const instant = "2026-07-01T14:00:00.000Z";
   assert.equal(attendanceDateTimeInput(instant), "2026-07-01T09:00");
   assert.equal(attendanceWallDateTimeUtc(attendanceDateTimeInput(instant)), instant);
+});
+
+test("correction inputs reject missing days and skipped spring-forward times", () => {
+  assert.equal(attendanceWallTimeUtc("2026-03-08", "02:30"), "");
+  assert.equal(attendanceWallTimeUtc("2026-02-30", "09:00"), "");
+  assert.equal(attendanceDateOffset("2026-02-30", 1), "");
+  assert.equal(attendanceDateKey(null), "");
+  assert.deepEqual(attendanceReportingWeekSessions([{ date: "" }], null), []);
+});
+
+test("the correction editor preserves stored seconds and a repeated hour's offset", () => {
+  const secondOccurrence = "2026-11-01T07:30:38.123Z";
+  const shown = attendanceDateTimeInput(secondOccurrence);
+  assert.equal(shown, "2026-11-01T01:30");
+  assert.equal(attendanceWallDateTimeUtc(shown, ATTENDANCE_TIME_ZONE, secondOccurrence), secondOccurrence);
+  assert.equal(attendanceWallDateTimeUtc("2026-11-01T01:31", ATTENDANCE_TIME_ZONE, secondOccurrence), "2026-11-01T07:31:00.000Z");
+  assert.equal(attendanceWallDateTimeUtc("2026-07-01T09:00:38"), "2026-07-01T14:00:38.000Z");
 });
 
 test("native correction and attendance status display stay on the canonical policy", () => {

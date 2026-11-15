@@ -34,8 +34,8 @@ test("management and history expose scoped, separate time and performance report
   assert.match(page, /function EngineeringManagementPortal/);
   assert.match(page, /staffIdsVisibleTo\(org, viewer, users\)/);
   assert.match(page, /"organization" \| "time" \| "performance"/);
-  assert.match(page, />Today<\/button>.*>7 days<\/button>.*>30 days<\/button>.*>6 months<\/button>.*>Year<\/button>/s);
   const portal = page.slice(page.indexOf("function EngineeringManagementPortal"), page.indexOf("function Overview"));
+  assert.match(portal, />Today<\/button>.*>This week<\/button>.*>30 days<\/button>.*>6 months<\/button>.*>Year<\/button>/s);
   assert.equal((portal.match(/aria-label="Team report period"/g) || []).length, 1);
   assert.ok(
     portal.indexOf('aria-label="Team report period"') < portal.indexOf("<TeamCharts"),

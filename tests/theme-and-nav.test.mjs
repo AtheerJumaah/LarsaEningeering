@@ -101,7 +101,7 @@ test("but correcting and trimming recorded hours is untouched", () => {
   // forgotten clock-out still has to be fixable.
   assert.match(page, /const mayAdjustHours = Boolean\(user && \(\(\) => \{/);
   assert.match(page, /Trim or remove recorded hours/);
-  assert.match(page, /Add or fix past hours/);
+  assert.match(page, /Add hours or fix a missed clock/);
   assert.match(page, /const trimSession = useCallback/);
   assert.match(page, /const resetSession = useCallback/);
 });

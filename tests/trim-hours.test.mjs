@@ -159,3 +159,18 @@ test("session identity survives a re-serialised clock-in stamp", () => {
   assert.ok(found);
   assert.equal(found.inLog.id, "m2");
 });
+
+test("a trim cannot turn an ignored duplicate clock-in into a new shift", () => {
+  const logs = [
+    log("first", "u1", "In", "2026-08-04T08:00:00Z"),
+    log("duplicate", "u1", "In", "2026-08-04T09:00:00Z"),
+    log("first-out", "u1", "Out", "2026-08-04T10:00:00Z"),
+    log("second", "u1", "In", "2026-08-04T11:00:00Z"),
+    log("second-out", "u1", "Out", "2026-08-04T17:00:00Z"),
+  ];
+  const original = structuredClone(logs);
+  assert.deepEqual(planTrim(logs, "u1", logs[0].time, "2026-08-04T08:30:00Z", NOW),
+    { ok: false, reason: "changes-pairing" });
+  assert.equal(planTrim(logs, "u1", logs[0].time, "2026-08-04T09:30:00Z", NOW).ok, true);
+  assert.deepEqual(logs, original);
+});

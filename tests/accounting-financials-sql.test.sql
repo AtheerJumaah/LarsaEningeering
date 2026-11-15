@@ -299,5 +299,99 @@ begin
       = (select count(*)::int from public.acct_audit));
 end $$;
 
+do $$
+declare
+  sys jsonb := '{"email":"fin@larsaeng.com","name":"Fin","role":"Owner / Super Admin"}';
+  funding_id uuid;
+  quote jsonb;
+  settlement jsonb;
+  finance_before jsonb;
+  finance_after jsonb;
+begin
+  select id into funding_id from public.acct_transactions where project_id = 'refx' and kind = 'funding';
+
+  quote := public.acct_compute_refund('refx', 1000000,
+    jsonb_build_array(jsonb_build_object('funding_txn_id', funding_id, 'allocated_unused_iqd', 2000000)));
+  perform pg_temp.chk('manual fee allocation cannot exceed requested principal',
+    (quote->>'refund_principal_iqd')::numeric = 1000000
+    and (quote->>'refundable_fee_iqd')::numeric = 80000);
+  quote := public.acct_compute_refund('refx', 1000000,
+    jsonb_build_array(jsonb_build_object('funding_txn_id', funding_id, 'allocated_unused_iqd', 500000)));
+  perform pg_temp.chk('manual principal equals the amount actually allocated',
+    (quote->>'refund_principal_iqd')::numeric = 500000
+    and (quote->>'refundable_fee_iqd')::numeric = 40000);
+
+  -- Model a legacy advance with a consultancy fee collected on an expense basis.
+  update public.acct_transactions set fee_rule = jsonb_set(fee_rule,'{basis}','"total_expenses"')
+   where id = funding_id;
+  update public.acct_fee_ledger set calc_basis = 'total_expenses' where source_txn_id = funding_id;
+
+  quote := public.acct_compute_refund('refx');
+  perform pg_temp.chk('expense-basis refunds return unearned fees only once',
+    (quote->>'refund_principal_iqd')::numeric = 2200000
+    and (quote->>'refundable_fee_iqd')::numeric = 800000
+    and (quote->>'total_refund_iqd')::numeric = 3000000
+    and (quote#>>'{allocations,0,refundable_fee_iqd}')::numeric = 0);
+
+  finance_before := public.acct_project_financials('refx');
+  settlement := public.acct_create_refund_settlement(sys, 'refx', null, null, 1500, 'Isolated refund audit');
+  settlement := public.acct_execute_refund(sys, (settlement#>>'{settlement,id}')::uuid, null);
+  perform pg_temp.chk('expense-basis refund posts the quoted amount', (settlement->>'ok')::boolean);
+  quote := public.acct_compute_refund('refx');
+  perform pg_temp.chk('a posted excess fee cannot be refunded again', (quote->>'total_refund_iqd')::numeric = 0);
+
+  finance_after := public.acct_project_financials('refx');
+  perform pg_temp.chk('posted principal reduces USD project funds at its settlement rate',
+    (finance_before#>>'{client_funds,approved,remaining_balance_usd}')::numeric
+      - (finance_after#>>'{client_funds,approved,remaining_balance_usd}')::numeric = round(2200000::numeric / 1500,2));
+  perform pg_temp.chk('stored expense-basis fee refund reduces both USD and IQD company profit',
+    (finance_before#>>'{company,company_net_profit_usd}')::numeric
+      - (finance_after#>>'{company,company_net_profit_usd}')::numeric = round(800000::numeric / 1500,2)
+    and (finance_after#>>'{company,fee_refunds_reversals_iqd}')::numeric = 800000);
+  perform pg_temp.chk('fully refunded fees move from projected to final after posting',
+    (finance_after#>>'{fee,is_final}')::boolean
+    and (finance_after#>>'{fee,final_settled_iqd}')::numeric = 0);
+end $$;
+
+do $$
+declare
+  sys jsonb := '{"email":"fin@larsaeng.com","name":"Fin","role":"Owner / Super Admin"}';
+  first_refund jsonb;
+  overlapping_refund jsonb;
+  second_refund jsonb;
+  summary jsonb;
+begin
+  perform public.acct_upsert_project(sys, '{"id":"refx-usd","name":"Mixed-rate Refund Example","currency":"USD"}');
+  perform public.acct_post_transaction(sys, '{"project_id":"refx-usd","kind":"funding","amount":1000,
+    "currency":"USD","exchange_rate":1000,"date":"2024-02-29","status":"received"}');
+
+  first_refund := public.acct_create_refund_settlement(sys, 'refx-usd', 100000, null, 1500, 'Mixed-rate partial refund');
+  first_refund := public.acct_execute_refund(sys, (first_refund#>>'{settlement,id}')::uuid, null);
+  perform pg_temp.chk('mixed-rate partial settlement posts', (first_refund->>'ok')::boolean);
+
+  summary := public.acct_project_financials('refx-usd');
+  perform pg_temp.chk('posting a mixed-rate refund reverses USD fee at its historical rate',
+    (summary#>>'{company,fee_refunds_reversals_iqd}')::numeric = 8000
+    and (summary#>>'{company,fee_refunds_reversals_usd}')::numeric = 8
+    and (summary#>>'{company,company_net_profit_usd}')::numeric = 72);
+  perform pg_temp.chk('a partial refund leaves fee settlement open and the original funding date intact',
+    not (summary#>>'{fee,is_final}')::boolean
+    and exists (select 1 from public.acct_transactions where project_id = 'refx-usd' and kind = 'funding'
+                 and txn_date = '2024-02-29' and exchange_rate = 1000));
+
+  first_refund := public.acct_create_refund_settlement(sys, 'refx-usd', null, null, null, 'Close the remaining balance');
+  overlapping_refund := public.acct_create_refund_settlement(sys, 'refx-usd', null, null, null, 'Overlapping draft');
+  first_refund := public.acct_execute_refund(sys, (first_refund#>>'{settlement,id}')::uuid, null);
+  second_refund := public.acct_execute_refund(sys, (overlapping_refund#>>'{settlement,id}')::uuid, null);
+  perform pg_temp.chk('an overlapping refund draft is cancelled after the balance is exhausted',
+    (first_refund->>'ok')::boolean and not (second_refund->>'ok')::boolean
+    and second_refund->>'error' = 'NO_REFUND_AVAILABLE'
+    and (select status = 'cancelled' and refund_txn_id is null from public.acct_refund_settlements
+          where id = (overlapping_refund#>>'{settlement,id}')::uuid));
+  perform pg_temp.chk('overlapping drafts cannot add an extra or zero-value refund transaction',
+    (select count(*) = 2 and min(amount_iqd) > 0 from public.acct_transactions
+      where project_id = 'refx-usd' and kind = 'refund' and status = 'posted'));
+end $$;
+
 select 'AUTHORITATIVE FINANCIALS SQL TESTS COMPLETE' as done;
 rollback;

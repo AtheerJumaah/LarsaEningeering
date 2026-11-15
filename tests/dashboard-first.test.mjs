@@ -33,7 +33,7 @@ test("the previous first-available behaviour survives as the fallback", () => {
   // Nobody loses a destination: every page that was reachable as a landing
   // before is still in a fallback list.
   assert.match(page, /\["week-schedule", "staff-timesheet", "my-requests", "live-presence"\]\.map\(byId\)/);
-  assert.match(page, /\["performance-center", "performance-history", "staff-reports"\]\.map\(byId\)/);
+  assert.match(page, /\["performance-center", "performance-history", "staff-reports", "my-points"\]\.map\(byId\)/);
   assert.match(page, /ACCOUNTING_HUB_ITEM,\s*\n\s*\.\.\.\(GROUPS\.find\(\(group\) => group\.label === "Accounting"\)\?\.items \|\| \[\]\),/);
 });
 

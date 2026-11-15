@@ -27,6 +27,22 @@ begin
 end;
 $$;
 
+create temporary table stamp_clock_fixture (updated_at timestamptz not null);
+insert into stamp_clock_fixture values (clock_timestamp() + interval '1 hour');
+create trigger stamp_clock_fixture_before_write before update on stamp_clock_fixture
+  for each row execute function public.app_state_server_stamp();
+
+do $$
+declare
+  old_stamp timestamptz;
+  new_stamp timestamptz;
+begin
+  select updated_at into old_stamp from stamp_clock_fixture;
+  update stamp_clock_fixture set updated_at = '2000-01-01T00:00:00Z' returning updated_at into new_stamp;
+  perform pg_temp.chk('stamp advances when the server clock is behind the prior stamp',
+    new_stamp = old_stamp + interval '1 microsecond');
+end $$;
+
 do $$
 declare
   r record;

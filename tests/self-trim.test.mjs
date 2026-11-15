@@ -185,7 +185,7 @@ test("the trim window alone can show and edit Baghdad or U.S. Central time witho
   assert.match(page, /<option value="Asia\/Baghdad">Baghdad, Iraq<\/option>/);
   assert.match(page, /<option value="America\/Chicago">U\.S\. Central<\/option>/);
   assert.match(page, /attendanceDateTimeInput\(iso, trimTimeZone\)/);
-  assert.match(page, /attendanceWallDateTimeUtc\(trimValue, trimTimeZone\)/);
+  assert.match(page, /attendanceWallDateTimeUtc\(trimValue, trimTimeZone, savedClockOut\)/);
   assert.match(page, /date: attendanceDateKey\(session\.clockIn, trimTimeZone\)/);
   assert.match(page, /Saved attendance remains the same exact moment\./);
 });

@@ -404,6 +404,12 @@
     } else {
       base.amount = Number(t.original_amount);
       base.expenseType = t.category || "";
+      if (t.kind === "revenue") {
+        var meta = t.meta || {};
+        var region = (projectRow(t.project_id) || {}).region;
+        base.stream = meta.stream || (region === "USA" ? "USA Engineering Revenue" : "Iraq Engineering Revenue");
+        base.jobNumber = meta.job_number || t.external_ref || "";
+      }
     }
     return base;
   }
@@ -411,13 +417,21 @@
   function applyMirrors() {
     try { if (typeof state === "undefined" || !state) return; } catch (e) { return; }
     var buckets = { funding: [], materials: [], projectLabor: [], expenses: [], revenue: [] };
+    var linkedIds = new Set();
     ACCT.txns.forEach(function (t) {
+      linkedIds.add(String(t.id));
+      if (t.legacy_id) linkedIds.add(String(t.legacy_id));
       if (t.deleted_at) return;
       var coll = KIND_COLL[t.kind];
       if (!coll) return; // refunds/adjustments/reversals live in the summary + history, not the entry ledgers
       buckets[coll].push(mirrorTxn(t));
     });
     Object.keys(buckets).forEach(function (coll) {
+      // Keep unsynced records until the ledger confirms their legacy IDs.
+      // A refresh is a read and must never persist a rebuilt browser blob.
+      (state[coll] || []).forEach(function (r) {
+        if (!r._acctManaged && (!r.id || !linkedIds.has(String(r.id)))) buckets[coll].push(r);
+      });
       buckets[coll].sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
       state[coll] = buckets[coll];
     });
@@ -453,7 +467,6 @@
       p._acct = ap;
       p.isSample = !!ap.is_sample;
     });
-    try { if (typeof save === "function") save(); } catch (e) { /* blob cache only */ }
   }
 
   function projectRow(id) {
@@ -486,7 +499,7 @@
     } catch (e) { try { render(); } catch (_) {} }
   }
 
-  var bootDone = false;
+  var bootstrapRequest = 0;
   /* ============================================================
      THE authoritative financial model (backend migration 008).
 
@@ -507,19 +520,24 @@
          statement used to read 0 while approved spending existed.
      ============================================================ */
   var FIN = { byProject: {}, company: null, loadedAt: 0 };
+  var financialRequest = 0;
   ACCT.fin = FIN;
 
   function loadFinancials(then) {
+    var request = ++financialRequest;
     return rpc("acct_company_financials", { p_project_ids: null, p_region: null })
       .then(function (co) {
-        if (!co) return;
-        FIN.company = co;
-        FIN.byProject = {};
-        (co.rows || []).forEach(function (row) { FIN.byProject[row.project_id] = row; });
-        FIN.loadedAt = Date.now();
-        if (then) then();
+        if (!co || !Array.isArray(co.rows)) throw new Error("Invalid financial summary");
+        if (request === financialRequest) {
+          FIN.company = co;
+          FIN.byProject = Object.create(null);
+          co.rows.forEach(function (row) { FIN.byProject[row.project_id] = row; });
+          FIN.loadedAt = Date.now();
+        }
+        return true;
       })
-      .catch(function (e) { console.warn("[acct-cloud] financials:", e); });
+      .catch(function (e) { console.warn("[acct-cloud] financials:", e); return false; })
+      .then(function (loaded) { if (then) then(); return loaded; });
   }
   ACCT.reloadFinancials = loadFinancials;
   /* Exposed so the parent app can re-project the cloud ledgers into the
@@ -529,7 +547,10 @@
      between real values and zero. */
   ACCT.applyMirrors = applyMirrors;
 
-  function finFor(pid) { return FIN.byProject[pid] || null; }
+  function visibleProject(pid) {
+    return typeof window.__larsaCanProject !== "function" || window.__larsaCanProject(pid);
+  }
+  function finFor(pid) { return visibleProject(pid) ? FIN.byProject[pid] || null : null; }
   /* The engine holds money in USD internally. Each *_usd figure is the
      sum of per-entry USD snapshots taken at that entry's own historical
      rate, which is exactly what the engine's usd(amount,cur,fxRate)
@@ -543,6 +564,13 @@
     if (!node) return 0;
     var v = node[key + "_iqd"];
     return typeof v === "number" ? v : Number(v || 0);
+  }
+
+  function portfolioUsd(rows, group, basis, key) {
+    return Core.round2(rows.reduce(function (sum, row) {
+      var block = row[group] || {};
+      return sum + finUsd(basis ? block[basis] : block, key);
+    }, 0));
   }
 
   /* Replace the engine's per-project totals with the server's. Every
@@ -615,32 +643,40 @@
       var base = origCompanyTotals.apply(this, arguments);
       var co = ACCT.on ? FIN.company : null;
       if (!co) return base;
-      var cf = co.client_funds || {}, k = co.company || {};
-      var rate = Number((ACCT.settings || {}).default_exchange_rate) || 1310;
-      var toUsd = function (iqd) { return rate > 0 ? Core.round2(Number(iqd || 0) / rate) : 0; };
+      var rows = co.rows.filter(function (row) { return visibleProject(row.project_id); });
+      var companyUsd = function (key) { return portfolioUsd(rows, "company", null, key); };
+      var clientUsd = function (basis, key) { return portfolioUsd(rows, "client_funds", basis, key); };
+      var review = rows.length === co.rows.length ? co.review || {} : {
+        status: Core.aggregateStatus(rows.map(function (row) {
+          var status = (row.review || {}).status;
+          return status === "red" ? "needs_correction" : status === "yellow" ? "pending_review" : "approved";
+        })),
+      };
       return Object.assign({}, base, {
-        fees: toUsd(k.consultancy_fee_revenue_iqd),
-        rev: toUsd(k.engineering_revenue_iqd) + toUsd(k.other_revenue_iqd),
-        realRevenue: toUsd(k.larsa_revenue_iqd),
-        larsaCosts: toUsd(k.company_expenses_iqd),
-        net: toUsd(k.company_net_profit_iqd),
+        fees: companyUsd("consultancy_fee_revenue"),
+        rev: Core.round2(companyUsd("engineering_revenue") + companyUsd("other_revenue")),
+        realRevenue: companyUsd("larsa_revenue"),
+        larsaCosts: companyUsd("company_expenses"),
+        net: companyUsd("company_net_profit"),
         // Client construction funds — held, not earned.
-        fundingGross: toUsd(cf.gross_funding_iqd),
-        netConstruction: toUsd(cf.net_construction_funding_iqd),
-        constructionSpend: toUsd(cf.construction_cost_approved_iqd),
-        constructionSpendWorking: toUsd(cf.construction_cost_working_iqd),
-        fundsHeld: toUsd(cf.remaining_balance_approved_iqd),
-        fundsHeldWorking: toUsd(cf.remaining_balance_working_iqd),
-        reliability: (co.review || {}).status || "green",
-        reliabilityLabel: (co.review || {}).label || "",
+        fundingGross: clientUsd("approved", "gross_funding"),
+        netConstruction: clientUsd("approved", "net_construction_funding"),
+        constructionSpend: clientUsd("approved", "construction_cost"),
+        constructionSpendWorking: clientUsd("working", "construction_cost"),
+        fundsHeld: clientUsd("approved", "remaining_balance"),
+        fundsHeldWorking: clientUsd("working", "remaining_balance"),
+        reliability: review.status || "green",
+        reliabilityLabel: review.label || "",
         _authoritative: true,
       });
     };
   }
 
   function bootstrap(then) {
+    var request = ++bootstrapRequest;
     return rpc("acct_get_bootstrap", { p_audit_limit: 300 }).then(function (b) {
-      if (!b) throw new Error("empty bootstrap");
+      if (request !== bootstrapRequest) return false;
+      if (!b || !Array.isArray(b.projects) || !Array.isArray(b.transactions)) throw new Error("Incomplete accounting ledger response");
       ACCT.settings = b.settings || null;
       ACCT.projects = b.projects || [];
       ACCT.txns = b.transactions || [];
@@ -656,7 +692,6 @@
       ACCT.on = true;
       ACCT.lastError = "";
       applyMirrors();
-      loadFinancials();
       var email = (actor().email || "").toLowerCase();
       if (email) {
         rpc("acct_is_platform_admin", { admin_email: email })
@@ -666,12 +701,17 @@
           .then(function (p) { if (p) ACCT.myPerms = p; })
           .catch(function () {});
       }
-      if (!bootDone) { bootDone = true; maybeSeedOrImport(); }
-      if (then) then();
-      else { try { render(); } catch (e) {} }
+      return loadFinancials().then(function (loaded) {
+        if (request !== bootstrapRequest) return false;
+        if (then) then();
+        else { try { render(); } catch (e) {} }
+        return loaded;
+      });
     }).catch(function (err) {
+      if (request !== bootstrapRequest) return false;
       ACCT.lastError = String(err && err.message || err);
       console.warn("[acct-cloud] bootstrap failed — engine stays on local cache:", err);
+      return false;
     });
   }
 
@@ -685,9 +725,7 @@
   // writes, imports, or changes any account records.
   ACCT.manualRefresh = function () {
     keepContext();
-    return bootstrap(function () { restoreContext(); }).then(function () {
-      return !ACCT.lastError;
-    });
+    return bootstrap(function () { restoreContext(); });
   };
 
   function blobHasAccountingData() {
@@ -698,39 +736,34 @@
     } catch (e) { return false; }
   }
 
-  function maybeSeedOrImport() {
-    var s = ACCT.settings || {};
-    var empty = ACCT.projects.length === 0 && ACCT.txns.length === 0;
-    if (!empty) return;
-    if (blobHasAccountingData()) {
-      // Real local records exist that never reached the relational store —
-      // preserve them (Legacy Migrated Rate; ambiguous ones go to review).
-      var tryImport = function () {
-        if (!canWriteAcct()) return; // retried on next boot with a writer signed in
-        var payload = {
-          settings: { rate: (state.settings || {}).rate || 1310 },
-          projects: state.projects || [],
-          funding: (state.funding || []).filter(function (r) { return !r._acctManaged; }),
-          materials: (state.materials || []).filter(function (r) { return !r._acctManaged; }),
-          projectLabor: (state.projectLabor || []).filter(function (r) { return !r._acctManaged; }),
-          expenses: (state.expenses || []).filter(function (r) { return !r._acctManaged; }),
-          revenue: (state.revenue || []).filter(function (r) { return !r._acctManaged; }),
-        };
-        rpc("acct_import_legacy", { actor: actor(), blob: payload }).then(function (r) {
-          toast4(TT("Existing accounting records migrated to the shared ledger", "تم ترحيل السجلات المحاسبية الحالية إلى السجل المشترك") +
-            (r && r.review ? " — " + r.review + TT(" sent to review", " أُرسلت للمراجعة") : ""));
-          refresh();
-        }).catch(function (e) { console.warn("[acct-cloud] legacy import:", e); });
-      };
-      setTimeout(tryImport, 2500); // give the parent time to inject currentUser
-      return;
+  function emptySharedLedger() { return ACCT.on && !ACCT.projects.length && !ACCT.txns.length; }
+
+  var onboardingWrite = false;
+  window.acctInitializeLedger = function (importLegacy) {
+    if (onboardingWrite || !emptySharedLedger() || !actor().email || !canWriteAcct()) return;
+    if (importLegacy !== blobHasAccountingData()) return;
+    if (!importLegacy && (ACCT.settings || {}).sample_state !== "never_seeded") return;
+    var confirmed = importLegacy
+      ? confirm(TT("Import the existing local accounting records into the shared ledger?", "هل تريد استيراد سجلات المحاسبة المحلية إلى الدفتر المشترك؟"))
+      : confirm(TT("Add sample records to this empty shared ledger?", "هل تريد إضافة سجلات تجريبية إلى هذا الدفتر المشترك الفارغ؟"));
+    if (!confirmed) return;
+    var args = { actor: actor() };
+    if (importLegacy) {
+      args.blob = { settings: { rate: (state.settings || {}).rate || 1310 }, projects: state.projects || [] };
+      Object.keys(COLL_KIND).forEach(function (coll) {
+        args.blob[coll] = (state[coll] || []).filter(function (r) { return !r._acctManaged; });
+      });
     }
-    if (s.sample_state === "never_seeded") {
-      rpc("acct_seed_sample_data", { actor: actor() }).then(function (r) {
-        if (r && r.ok) { refresh(); }
-      }).catch(function (e) { console.warn("[acct-cloud] sample seed:", e); });
-    }
-  }
+    onboardingWrite = true;
+    return rpc(importLegacy ? "acct_import_legacy" : "acct_seed_sample_data", args)
+      .then(function (r) {
+        if (!(r && r.ok)) throw new Error((r || {}).error || TT("The ledger was unchanged.", "لم تتغير سجلات الدفتر."));
+        if (importLegacy) toast4(TT("Local accounting records imported.", "تم استيراد السجلات المحاسبية المحلية.") + (r.review ? " " + r.review + TT(" sent to review.", " أُرسلت للمراجعة.") : ""));
+        refresh();
+      })
+      .catch(function (e) { toast4(String(e.message || e)); })
+      .finally(function () { onboardingWrite = false; });
+  };
 
   /* ---------------- protected-action + code modal ---------------- */
   function b64bytes(s) { return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); }
@@ -857,15 +890,14 @@
   };
 
   /* ---------------- write interception ---------------- */
+  var transactionDrafts = new WeakMap();
   function readModalTxn(coll) {
     var g = function (k) { var el = document.getElementById("ed_" + k); return el ? (el.type === "checkbox" ? el.checked : el.value) : null; };
     var n = function (k) { var v = g(k); return v == null || v === "" ? null : Number(v); };
     var kind = COLL_KIND[coll];
     var qty = n("quantity");
-    var amount;
-    if (coll === "materials") amount = (qty && n("unitPrice")) ? Core.round2(qty * n("unitPrice")) : (n("unitPrice") || n("amount"));
-    else if (coll === "projectLabor") amount = (qty && n("rate")) ? Core.round2(qty * n("rate")) : (n("rate") || n("amount"));
-    else amount = n("amount");
+    var unitAmount = coll === "materials" ? n("unitPrice") : coll === "projectLabor" ? n("rate") : null;
+    var amount = unitAmount == null ? n("amount") : Core.round2((qty == null ? 1 : qty) * unitAmount);
     var status = LEGACY_TO_STATUS[g("status")] || "pending";
     var fxEl = document.getElementById("ed_fxRate");
     var fxVal = fxEl ? Number(fxEl.value) : null;
@@ -884,14 +916,23 @@
       status: status,
       payment_source: g("paymentSource") || null,
       external_ref: g("invoiceNumber") || g("referenceNumber") || null,
-      client_key: uuid4(),
     };
+    if (kind === "revenue") {
+      txn.meta = { stream: g("stream") || null, job_number: g("jobNumber") || null };
+    }
     try {
       var supEl = document.getElementById("ed_supplierId");
       if (supEl && supEl.selectedIndex >= 0) txn.supplier = supEl.options[supEl.selectedIndex].text;
     } catch (e) {}
     // Exchange-rate: only an actual change from the prefilled default is an override.
-    if (fxVal && fxVal > 0 && (!prefilled || Math.abs(fxVal - prefilled) > 1e-9)) txn.exchange_rate = fxVal;
+    if (unitAmount != null && qty != null && (!Number.isFinite(qty) || qty <= 0)) {
+      txn.__invalid = TT("Enter a positive quantity.", "أدخل كمية موجبة.");
+    }
+    if (fxEl && fxEl.value !== "" && (!Number.isFinite(fxVal) || fxVal <= 0)) {
+      txn.__invalid = TT("Enter a positive exchange rate.", "أدخل سعر صرف موجبًا.");
+    } else if (fxVal > 0 && (!prefilled || Math.abs(fxVal - prefilled) > 1e-9)) {
+      txn.exchange_rate = fxVal;
+    }
     // Fee override panel (authorized users only; rendered by decorateModal).
     var ovOn = document.getElementById("acct_fee_ov_on");
     if (ovOn && ovOn.checked) {
@@ -1011,7 +1052,9 @@
       end = d.toISOString().slice(0, 10);
     }
     if (!start || !end) { if (done) done(null); return; }
-    paySyncEmployee({ id: row.employeeId, email: email, name: row.employee || email }, function () {
+    var employee = (state.employees || []).find(function (entry) { return entry.id === row.employeeId; });
+    paySyncEmployee(employee || { id: row.employeeId, email: email, name: row.employee || email, currency: row.currency }, function (employeeResult) {
+      if (!(employeeResult && employeeResult.employee)) { if (done) done(null); return; }
       rpc("pay_open_period", { actor: actor(), payload: {
         period_start: start, period_end: end, pay_date: row.payDate || null,
         region: row.region || null, currency: row.currency || "IQD",
@@ -1019,7 +1062,10 @@
       } }).then(function (res) {
         var periodId = res && res.period && res.period.id;
         if (!periodId) { if (done) done(null); return; }
+        // Keep the period ID even when an item fails. Reopening a period or
+        // retrying uncertain item inserts can create duplicate payroll.
         row.serverPeriodId = periodId;
+        try { save(); } catch (e) { /* payroll remains linked in memory */ }
         var parts = [
           ["base_salary", Number(row.baseSalary || 0) + Number(row.regularPay || 0) + Number(row.overtimePay || 0), row.notes || "Salary"],
           ["bonus", Number(row.bonus || 0), "Bonus"],
@@ -1027,15 +1073,23 @@
           ["deduction", Number(row.totalEmployeeDeductions || row.deductions || 0), "Deductions"],
           ["reimbursement", Number(row.reimbursement || 0), "Reimbursement"],
         ].filter(function (p) { return p[1] > 0; });
-        var pending = parts.length;
-        if (!pending) { if (done) done(res); return; }
-        parts.forEach(function (part) {
-          rpc("pay_add_item", { actor: actor(), payload: {
+        var requests = parts.map(function (part) {
+          return rpc("pay_add_item", { actor: actor(), payload: {
             period_id: periodId, employee_email: email, item_type: part[0],
             amount: part[1], currency: row.currency || "IQD", description: part[2],
             project_id: row.projectId || null,
-          } }).then(function () { pending -= 1; if (!pending && done) done(res); },
-                     function () { pending -= 1; if (!pending && done) done(res); });
+          } }).then(function (value) {
+            if (!(value && value.ok && value.item)) throw new Error("Missing payroll item confirmation");
+          });
+        });
+        return Promise.allSettled(requests).then(function (results) {
+          var unconfirmed = results.filter(function (item) { return item.status === "rejected"; }).length;
+          if (unconfirmed) {
+            toast4(TT("The shared payroll period was opened, but some items could not be confirmed. Review period ",
+              "فُتحت فترة الرواتب المشتركة، لكن تعذّر تأكيد بعض البنود. راجع الفترة ") +
+              (res.period.period_no || periodId) + " (" + unconfirmed + "/" + parts.length + ").");
+          }
+          if (done) done(res);
         });
       }, function (err) { toast(String(err.message || err)); if (done) done(null); });
     });
@@ -1055,9 +1109,9 @@
       basis: rate > 0 ? "percent" : "fixed",
       rate: rate > 0 ? rate : null,
       base_amount: Number(row.base || 0) || null,
-      base_currency: row.currency || "IQD",
+      base_currency: row.currency || "USD",
       amount: Number(row.due || 0) || 0,
-      currency: row.currency || "IQD",
+      currency: row.currency || "USD",
       project_id: row.projectId || null,
       client: row.client || null,
       earning_start: row.date || null,
@@ -1078,24 +1132,20 @@
     window.saveEditor = function () {
       var coll = null;
       try { coll = typeof coll0 !== "undefined" ? coll0 : null; } catch (e) {}
-      var out = origPaySave.apply(this, arguments);
-      if (!ACCT.on || !coll || !PAY_COLLS[coll]) return out;
-      // The local save has already happened and the record has an id; the
-      // backend write follows, and its ids are stored back on the row.
+      if (!ACCT.on || !coll || !PAY_COLLS[coll]) return origPaySave.apply(this, arguments);
       var savedId = null;
       try { savedId = typeof id0 !== "undefined" ? id0 : null; } catch (e) {}
-      setTimeout(function () {
+      var previousIds = new Set((state[coll] || []).map(function (r) { return r.id; }));
+      return Promise.resolve(origPaySave.apply(this, arguments)).then(function (saved) {
+        if (saved !== true) return saved;
         try {
-          /* A NEW record is unshifted to index 0, but an EDIT mutates in
-             place — index 0 was then a different row entirely, and the wrong
-             person's figures were pushed to the payroll backend. */
-          var row = savedId
-            ? (state[coll] || []).find(function (r) { return r && r.id === savedId; })
-            : (state[coll] || [])[0];
-          if (row) PAY_COLLS[coll](row, function () { try { save(); } catch (e) {} });
-        } catch (e) {}
-      }, 30);
-      return out;
+          var rows = (state[coll] || []).filter(function (row) {
+            return savedId ? row.id === savedId : !previousIds.has(row.id);
+          });
+          if (rows.length === 1) PAY_COLLS[coll](rows[0], function () { try { save(); } catch (e) {} });
+        } catch (e) { toast4(String(e.message || e)); }
+        return saved;
+      });
     };
   }
 
@@ -1184,12 +1234,20 @@
       if (txn.__invalid) { toast4(txn.__invalid); return; }
       delete txn.__invalid;
       if (!txn.project_id) { toast4(TT("Choose a project first.", "اختر المشروع أولاً.")); return; }
-      if (!txn.amount || txn.amount <= 0) { toast4(TT("Enter a positive amount.", "أدخل مبلغاً موجباً.")); return; }
+      if (!Number.isFinite(txn.amount) || txn.amount <= 0) { toast4(TT("Enter a positive amount.", "أدخل مبلغاً موجباً.")); return; }
       if (!entryScopeOk(txn.project_id)) {
         var pAcc = projectRow(txn.project_id);
         toast4(TT("Data entry for this project is assigned to: ", "إدخال بيانات هذا المشروع مُسنَد إلى: ")
           + emailList(pAcc && pAcc.assigned_accountants).join(", "));
         return;
+      }
+      var projectField = document.getElementById("ed_projectId");
+      var draft = transactionDrafts.get(projectField);
+      if (draft && draft.inFlight) return;
+      var signature = JSON.stringify(txn);
+      if (!draft || draft.signature !== signature) {
+        draft = { signature: signature, key: uuid4(), inFlight: false };
+        transactionDrafts.set(projectField, draft);
       }
       keepContext();
       var done = function (msg) {
@@ -1203,7 +1261,8 @@
           toast4(TT("Posted accounting records are corrected by reversal/replacement — use the void workflow.", "السجلات المرحّلة تُصحّح بالعكس/الاستبدال — استخدم مسار الإلغاء المحمي."));
           return;
         }
-        rpc("acct_update_transaction", { actor: actor(), p_txn_id: editingId, changes: txn })
+        draft.inFlight = true;
+        return rpc("acct_update_transaction", { actor: actor(), p_txn_id: editingId, changes: txn })
           .then(function () {
             var newStatus = txn.status;
             if (existing && newStatus && newStatus !== existing.status) {
@@ -1211,9 +1270,12 @@
             }
           })
           .then(function () { done(TT("Saved to the shared accounting ledger", "تم الحفظ في السجل المحاسبي المشترك")); })
-          .catch(function (e) { toast4(String(e.message || e)); });
+          .catch(function (e) { toast4(String(e.message || e)); })
+          .finally(function () { draft.inFlight = false; });
       } else {
-        rpc("acct_post_transaction", { actor: actor(), txn: txn })
+        draft.inFlight = true;
+        txn.client_key = draft.key;
+        return rpc("acct_post_transaction", { actor: actor(), txn: txn })
           .then(function (r) {
             var fee = r && r.fee;
             if (coll === "funding" && r && r.receipt) {
@@ -1232,7 +1294,8 @@
             done(fee && fee.fee_amount ? TT("Saved — consultancy fee ", "تم الحفظ — أتعاب استشارية ") + nmoney(Number(fee.fee_amount), fee.currency) + " (" + fee.status + ")"
               : TT("Saved to the shared accounting ledger", "تم الحفظ في السجل المحاسبي المشترك"));
           })
-          .catch(function (e) { toast4(String(e.message || e)); });
+          .catch(function (e) { toast4(String(e.message || e)); })
+          .finally(function () { draft.inFlight = false; });
       }
     };
   }
@@ -1363,9 +1426,17 @@
       if (cur && proj && !id) cur.value = proj.currency || cur.value;
       var fx = document.getElementById("ed_fxRate");
       var rr = resolvedRateFor(pid);
-      if (fx) {
-        if (!fx.value || Number(fx.value) <= 0) fx.value = rr.rate;
-        if (!id) fx.setAttribute("data-acct-prefill", String(rr.rate));
+      var editingRec = id ? ACCT.txns.find(function (t) { return t.id === id; }) : null;
+      if (fx && !fx.hasAttribute("data-acct-prefill")) {
+        var initialRate = editingRec ? Number(editingRec.exchange_rate) : rr.rate;
+        fx.value = initialRate;
+        fx.setAttribute("data-acct-prefill", String(initialRate));
+        if (!id && pj) pj.addEventListener("change", function () {
+          var previous = Number(fx.getAttribute("data-acct-prefill"));
+          var next = resolvedRateFor(pj.value).rate;
+          if (!fx.value || Number(fx.value) === previous) fx.value = next;
+          fx.setAttribute("data-acct-prefill", String(next));
+        });
       }
       // Maker-checker: entry and approval are two different people.
       // Hide the counted statuses this actor cannot lawfully set on this
@@ -1373,7 +1444,6 @@
       try {
         var stSel = document.getElementById("ed_status");
         if (stSel && stSel.options) {
-          var editingRec = id ? ACCT.txns.filter(function (t) { return t.id === id; })[0] : null;
           var mineRec = !id || !editingRec || String(editingRec.created_by_email || "").toLowerCase() === myEmailLc();
           var mayCount = myPerm("approve") && (!mineRec || myPerm("self_approve"))
             && approverScope(pid, COLL_KIND[coll]).ok;
@@ -1638,7 +1708,7 @@
   }
 
   function summaryCardHTML(p) {
-    var s = Core.projectSummary(p._acct || { id: p.id, currency: p.currency, approved_budget: p.approvedBudget, budget_currency: p.budgetCurrency, contract_value: p.contractValue }, ACCT.txns, ACCT.fees, ACCT.progress);
+    var s = Core.projectSummary(p._acct || { id: p.id, currency: p.currency, approved_budget: p.approvedBudget, budget_currency: p.budgetCurrency, contract_value: p.contractValue }, ACCT.txns, ACCT.fees, ACCT.progress, ACCT.refunds);
     var fin = finFor(p.id);
     if (fin) return authoritativeSummaryHTML(p, fin, s);
     var rv = {
@@ -1744,10 +1814,11 @@
     var grp = function (title) {
       return '<tr class="grp-row"><td colspan="2"><b>' + title + "</b></td></tr>";
     };
+    var budgetCur = fin.budget_currency || p.currency || "IQD";
     var costTxt = fin.cost_progress_pct == null
       ? TT("Not Available (no approved budget)", "غير متاح (لا توجد موازنة معتمدة)")
-      : Core.round2(fin.cost_progress_pct) + "% — " + iqd(ap.construction_cost_iqd) +
-        TT(" of ", " من ") + nmoney(fin.approved_budget, fin.budget_currency || p.currency || "IQD");
+      : Core.round2(fin.cost_progress_pct) + "% - " + nmoney(ap[budgetCur === "USD" ? "construction_cost_usd" : "construction_cost_iqd"], budgetCur) +
+        TT(" of ", " من ") + nmoney(fin.approved_budget, budgetCur);
     var schedTxt = fin.schedule_progress_pct == null
       ? TT("No updates yet", "لا توجد تحديثات بعد")
       : Core.round2(fin.schedule_progress_pct) + "% · " + esc4(fin.schedule_progress_date || "") +
@@ -2093,7 +2164,14 @@
     } else if (s.sample_state === "removed") {
       html += '<p class="muted small">' + TT("Sample data was removed on ", "أُزيلت البيانات التجريبية في ") + esc4(String(s.sample_removed_at || "").slice(0, 10)) + TT(" and will not be seeded again.", " ولن تُزرع مجدداً.") + "</p>";
     } else {
-      html += '<p class="muted small">' + TT("Sample data is seeded automatically only when the organization has no accounting records.", "تُزرع البيانات التجريبية تلقائياً فقط عندما لا توجد سجلات محاسبية.") + "</p>";
+      var localRecords = blobHasAccountingData();
+      html += '<p class="muted small">' + (localRecords
+        ? TT("Existing accounting records are still stored in this browser. The empty shared ledger can import them.", "لا تزال سجلات المحاسبة الحالية محفوظة في هذا المتصفح. يمكن استيرادها إلى الدفتر المشترك الفارغ.")
+        : TT("Sample records can be added to an empty shared ledger from this page.", "يمكن إضافة سجلات تجريبية إلى الدفتر المشترك الفارغ من هذه الصفحة.")) + "</p>";
+      if (emptySharedLedger() && canWriteAcct() && (localRecords || s.sample_state === "never_seeded")) {
+        html += '<button class="btn sm" onclick="acctInitializeLedger(' + localRecords + ')">' +
+          (localRecords ? TT("Import Local Records", "استيراد السجلات المحلية") : TT("Add Sample Records", "إضافة سجلات تجريبية")) + "</button>";
+      }
     }
     html += "</div>";
 
@@ -2907,7 +2985,7 @@
       }).join("") + "</tbody></table>";
   }
   window.acctClientStatement = function (pid) {
-    if (!myPerm("export_working")) {
+    if (!myPerm("export_working") || !visibleProject(pid)) {
       toast4(TT("Your permissions do not include exporting statements.", "صلاحياتك لا تشمل تصدير الكشوفات.")); return;
     }
     var fin = finFor(pid);
@@ -3048,7 +3126,7 @@
         var view = document.getElementById("view");
         if (!view || document.getElementById("acct_reports_flag")) return out;
         var active = ACCT.txns.filter(function (t) {
-          return !t.deleted_at && ["void", "reversed", "rejected"].indexOf(t.status) === -1;
+          return visibleProject(t.project_id) && !t.deleted_at && ["void", "reversed", "rejected"].indexOf(t.status) === -1;
         });
         var notApproved = active.filter(function (t) { return t.review_status !== "approved"; });
         var d = document.createElement("div");
@@ -3060,31 +3138,31 @@
               " قيداً فعالاً غير معتمد بعد؛ الإجماليات أدناه هي إجماليات العمل الكاملة.") + "</div>";
         }
         // Portfolio comparison across projects (working figures, status-aware).
-        var rows = ACCT.projects.filter(function (p) { return !p.archived_at; }).map(function (p) {
-          var s = Core.projectSummary(p, ACCT.txns, ACCT.fees, ACCT.progress);
-          var statuses = ACCT.txns.filter(function (t) {
-            return t.project_id === p.id && !t.deleted_at && ["void", "reversed", "rejected"].indexOf(t.status) === -1;
-          }).map(function (t) { return t.review_status; });
-          var agg = Core.aggregateStatus(statuses);
+        var rows = (FIN.company ? FIN.company.rows : []).filter(function (p) {
+          return visibleProject(p.project_id);
+        }).map(function (p) {
+          var cf = p.client_funds || {}, approved = cf.approved || {}, working = cf.working || {};
+          var agg = (p.review || {}).status;
           var dot = agg === "green" ? "🟢" : agg === "yellow" ? "🟡" : agg === "red" ? "🔴" : "⚪";
-          return "<tr><td>" + dot + " " + esc4(p.name) + "</td><td class=\"right\">" + nfmt(s.gross_funding_iqd, "IQD") + "</td>" +
-            "<td class=\"right\">" + nfmt(s.initial_fee_iqd, "IQD") + "</td><td class=\"right\">" + nfmt(s.actual_construction_cost_iqd, "IQD") + "</td>" +
-            "<td class=\"right\">" + nfmt(s.total_used_iqd, "IQD") + "</td><td class=\"right\">" + nfmt(s.remaining_unused_iqd, "IQD") + "</td>" +
-            "<td class=\"right\">" + nfmt(s.total_refund_due_iqd, "IQD") + "</td></tr>";
+          return "<tr><td>" + dot + " " + esc4(p.project_name) + "</td><td class=\"right\">" + nfmt(working.gross_funding_iqd, "IQD") + "</td>" +
+            "<td class=\"right\">" + nfmt(approved.initial_fee_iqd, "IQD") + "</td><td class=\"right\">" + nfmt(working.construction_cost_iqd, "IQD") + "</td>" +
+            "<td class=\"right\">" + nfmt(working.total_used_iqd, "IQD") + "</td><td class=\"right\">" + nfmt(working.remaining_balance_iqd, "IQD") + "</td>" +
+            "<td class=\"right\">" + nfmt(cf.total_refund_due_iqd, "IQD") + "</td></tr>";
         }).join("");
         if (rows) {
           d.innerHTML += '<div class="card"><h3>' + TT("Portfolio — working totals by project", "المحفظة — إجماليات العمل حسب المشروع") + "</h3>" +
             '<div class="table-wrap"><table><thead><tr><th>' + TT("Project", "المشروع") + '</th><th class="right">' + TT("Gross Funding", "إجمالي التمويل") +
-            '</th><th class="right">' + TT("Consultancy Fee", "أتعاب الاستشارة") + '</th><th class="right">' + TT("Actual Cost", "الكلفة الفعلية") +
+            '</th><th class="right">' + TT("Posted Consultancy Fee", "أتعاب الاستشارة المثبتة") + '</th><th class="right">' + TT("Working Construction Cost", "كلفة الإنشاء الجارية") +
             '</th><th class="right">' + TT("Total Used", "المستخدم") + '</th><th class="right">' + TT("Remaining", "المتبقي") +
-            '</th><th class="right">' + TT("Refund Due", "الإرجاع المستحق") + "</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+            '</th><th class="right">' + TT("Refund Due (approved basis)", "الإرجاع المستحق حسب القيود المعتمدة") + "</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
             '<p class="muted small">' + TT("Totals never add a value to its own components; funding, cost, fees, refunds, and balances stay separate.",
               "الإجماليات لا تجمع القيمة مع مكوناتها؛ يبقى التمويل والكلفة والأتعاب والإرجاعات والأرصدة منفصلة.") + "</p></div>";
         }
-        view.insertBefore(d, view.firstChild);
+        if (d.innerHTML) view.insertBefore(d, view.firstChild);
       } catch (e) { console.warn(e); }
       return out;
     };
+    if (typeof RENDERERS !== "undefined") RENDERERS.reports = window.renderReportsEnterprise;
   }
 
   /* ---------------- keep snapshots safe from legacy recompute ---------------- */

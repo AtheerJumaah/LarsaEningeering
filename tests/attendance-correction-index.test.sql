@@ -21,7 +21,7 @@ begin
          jsonb_build_array(jsonb_build_object(
            'id', 'diag-index-out', 'uid', 'diag-index-uid',
            'status', 'Out', 'time', corrected, 'touchedAt', t
-         ))
+         )))
    where store_key = 'larsaStaffV8';
 
   if not exists (
@@ -47,15 +47,21 @@ begin
     raise exception 'Corrected chronology rejected the next punch';
   end if;
 
+  -- The stale-write guard requires an explicit tombstone to remove a log.
   update public.app_state
-     set data = jsonb_set(
-       data, '{logs}', (
+     set data = data || jsonb_build_object(
+       'logs', (
          select coalesce(jsonb_agg(item) filter (where item->>'id' <> 'diag-index-out'), '[]'::jsonb)
          from jsonb_array_elements(coalesce(data->'logs', '[]'::jsonb)) item
-       )
+       ),
+       'removedLogIds', coalesce(data->'removedLogIds', '[]'::jsonb) || '["diag-index-out"]'::jsonb)
    where store_key = 'larsaStaffV8';
   if exists (select 1 from public.attendance_corrections where client_event_id = 'diag-index-out') then
     raise exception 'Removed correction was not cleared from the index';
+  end if;
+  if not exists (select 1 from public.attendance_events
+                 where client_event_id = 'diag-index-out' and occurred_at = t - interval '2 hours') then
+    raise exception 'Correction removal changed the original ledger timestamp';
   end if;
 
   perform public.record_attendance_action(

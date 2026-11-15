@@ -26,7 +26,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var r2 = function (n) { return Math.round((Number(n) || 0) * 100) / 100; };
+  function r2(value) {
+    var amount = Number(value);
+    if (!Number.isFinite(amount)) return 0;
+    var scaled = Math.abs(amount) * 100;
+    // Match PostgreSQL numeric rounding at half-cents, including credits.
+    var tolerance = Math.min(Number.EPSILON * scaled, 0.0000001);
+    var rounded = Math.round(scaled + tolerance) / 100;
+    return amount < 0 && rounded !== 0 ? -rounded : rounded;
+  }
 
   /* ---------- exchange-rate hierarchy ---------- */
   function resolveRate(platform, project, override) {
@@ -66,9 +74,10 @@
     platform = platform || {};
     var projBasis = project && !project.fee_inherit && project.fee_basis ? project.fee_basis : platform.default_fee_basis || "funding";
     var projTreat = project && !project.fee_inherit && project.fee_treatment ? project.fee_treatment : platform.default_fee_treatment || "deduct_from_funding";
+    var projCats = project && !project.fee_inherit ? project.fee_basis_categories : platform.default_fee_basis_categories;
     if (override && override.method) {
       return ruleFrom("transaction_override", override.method, override.rate, override.fixed,
-        override.basis || projBasis, override.basis_categories, override.treatment || projTreat,
+        override.basis || projBasis, override.basis_categories ?? projCats, override.treatment || projTreat,
         { waived: override.method === "waived" || !!override.waived, waiver_reason: override.waiver_reason || "" });
     }
     var ovs = (project && project.fee_category_overrides) || [];
@@ -137,36 +146,59 @@
   }
 
   /* ---------- the Larsa unused-funding refund rule ----------
-     fundingEntries: [{amount_iqd, fee_iqd, fee_rate, fee_method,
+     fundingEntries: [{id, amount_iqd, fee_iqd, fee_rate, fee_method,
                        fee_treatment, currency, exchange_rate}] oldest first
      expensesIqd:    approved/posted project expenses (historical IQD)
      refundIqd:      partial principal to return (null = all unused)     */
   function computeRefund(fundingEntries, expensesIqd, refundIqd, alreadyRefundedIqd, context) {
-    var remaining = r2(Number(expensesIqd) || 0) + r2(Number(alreadyRefundedIqd) || 0);
+    fundingEntries = fundingEntries || [];
+    var contextTxns = context?.txns || [];
+    var refundTxns = contextTxns.filter(function (t) {
+      return t.kind === "refund" && (t.status === "posted" || t.status === "paid") && !t.deleted_at;
+    });
+    var knownFundingIds = new Set(fundingEntries.map(function (f) { return f.id; }).filter(Boolean));
+    var postedRefundIds = new Set(refundTxns.map(function (t) { return t.id; }).filter(Boolean));
+    var allocatedByFunding = new Map();
+    var alreadyAllocated = 0;
+    (context?.refunds || []).forEach(function (refund) {
+      if (refund.status !== "posted" || !postedRefundIds.has(refund.refund_txn_id)) return;
+      (refund.allocations || []).forEach(function (allocation) {
+        var id = allocation.funding_txn_id;
+        if (!knownFundingIds.has(id)) return;
+        var principal = r2(allocation.allocated_unused_iqd);
+        alreadyAllocated = r2(alreadyAllocated + principal);
+        allocatedByFunding.set(id, r2((allocatedByFunding.get(id) || 0) + principal));
+      });
+    });
+    var expenses = r2(expensesIqd);
+    var refundedPrincipal = r2(alreadyRefundedIqd);
+    var remaining = r2(expenses + Math.max(refundedPrincipal - alreadyAllocated, 0));
     var netPool = 0, grossIqd = 0, initialFee = 0;
     var fundingBased = true;
     var slots = [];
-    (fundingEntries || []).forEach(function (f) {
+    fundingEntries.forEach(function (f) {
       var feeIqd = r2(f.fee_iqd || 0);
       grossIqd = r2(grossIqd + r2(f.amount_iqd));
       initialFee = r2(initialFee + feeIqd);
-      if ((f.fee_basis || "funding") !== "funding") fundingBased = false;
+      var basis = f.fee_basis || "funding";
+      if (basis !== "funding") fundingBased = false;
       var net = r2(f.amount_iqd - ((f.fee_treatment || "deduct_from_funding") === "deduct_from_funding" ? feeIqd : 0));
       netPool = r2(netPool + net);
-      var take = Math.min(net, remaining);
+      var available = r2(net - (allocatedByFunding.get(f.id) || 0));
+      var take = Math.min(available, remaining);
       remaining = r2(remaining - take);
-      var unused = r2(net - take);
+      var unused = r2(available - take);
       if (unused > 0) {
         slots.push({
           entry: f,
           available_unused_iqd: unused,
-          fee_rate: (f.fee_method || "percentage") === "percentage" ? Number(f.fee_rate) || 0 : 0,
+          fee_rate: basis === "funding" && feeIqd > 0 && (f.fee_method || "percentage") === "percentage"
+            ? Number(f.fee_rate) || 0 : 0,
         });
       }
     });
-    var unusedTotal = 0;
-    slots.forEach(function (s) { unusedTotal = r2(unusedTotal + s.available_unused_iqd); });
-    var want = refundIqd == null ? unusedTotal : Math.min(r2(refundIqd), unusedTotal);
+    var unusedTotal = Math.max(r2(netPool - expenses - refundedPrincipal), 0);
+    var want = refundIqd == null ? unusedTotal : Math.max(0, Math.min(r2(refundIqd), unusedTotal));
     var left = want, refundableFee = 0;
     var allocations = [];
     slots.forEach(function (s) {
@@ -180,9 +212,11 @@
          the refundable fee by a cent (or more at large rates). */
       var entry = s.entry || {}, entryCur = entry.currency || "IQD",
           entryRate = Number(entry.exchange_rate) || 1,
-          unusedOriginal = entryCur === "IQD" ? r2(m) : r2(m / entryRate),
-          feeOriginal = r2(unusedOriginal * s.fee_rate),
-          fee = entryCur === "IQD" ? feeOriginal : r2(feeOriginal * entryRate);
+          originalFactor = entryCur === "IQD" ? 1 : entryRate,
+          unusedOriginal = r2(m / originalFactor),
+          availableFeeOriginal = r2(((Number(entry.fee_iqd) || 0) - (Number(entry.reversed_fee_iqd) || 0)) / originalFactor),
+          feeOriginal = Math.max(0, Math.min(r2(unusedOriginal * s.fee_rate), availableFeeOriginal)),
+          fee = r2(feeOriginal * originalFactor);
       refundableFee = r2(refundableFee + fee);
       allocations.push({
         funding: s.entry,
@@ -191,33 +225,50 @@
         refundable_fee_iqd: fee,
       });
     });
+    want = r2(want - left);
     var excessFee = 0;
+    var previouslyRefunded = refundTxns.reduce(function (sum, t) {
+      return r2(sum + Number(t.meta?.fee_refund_iqd ?? t.meta?.fee_iqd ?? 0));
+    }, 0);
     /* Expense-based fee rules return any collected fee above the fee earned
        on approved client costs.  The authoritative RPC does this inside
        acct_compute_refund; keep the local fallback mathematically aligned. */
     if (!fundingBased && context && context.fees) {
-      var collected = 0, earned = 0;
+      var collected = 0, earned = 0, alreadyReturnedExcess = 0;
+      var reversalBySettlement = new Map();
+      var sourceById = new Map(contextTxns.map(function (t) { return [t.id, t]; }));
       (context.fees || []).forEach(function (f) {
-        if (f.entry_type !== "fee" || f.status !== "posted" && f.status !== "settled") return;
+        if (f.status !== "posted" && f.status !== "settled") return;
+        if (f.entry_type === "fee_reversal" && f.refund_settlement_id) {
+          var reversed = reversalBySettlement.get(f.refund_settlement_id) || 0;
+          reversalBySettlement.set(f.refund_settlement_id, r2(reversed - Number(f.fee_iqd || 0)));
+        }
+        var basis = f.calc_basis || f.basis || "funding";
+        if (f.entry_type !== "fee" || basis === "funding" || basis === "income") return;
         var amount = Number(f.fee_iqd || 0);
         collected = r2(collected + amount);
-        var source = (context.txns || []).filter(function (t) { return t.id === f.source_txn_id; })[0];
+        var source = sourceById.get(f.source_txn_id);
         if (source && (source.kind === "material" || source.kind === "labor" || source.kind === "expense")
-          && isClientCost(source) && isActual(source.kind, source.status)) earned = r2(earned + amount);
+          && !source.deleted_at && isClientCost(source) && isActual(source.kind, source.status)) earned = r2(earned + amount);
       });
-      excessFee = r2(Math.max(collected - earned, 0));
+      refundTxns.forEach(function (t) {
+        var refunded = Number(t.meta?.fee_refund_iqd ?? t.meta?.fee_iqd ?? 0);
+        var alloc = reversalBySettlement.get(t.meta?.settlement_id) || 0;
+        alreadyReturnedExcess = r2(alreadyReturnedExcess + Math.max(refunded - alloc, 0));
+      });
+      excessFee = r2(Math.max(collected - earned - alreadyReturnedExcess, 0));
     }
     return {
       gross_funding_iqd: grossIqd,
       initial_fee_iqd: initialFee,
       net_construction_funding_iqd: netPool,
-      approved_expenses_iqd: r2(Number(expensesIqd) || 0),
+      approved_expenses_iqd: expenses,
       unused_net_funding_iqd: unusedTotal,
       refund_principal_iqd: r2(want),
       refundable_fee_iqd: r2(refundableFee + excessFee),
       excess_fee_iqd: excessFee,
       total_refund_iqd: r2(want + refundableFee + excessFee),
-      retained_fee_iqd: r2(initialFee - refundableFee - excessFee),
+      retained_fee_iqd: r2(Math.max(initialFee - previouslyRefunded - refundableFee - excessFee, 0)),
       funding_based: fundingBased,
       partial: want < unusedTotal,
       allocations: allocations,
@@ -256,7 +307,7 @@
     return { iqd: iqd, usd: usd };
   }
 
-  function projectSummary(project, txns, fees, progressUpdates) {
+  function projectSummary(project, txns, fees, progressUpdates, refundSettlements) {
     txns = (txns || []).filter(function (t) { return t.project_id === project.id; });
     fees = (fees || []).filter(function (f) { return f.project_id === project.id; });
     var gross = sumTxns(txns, "funding");
@@ -272,12 +323,17 @@
         pending.usd = r2(pending.usd + Number(t.amount_usd || 0));
       }
     });
+    var txnsById = new Map(txns.map(function (t) { return [t.id, t]; }));
     var feePosted = 0, feeDeduct = 0, feeExpense = 0, feeRevenue = 0, feeReversed = 0;
+    var clientExpenseFees = [];
     fees.forEach(function (f) {
       if (f.entry_type === "fee" && (f.status === "posted" || f.status === "settled")) {
         feePosted = r2(feePosted + Number(f.fee_iqd || 0));
         if (f.treatment === "deduct_from_funding") feeDeduct = r2(feeDeduct + Number(f.fee_iqd || 0));
-        if (f.treatment === "project_expense") feeExpense = r2(feeExpense + Number(f.fee_iqd || 0));
+        if (f.treatment === "project_expense" && isClientCost(txnsById.get(f.source_txn_id))) {
+          feeExpense = r2(feeExpense + Number(f.fee_iqd || 0));
+          clientExpenseFees.push(f);
+        }
         if (f.treatment === "larsa_revenue") feeRevenue = r2(feeRevenue + Number(f.fee_iqd || 0));
       }
       if ((f.entry_type === "fee_reversal" || f.entry_type === "fee_adjustment")
@@ -301,25 +357,32 @@
       .filter(function (t) { return t.kind === "funding" && isActual("funding", t.status) && !t.deleted_at; })
       .sort(function (a, b) {
         var byDate = String(a.txn_date).localeCompare(String(b.txn_date));
-        return byDate || String(a.created_at || "").localeCompare(String(b.created_at || ""));
+        return byDate || String(a.created_at || "").localeCompare(String(b.created_at || ""))
+          || String(a.id || "").localeCompare(String(b.id || ""));
       })
       .map(function (t) {
         var fee = fees.filter(function (f) {
           return f.source_txn_id === t.id && f.entry_type === "fee" && (f.status === "posted" || f.status === "settled");
         })[0];
         return {
+          id: t.id,
           amount_iqd: Number(t.amount_iqd || 0),
           fee_iqd: fee ? Number(fee.fee_iqd || 0) : 0,
           fee_rate: fee ? Number(fee.fee_rate || 0) : (t.fee_rule ? Number(t.fee_rule.rate || 0) : 0),
           fee_method: fee ? fee.calc_method : (t.fee_rule ? t.fee_rule.method : "percentage"),
-          fee_basis: fee ? (fee.basis || "funding") : (t.fee_rule ? (t.fee_rule.basis || "funding") : "funding"),
+          fee_basis: fee?.calc_basis || fee?.basis || t.fee_rule?.basis || "funding",
           fee_treatment: fee ? fee.treatment : (t.fee_rule ? t.fee_rule.treatment : "deduct_from_funding"),
+          reversed_fee_iqd: fees.filter(function (f) {
+            return fee && f.reversal_of === fee.id && f.entry_type === "fee_reversal"
+              && (f.status === "posted" || f.status === "settled");
+          }).reduce(function (sum, f) { return sum - Number(f.fee_iqd || 0); }, 0),
           currency: t.original_currency,
           exchange_rate: Number(t.exchange_rate || 1),
         };
       });
     var expensesForRefund = r2(actualCost.iqd + feeExpense);
-    var refund = computeRefund(fundingEntries, expensesForRefund, null, refundedPrincipal, { fees: fees, txns: txns });
+    var refund = computeRefund(fundingEntries, expensesForRefund, null, refundedPrincipal,
+      { fees: fees, txns: txns, refunds: refundSettlements });
 
     var latest = null;
     (progressUpdates || []).forEach(function (p) {
@@ -357,8 +420,8 @@
       total_used_iqd: totalUsed,
       total_used_usd: r2(actualCost.usd + fees.filter(function (f) {
         return f.entry_type === "fee" && (f.status === "posted" || f.status === "settled")
-          && (f.treatment === "deduct_from_funding" || f.treatment === "project_expense");
-      }).reduce(function (sum, f) { return sum + Number(f.fee_usd || 0); }, 0)),
+          && f.treatment === "deduct_from_funding";
+      }).concat(clientExpenseFees).reduce(function (sum, f) { return sum + Number(f.fee_usd || 0); }, 0)),
       net_construction_funding_usd: r2(gross.usd - fees.filter(function (f) {
         return f.entry_type === "fee" && (f.status === "posted" || f.status === "settled")
           && f.treatment === "deduct_from_funding";
@@ -393,7 +456,8 @@
     n = Math.floor(Math.abs(Number(n) || 0));
     if (n === 0) return "Zero";
     var parts = [];
-    var scales = [[1e9, "Billion"], [1e6, "Million"], [1e3, "Thousand"], [1, ""]];
+    var scales = [[1e15, "Quadrillion"], [1e12, "Trillion"], [1e9, "Billion"],
+      [1e6, "Million"], [1e3, "Thousand"], [1, ""]];
     scales.forEach(function (s) {
       if (n >= s[0]) {
         var chunk = Math.floor(n / s[0]);
@@ -433,18 +497,18 @@
     return parts.join(" و");
   }
   function amountInWords(amount, currency, lang) {
-    var n = Number(amount) || 0;
+    var n = r2(amount);
     var whole = Math.floor(Math.abs(n));
     var cents = Math.round((Math.abs(n) - whole) * 100);
     if (lang === "ar") {
       var curAr = currency === "USD" ? "دولار أمريكي" : "دينار عراقي";
-      var out = numberToWordsAr(whole) + " " + curAr;
+      var out = (n < 0 ? "سالب " : "") + numberToWordsAr(whole) + " " + curAr;
       if (cents > 0) out += " و" + numberToWordsAr(cents) + " سنت";
       return out + " لا غير";
     }
-    var curEn = currency === "USD" ? "US Dollars" : "Iraqi Dinars";
-    var res = numberToWordsEn(whole) + " " + curEn;
-    if (cents > 0) res += " and " + numberToWordsEn(cents) + " Cents";
+    var curEn = (currency === "USD" ? "US Dollar" : "Iraqi Dinar") + (whole === 1 ? "" : "s");
+    var res = (n < 0 ? "Minus " : "") + numberToWordsEn(whole) + " " + curEn;
+    if (cents > 0) res += " and " + numberToWordsEn(cents) + (cents === 1 ? " Cent" : " Cents");
     return res + " Only";
   }
 
@@ -480,6 +544,7 @@
     feePostable: feePostable,
     feeForTxn: feeForTxn,
     computeRefund: computeRefund,
+    isClientCost: isClientCost,
     projectSummary: projectSummary,
     numberToWordsEn: numberToWordsEn,
     numberToWordsAr: numberToWordsAr,

@@ -11,7 +11,9 @@ begin
   -- An older historical record arriving AFTER the Out must not own status.
   insert into public.attendance_events(client_event_id,occurred_at,uid,status,source) values('diag-late-history',t-interval '4 hours',uid,'In','legacy-import-test');
   select * into r from public.record_attendance_action('diag-duplicate-out',t-interval '150 minutes',uid,null,'Rollback test','Out');
-  if r.outcome <> 'already' or r.event_id <> 'diag-out' then raise exception 'Upload ordering still overrides actual chronology'; end if;
+  if r.outcome <> 'already' or r.event_id <> 'diag-out' or r.current_at <> t-interval '2 hours' then
+    raise exception 'Same-state retry did not return the original clock-out and its timestamp';
+  end if;
   select * into r from public.record_attendance_action('diag-in',t,uid,null,'Rollback test','In');
   if r.event_id <> 'diag-in' or r.current_at <> t-interval '3 hours' then raise exception 'Uncertain replay not idempotent'; end if;
   select * into r from public.record_attendance_action('diag-in2',t-interval '1 hour',uid,null,'Rollback test','In');

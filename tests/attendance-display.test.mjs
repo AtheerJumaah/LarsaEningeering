@@ -33,3 +33,11 @@ test("a pending first punch remains visible before the shared log arrives", () =
   assert.equal(shown.mode, "Site");
   assert.equal(shown.pendingIsNewer, true);
 });
+
+test("equal or invalid queue timestamps cannot supersede the confirmed punch", () => {
+  for (const occurred_at of [latestIn.time, "invalid"]) {
+    const shown = resolveClockDisplay({ latest: latestIn, pending: { status: "Out", occurred_at } });
+    assert.equal(shown.status, "In");
+    assert.equal(shown.pendingIsNewer, false);
+  }
+});

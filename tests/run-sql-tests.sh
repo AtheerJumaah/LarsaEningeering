@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs the accounting SQL test suite against a throwaway local PostgreSQL.
+# Runs the accounting and attendance SQL suites against a throwaway PostgreSQL.
 # Needs postgresql-16+ server binaries (initdb/pg_ctl) and psql on PATH or
-# under /usr/lib/postgresql/*/bin. Everything runs inside one transaction
-# and rolls back; the temporary cluster is deleted afterwards.
+# under /usr/lib/postgresql/*/bin. Test fixtures roll back in each suite.
+# The temporary cluster is deleted afterwards.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -26,10 +26,11 @@ create or replace function auth.role() returns text language sql as $$ select 'a
 -- JWT. Locally there is no JWT, so this reads a session GUC instead — unset
 -- (the default for every pre-existing test) it is null, exactly the old
 -- hardcoded behavior; a test that needs to act as a specific auth.users row
--- (e.g. a Viewer) sets it with `select set_config('request.jwt.claim.sub',
--- '<uuid>', true)` before the statements it wants evaluated as that user.
+-- (e.g. a Viewer) sets request.jwt.claim.sub or request.jwt.claims before
+-- the statements it wants evaluated as that user.
 create or replace function auth.uid() returns uuid language sql stable as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+                  nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'sub')::uuid
 $$;
 do $$ begin
   if not exists (select from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -37,6 +38,7 @@ do $$ begin
   -- Supabase's service role, which the push sender runs as.
   if not exists (select from pg_roles where rolname='service_role') then create role service_role nologin; end if;
 end $$;
+grant usage on schema auth to anon, authenticated, service_role;
 -- Minimal auth.users shim: just enough shape (id, email) for viewer_accounts'
 -- FK and for tests to seed a "signed-in Viewer" row. Real Supabase's table
 -- has many more columns; nothing here reads them.
@@ -97,8 +99,7 @@ create table if not exists public.push_subscriptions (
 -- owned by the main app's sync layer, not this accounting subsystem — it is
 -- shimmed here only because the viewer-accounts migration adds a "viewer
 -- blocked" policy to it. Shape and the pre-existing permissive policy match
--- schema.sql exactly; the supabase_realtime publication line there is
--- skipped since nothing here reads it.
+-- schema.sql exactly.
 create table if not exists public.app_state (
   store_key   text primary key,
   data        jsonb not null default '{}'::jsonb,
@@ -122,13 +123,21 @@ do $$ begin
 end $$;
 EOF
 
-for f in $(ls "$repo"/supabase/migrations/2026*_acct_*.sql "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql "$repo"/supabase/migrations/2026*_sync_*.sql 2>/dev/null | sort); do
+while IFS= read -r f; do
   echo "applying $(basename "$f")"
   # `create extension pg_net` cannot run on a vanilla local server; the shim
   # above provides net.http_post instead, so the line is dropped here only.
   sed -E 's/^create extension if not exists pg_(net|cron).*$//' "$f" \
     | PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q >/dev/null
-done
+done < <(printf '%s\n' "$repo"/supabase/migrations/2026*_acct_*.sql \
+  "$repo"/supabase/migrations/2026*_notify_*.sql "$repo"/supabase/migrations/2026*_audit_*.sql \
+  "$repo"/supabase/migrations/2026*_sync_*.sql | sort)
+
+apply_repair() {
+  local migration="$repo/supabase/migrations/$1.sql"
+  echo "applying $(basename "$migration")"
+  PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$migration" >/dev/null
+}
 
 # The incident-repair migrations that shape schema/behaviour, in production
 # order. repair_001 (a point-in-time backup), repair_003 (alters live
@@ -141,12 +150,25 @@ for name in repair_002_durable_attendance_ledger_and_write_hardening \
             repair_008_server_guard_stale_writes \
             repair_009_attendance_ledger_anon_access \
             repair_012_atomic_attendance_punch; do
-  f="$repo/supabase/migrations/$name.sql"
-  echo "applying $(basename "$f")"
-  PGOPTIONS='-c client_min_messages=warning' psql -d acct_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
+  apply_repair "$name"
 done
 
 total=0
+suites=0
+run_sql_test() {
+  local tf="$1" out n
+  if ! out="$(psql -d acct_test -v ON_ERROR_STOP=1 -f "$tf" 2>&1)"; then
+    printf '%s\n' "$out" | tail -20
+    return 1
+  fi
+  if grep -E 'FAIL|ERROR' <<< "$out"; then return 1; fi
+  n="$(grep -c 'PASS:' <<< "$out" || true)"
+  total=$((total + n))
+  suites=$((suites + 1))
+  echo "passed $(basename "$tf")"
+}
+
+# These suites exercise the original attendance RPC and other legacy behavior.
 for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql" \
           "$here/accounting-makerchecker-sql.test.sql" "$here/accounting-financials-sql.test.sql" \
           "$here/accounting-payroll-sql.test.sql" "$here/accounting-admin-role-sql.test.sql" \
@@ -154,10 +176,38 @@ for tf in "$here/accounting-sql.test.sql" "$here/accounting-review-sql.test.sql"
           "$here/viewer-accounts-sql.test.sql" "$here/notify-email-sql.test.sql" \
           "$here/qa-spec-sql.test.sql" "$here/repair-guard-sql.test.sql" \
           "$here/atomic-attendance-punch-sql.test.sql"; do
-  out="$(psql -d acct_test -f "$tf" 2>&1)" || { echo "$out" | tail -20; exit 1; }
-  echo "$out" | grep -E "FAIL|ERROR" && exit 1
-  n="$(echo "$out" | grep -c "PASS:")"
-  total=$((total + n))
+  run_sql_test "$tf"
 done
-echo "$total SQL checks passed"
+
+psql -d acct_test -v ON_ERROR_STOP=1 -q -c 'create publication supabase_realtime'
+for name in repair_014_attendance_chronology_audit \
+            repair_015_attendance_writer_audit \
+            repair_016_attendance_effective_corrections \
+            repair_017_attendance_same_intent_race \
+            repair_018_attendance_effective_query_cost \
+            repair_019_shared_state_noop \
+            repair_020_retire_legacy_attendance_writer \
+            repair_021_attendance_realtime \
+            repair_022_attendance_single_snapshot \
+            repair_023_attendance_correction_index \
+            repair_024_attendance_preserve_same_state_retry; do
+  apply_repair "$name"
+done
+
+# The correction tests update the staff document, as the app does.
+psql -d acct_test -v ON_ERROR_STOP=1 -q <<'EOF'
+insert into public.app_state (store_key, data)
+  values ('larsaStaffV8', '{"logs":[],"users":[]}'::jsonb)
+  on conflict (store_key) do nothing;
+EOF
+
+for tf in "$here/attendance-correction-index.test.sql" \
+          "$here/attendance-effective-correction.test.sql" \
+          "$here/attendance-preserved-time.test.sql" \
+          "$here/attendance-production-transaction.test.sql" \
+          "$here/attendance-shared-state-noop.test.sql"; do
+  run_sql_test "$tf"
+done
+
+echo "$suites SQL suites passed ($total named checks)"
 echo "OK"
