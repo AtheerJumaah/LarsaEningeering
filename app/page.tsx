@@ -12347,11 +12347,6 @@ function Overview({
             <HomePresenceIndicator people={presence} ready={presenceReady}
               onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
           )}
-          {canOpenInSession(user, PRESENCE_ITEM, method) && (
-            <button type="button" onClick={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))}>
-              <UsersRound size={16} /> Live Presence <ArrowRight size={15} />
-            </button>
-          )}
           <span className="access-pill"><ShieldCheck size={16} /> {quickAccess ? "PIN access" : user?.access || user?.role}</span>
         </div>
       </section>
