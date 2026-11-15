@@ -19,7 +19,7 @@ function PresenceLights({ people, compact = false }: { people: PresenceEntry[]; 
       aria-label={compact ? undefined : `${active} active out of ${people.length} employees. One light per employee, three rows filled ray by ray.`}>
       {lights.map(light => <circle key={light.user.id} cx={light.x} cy={light.y} r={light.dotRadius}
         className={`home-presence-light is-${light.tone}`} data-employee-id={light.user.id}>
-        {!compact && <title>{light.user.name}: {STATUS_LABELS[light.tone]}</title>}
+        {!compact && <title>{`${light.user.name}: ${STATUS_LABELS[light.tone]}`}</title>}
       </circle>)}
       <text x="72" y={compact ? "79" : "72"} textAnchor="middle" className="home-presence-total">{active}</text>
       {!compact && <text x="72" y="87" textAnchor="middle" className="home-presence-caption">active</text>}
@@ -48,13 +48,13 @@ export function HomePresenceIndicator({ people, ready, onViewEmployees }: {
     <button type="button" className="home-presence-trigger" aria-label={`Show presence lights. ${summary}`}
       aria-haspopup="dialog" aria-controls={id} aria-expanded={open} title={summary}
       onClick={() => { dialogRef.current?.showModal(); setOpen(true); }}>
-      {ready ? <PresenceLights people={people} compact /> : <span className="home-presence-loading" aria-hidden="true">…</span>}
+      {ready ? <PresenceLights people={people} compact /> : <span className="home-presence-loading" aria-hidden="true">.</span>}
     </button>
     <dialog ref={dialogRef} id={id} className="home-presence-dialog" aria-labelledby={`${id}-title`}
       onClose={() => setOpen(false)} onClick={event => { if (event.target === event.currentTarget) dialogRef.current?.close(); }}>
       <div className="home-presence-dialog-content">
         <div className="home-presence-heading">
-          <div><h3 id={`${id}-title`}>Live Presence</h3><p>{ready ? `${people.length} employees · one light per employee` : "Loading employee presence…"}</p></div>
+          <div><h3 id={`${id}-title`}>Live Presence</h3><p>{ready ? `${people.length} employees � one light per employee` : "Loading employee presence."}</p></div>
           <button type="button" className="home-presence-close" aria-label="Close presence lights" onClick={() => dialogRef.current?.close()}><X size={18} /></button>
         </div>
         {ready && people.length > 0 ? <div className="home-presence-detail">
@@ -65,7 +65,7 @@ export function HomePresenceIndicator({ people, ready, onViewEmployees }: {
             </div>)}
           </dl>
         </div> : <p className="home-presence-empty">{ready ? "No enabled employees to show yet." : "Waiting for the employee roster and attendance data."}</p>}
-        <div className="home-presence-footer"><span>Three rows · inner to outer · clockwise</span>
+        <div className="home-presence-footer"><span>Three rows � inner to outer � clockwise</span>
           <button type="button" onClick={() => { dialogRef.current?.close(); onViewEmployees(); }}>View employee list <ArrowRight size={15} /></button>
         </div>
       </div>
