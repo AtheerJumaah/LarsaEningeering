@@ -254,6 +254,48 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .eyebrow { color: var(--muted); font-size: 10px; font-weight: 950; text-transform: uppercase; letter-spacing: .11em; }
 .hero-actions { display: flex; gap: 8px; flex-wrap: wrap; flex: none; }
 .home-hero-actions { align-items: center; max-width: 100%; }
+.home-presence-lights { display: block; width: 196px; height: 196px; flex: none; overflow: visible; }
+.home-presence-lights.is-compact { width: 46px; height: 46px; }
+.home-presence-light { fill: #c3c8d2; }
+.home-presence-light.is-office { fill: var(--mode-office, #159b56); }
+.home-presence-light.is-online { fill: var(--mode-online, #2563eb); }
+.home-presence-light.is-site { fill: #17181b; }
+.home-presence-light.is-other { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.unified-app.dark .home-presence-light.is-site { stroke: #d8dbe1; stroke-width: 1; }
+.home-presence-total { fill: var(--ink); font-size: 25px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.home-presence-caption { fill: var(--muted); font-size: 9px; font-weight: 500; }
+.hero-actions > .home-presence-trigger { padding: 0; min-width: 48px; min-height: 48px; flex: 0 0 auto; }
+.home-presence-trigger:hover { background: var(--soft); }
+.home-presence-trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.home-presence-loading { display: grid; place-items: center; width: 46px; height: 46px; color: var(--muted); }
+.home-presence-dialog { width: min(510px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 18px; color: var(--ink); background: var(--panel); box-shadow: var(--shadow); }
+.home-presence-dialog::backdrop { background: rgba(0,0,0,.3); }
+.home-presence-dialog-content { padding: 22px; }
+.home-presence-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.home-presence-heading h3 { margin: 0; font-size: 18px; font-weight: 700; }
+.home-presence-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; font-weight: 500; }
+.home-presence-close { display: grid; place-items: center; width: 36px; height: 36px; flex: none; background: var(--soft); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; }
+.home-presence-detail { display: flex; align-items: center; gap: 28px; padding: 18px 0; }
+.home-presence-legend { flex: 1; margin: 0; display: grid; gap: 16px; font-size: 12px; }
+.home-presence-legend > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.home-presence-legend dt { display: flex; align-items: center; gap: 8px; }
+.home-presence-legend dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 700; }
+.home-presence-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #c3c8d2; }
+.home-presence-swatch.is-office { background: var(--mode-office, #159b56); }
+.home-presence-swatch.is-online { background: var(--mode-online, #2563eb); }
+.home-presence-swatch.is-site { background: #17181b; }
+.unified-app.dark .home-presence-swatch.is-site { box-shadow: 0 0 0 1px #d8dbe1; }
+.home-presence-swatch.is-other { background: transparent; border: 1px solid var(--muted); }
+.home-presence-footer { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
+.home-presence-footer > span { color: var(--muted); font-size: 11px; }
+.home-presence-footer button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 9px; color: var(--ink); font-size: 12px; font-weight: 650; }
+.home-presence-empty { padding: 24px 0; font-size: 13px; color: var(--muted); }
+@media (max-width: 540px) {
+  .home-presence-detail { flex-direction: column; gap: 12px; }
+  .home-presence-legend { width: 100%; }
+  .home-presence-dialog-content { padding: 18px; }
+}
+@media (pointer: coarse) { .home-presence-close, .home-presence-footer button { min-height: 44px; min-width: 44px; } }
 
 .home-scroll { gap: 18px; padding: 28px; }
 .overview-hero.quick {

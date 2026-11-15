@@ -9,6 +9,8 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
+import { buildPresenceRoster, type PresenceEntry } from "../lib/presence.mjs";
+import { HomePresenceIndicator } from "./HomePresenceIndicator";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, attendanceReportingWeekSessions, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
 import { readReportingWeekStart, REPORTING_WEEK_DAYS, REPORTING_WEEK_STORAGE_KEY } from "../lib/reporting-week.mjs";
 import { planAttendanceCorrection } from "../lib/attendance-corrections.mjs";
@@ -10918,6 +10920,9 @@ export default function Home() {
   const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
   const attendanceMinute = Math.floor(serverNowMs() / 60_000);
   const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers, attendanceMinute]);
+  const presenceRows = useMemo(() => buildPresenceRoster(
+    accessUsers, Array.isArray(staffStore?.logs) ? staffStore.logs as ClockLog[] : [], clockSessions, modeTone,
+  ), [accessUsers, staffStore, clockSessions]);
   clockSessionsRef.current = clockSessions;
   const accountingSnapshot = useMemo(
     () => (hydrated
@@ -11673,7 +11678,7 @@ export default function Home() {
               mount so a server in UTC cannot hydrate an evening greeting
               over a client's afternoon greeting and rebuild the root. */}
           <NativePanel active={hydrated ? active.native : undefined} view="overview">
-            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
+            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} presence={presenceRows} presenceReady={staffStore !== null} />
           </NativePanel>
           <NativePanel active={active.native} view="admin">
             <AdminCenter choose={choose} user={sessionUser} />
@@ -11778,7 +11783,7 @@ export default function Home() {
           <NativePanel active={active.native} view="orgStructure">
             <EngineeringManagementPortal viewer={sessionUser} users={accessUsers} sessions={clockSessions} rows={pointsRows} targets={growthStore.pointTargets} go={goToItem} onSaved={() => setStorageTick((tick) => tick + 1)} openTab={ENGINEERING_ITEM_TABS[active.id]} />
           </NativePanel><NativePanel active={active.native} view="platformSettings"><PlatformSettings viewer={sessionUser} users={accessUsers} /></NativePanel><NativePanel active={active.native} view="presence">
-            <LivePresence viewer={sessionUser} users={accessUsers} store={staffStore} sessions={clockSessions} go={goToItem} />
+            <LivePresence viewer={sessionUser} presence={presenceRows} store={staffStore} go={goToItem} />
           </NativePanel>
           <NativePanel active={active.native} view="settings">
             <MySettings
@@ -12230,6 +12235,8 @@ function Overview({
   recentId,
   recentTrail,
   summary,
+  presence,
+  presenceReady,
 }: {
   choose: (item: Item, channel?: NavChannel) => void;
   user: StaffUser | null;
@@ -12237,6 +12244,8 @@ function Overview({
   recentId: string;
   recentTrail: string[];
   summary: HomeSummary;
+  presence: PresenceEntry[];
+  presenceReady: boolean;
 }) {
   const open = (id: string, channel: NavChannel) => {
     const item = ITEMS.find((row) => row.id === id);
@@ -12334,6 +12343,10 @@ function Overview({
           <p>{quickAccess ? "Attendance, points, and development." : "Your work areas and actions."}</p>
         </div>
         <div className="hero-actions home-hero-actions">
+          {canOpenInSession(user, PRESENCE_ITEM, method) && (
+            <HomePresenceIndicator people={presence} ready={presenceReady}
+              onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
+          )}
           {canOpenInSession(user, PRESENCE_ITEM, method) && (
             <button type="button" onClick={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))}>
               <UsersRound size={16} /> Live Presence <ArrowRight size={15} />
@@ -17758,12 +17771,11 @@ function ViewerAccountsPanel({
 }
 
 function LivePresence({
-  viewer, users, store, sessions, go,
+  viewer, presence, store, go,
 }: {
   viewer: StaffUser | null;
-  users: StaffUser[];
+  presence: PresenceEntry<StaffUser>[];
   store: Record<string, unknown> | null;
-  sessions: ClockSession[];
   go: (id: string) => void;
 }) {
   const [tick, setTick] = useState(0);
@@ -17773,31 +17785,13 @@ function LivePresence({
   }, []);
   void tick;
 
-  const roster = users.filter((user) => user.enabled !== false);
-  const logs = Array.isArray(store?.logs) ? (store.logs as ClockLog[]) : [];
   const todayName = WEEKDAY_NAMES[attendanceWeekdayIndex(new Date())];
   const schedule = (store?.schedule || {}) as Record<string, Record<string, { code?: string }[]>>;
 
-  const state = roster.map((user) => {
-    const latest = logs
-      .filter((log) => log.uid === user.id && log.time)
-      .sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime())[0];
-    const openSession = sessions.find((session) => session.uid === user.id && session.open);
-    const isIn = isActiveClockSession(openSession) || (!openSession && latest?.status === "In");
-    const mode = isActiveClockSession(openSession) ? openSession?.mode || "" : !openSession ? latest?.type || "" : "";
-    const planned = (schedule[user.id]?.[todayName] || [])
+  const state = presence.map((row) => {
+    const planned = (schedule[row.user.id]?.[todayName] || [])
       .map((entry) => String(entry.code || "").toUpperCase()).find(Boolean) || "OFF";
-    return {
-      user,
-      isIn,
-      tone: isIn ? modeTone(mode) : "off",
-      mode: mode || "—",
-      since: isActiveClockSession(openSession) ? openSession?.clockIn || "" : !openSession ? latest?.time || "" : "",
-      // Presence, not worked time -- someone on their lunch break is still here.
-      hours: isActiveClockSession(openSession) ? openSession?.presenceHours || 0 : 0,
-      stale: Boolean(openSession?.stale),
-      planned,
-    };
+    return { ...row, planned };
   });
 
   const GROUPS_LIVE = [
