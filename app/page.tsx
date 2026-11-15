@@ -12333,7 +12333,14 @@ function Overview({
           <h2>{greeting()}, {firstName}</h2>
           <p>{quickAccess ? "Attendance, points, and development." : "Your work areas and actions."}</p>
         </div>
-        <span className="access-pill"><ShieldCheck size={16} /> {quickAccess ? "PIN access" : user?.access || user?.role}</span>
+        <div className="hero-actions home-hero-actions">
+          {canOpenInSession(user, PRESENCE_ITEM, method) && (
+            <button type="button" onClick={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))}>
+              <UsersRound size={16} /> Live Presence <ArrowRight size={15} />
+            </button>
+          )}
+          <span className="access-pill"><ShieldCheck size={16} /> {quickAccess ? "PIN access" : user?.access || user?.role}</span>
+        </div>
       </section>
 
       {summary.roleCards.length > 0 && (

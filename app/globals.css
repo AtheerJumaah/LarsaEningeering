@@ -253,6 +253,7 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .overview-hero p, .data-title p { max-width: 780px; margin: 0; color: var(--muted); font-size: 15px; font-weight: 650; line-height: 1.55; }
 .eyebrow { color: var(--muted); font-size: 10px; font-weight: 950; text-transform: uppercase; letter-spacing: .11em; }
 .hero-actions { display: flex; gap: 8px; flex-wrap: wrap; flex: none; }
+.home-hero-actions { align-items: center; max-width: 100%; }
 
 .home-scroll { gap: 18px; padding: 28px; }
 .overview-hero.quick {
