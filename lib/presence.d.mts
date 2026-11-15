@@ -1,5 +1,5 @@
 export type PresenceTone = 'office' | 'online' | 'site' | 'other' | 'off';
-export type PresenceUser = { id: string; name: string; enabled?: boolean };
+export type PresenceUser = { id: string; name: string; enabled?: boolean; offboarded?: boolean; recycled?: boolean; pendingApproval?: boolean; access?: string };
 export type PresenceEntry<T extends PresenceUser = PresenceUser> = {
   user: T; isIn: boolean; tone: PresenceTone; stale: boolean;
 };

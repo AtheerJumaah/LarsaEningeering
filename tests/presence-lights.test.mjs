@@ -29,6 +29,19 @@ test('one light per enabled employee; added, removed, disabled and duplicate acc
   }
 });
 
+test('former, recycled, pending and client accounts never enter the presence roster', () => {
+  const employees = [user('current'),
+    { ...user('offboarded'), offboarded: true, enabled: true },
+    { ...user('recycled'), recycled: true, enabled: true },
+    { ...user('pending'), pendingApproval: true, enabled: true },
+    { ...user('client'), access: 'Client', enabled: true },
+    user('disabled', false)];
+  const sessions = employees.map(person => ({ uid: person.id, open: true, mode: 'Office' }));
+  const before = JSON.stringify({ employees, sessions });
+  assert.deepEqual(buildPresenceRoster(employees, sessions, classify).map(row => row.user.id), ['current']);
+  assert.equal(JSON.stringify({ employees, sessions }), before);
+});
+
 test('three lights fill one ray before moving clockwise; empty capacity has no lights', () => {
   const lights = layoutPresenceLights(Array.from({ length: 29 }, (_, i) => entry(i)));
   assert.equal(lights.length, 29);

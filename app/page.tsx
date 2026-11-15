@@ -10932,9 +10932,9 @@ export default function Home() {
   const staffFormalRecords = useMemo(() => formalRecords(staffStore), [staffStore]);
   const attendanceMinute = Math.floor(serverNowMs() / 60_000);
   const clockSessions = useMemo(() => buildClockSessions(staffStore, accessUsers), [staffStore, accessUsers, attendanceMinute]);
-  const presenceRows = useMemo(() => buildPresenceRoster(
-    accessUsers, clockSessions, modeTone,
-  ), [accessUsers, clockSessions]);
+  const presenceRows = useMemo(() => authoritativeStateReady ? buildPresenceRoster(
+    Array.isArray(staffStore?.users) ? staffStore.users as StaffUser[] : [], clockSessions, modeTone,
+  ) : [], [authoritativeStateReady, staffStore, clockSessions]);
   const presenceSchedule = staffStore?.schedule;
   const scheduledForPresence = useMemo(() => scheduledPresenceUsers(presenceSchedule, attendanceMinute * 60_000),
     [presenceSchedule, attendanceMinute]);
@@ -11601,7 +11601,7 @@ export default function Home() {
                 {refreshStatus === "done" ? <CheckCircle2 size={17} /> : refreshStatus === "error" ? <AlertTriangle size={17} /> : <RotateCcw size={17} />}
               </button>
               {canOpenInSession(sessionUser, PRESENCE_ITEM, sessionMethod) && (
-                <HomePresenceIndicator people={presenceRows} ready={staffStore !== null}
+                <HomePresenceIndicator people={presenceRows} ready={authoritativeStateReady && staffStore !== null}
                   onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
               )}
             </div>
