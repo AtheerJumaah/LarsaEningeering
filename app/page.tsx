@@ -11574,16 +11574,22 @@ export default function Home() {
                 <b>Home</b>
               </button>
             )}
-            <button
-              type="button"
-              className={`top-refresh${refreshStatus === "loading" ? " is-loading" : ""}`}
-              onClick={refreshCurrentPage}
-              disabled={refreshStatus === "loading"}
-              aria-label={refreshStatus === "loading" ? "Refreshing current page" : "Refresh current page"}
-              title={refreshStatus === "done" ? "Up to date" : refreshStatus === "error" ? "Refresh failed — try again" : "Refresh current page"}
-            >
-              {refreshStatus === "done" ? <CheckCircle2 size={17} /> : refreshStatus === "error" ? <AlertTriangle size={17} /> : <RotateCcw size={17} />}
-            </button>
+            <div className="top-presence-actions">
+              <button
+                type="button"
+                className={`top-refresh${refreshStatus === "loading" ? " is-loading" : ""}`}
+                onClick={refreshCurrentPage}
+                disabled={refreshStatus === "loading"}
+                aria-label={refreshStatus === "loading" ? "Refreshing current page" : "Refresh current page"}
+                title={refreshStatus === "done" ? "Up to date" : refreshStatus === "error" ? "Refresh failed - try again" : "Refresh current page"}
+              >
+                {refreshStatus === "done" ? <CheckCircle2 size={17} /> : refreshStatus === "error" ? <AlertTriangle size={17} /> : <RotateCcw size={17} />}
+              </button>
+              {active.id === "overview" && canOpenInSession(sessionUser, PRESENCE_ITEM, sessionMethod) && (
+                <HomePresenceIndicator people={presenceRows} ready={staffStore !== null}
+                  onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
+              )}
+            </div>
             <div className="page-heading">
               <h1>{active.label}</h1>
               <p>{active.description}</p>
@@ -11678,7 +11684,7 @@ export default function Home() {
               mount so a server in UTC cannot hydrate an evening greeting
               over a client's afternoon greeting and rebuild the root. */}
           <NativePanel active={hydrated ? active.native : undefined} view="overview">
-            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} presence={presenceRows} presenceReady={staffStore !== null} />
+            <Overview choose={choose} user={sessionUser} method={sessionMethod} recentId={recentId} recentTrail={recentTrail} summary={homeSummary} />
           </NativePanel>
           <NativePanel active={active.native} view="admin">
             <AdminCenter choose={choose} user={sessionUser} />
@@ -12235,8 +12241,6 @@ function Overview({
   recentId,
   recentTrail,
   summary,
-  presence,
-  presenceReady,
 }: {
   choose: (item: Item, channel?: NavChannel) => void;
   user: StaffUser | null;
@@ -12244,8 +12248,6 @@ function Overview({
   recentId: string;
   recentTrail: string[];
   summary: HomeSummary;
-  presence: PresenceEntry[];
-  presenceReady: boolean;
 }) {
   const open = (id: string, channel: NavChannel) => {
     const item = ITEMS.find((row) => row.id === id);
@@ -12343,10 +12345,6 @@ function Overview({
           <p>{quickAccess ? "Attendance, points, and development." : "Your work areas and actions."}</p>
         </div>
         <div className="hero-actions home-hero-actions">
-          {canOpenInSession(user, PRESENCE_ITEM, method) && (
-            <HomePresenceIndicator people={presence} ready={presenceReady}
-              onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
-          )}
           <span className="access-pill"><ShieldCheck size={16} /> {quickAccess ? "PIN access" : user?.access || user?.role}</span>
         </div>
       </section>

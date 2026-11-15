@@ -255,19 +255,27 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .hero-actions { display: flex; gap: 8px; flex-wrap: wrap; flex: none; }
 .home-hero-actions { align-items: center; max-width: 100%; }
 .home-presence-lights { display: block; width: 196px; height: 196px; flex: none; overflow: visible; }
-.home-presence-lights.is-compact { width: 46px; height: 46px; }
-.home-presence-light { fill: #c3c8d2; }
-.home-presence-light.is-office { fill: var(--mode-office, #159b56); }
-.home-presence-light.is-online { fill: var(--mode-online, #2563eb); }
+.home-presence-lights.is-compact { width: 40px; height: 40px; }
+.home-presence-light { fill: #687181; }
+.home-presence-light.is-office { fill: #087d42; }
+.home-presence-light.is-online { fill: #1d4ed8; }
 .home-presence-light.is-site { fill: #17181b; }
 .home-presence-light.is-other { fill: none; stroke: var(--muted); stroke-width: 1.5; }
-.unified-app.dark .home-presence-light.is-site { stroke: #d8dbe1; stroke-width: 1; }
+.unified-app.dark .home-presence-light { fill: #94a3b8; }
+.unified-app.dark .home-presence-light.is-office { fill: #34d399; }
+.unified-app.dark .home-presence-light.is-online { fill: #60a5fa; }
+.unified-app.dark .home-presence-light.is-site { fill: #17181b; stroke: #f1f5f9; stroke-width: 2; }
+.unified-app.dark .home-presence-light.is-other { fill: none; }
 .home-presence-total { fill: var(--ink); font-size: 25px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.home-presence-lights.is-compact .home-presence-total { font-size: 29px; font-weight: 800; }
 .home-presence-caption { fill: var(--muted); font-size: 9px; font-weight: 500; }
-.hero-actions > .home-presence-trigger { padding: 0; min-width: 48px; min-height: 48px; flex: 0 0 auto; }
-.home-presence-trigger:hover { background: var(--soft); }
+.top-presence-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.unified-app .top-presence-actions > button { display: inline-grid; place-items: center; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; flex: 0 0 44px; border: 1px solid color-mix(in srgb, var(--ink) 30%, var(--line)); border-radius: 12px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.unified-app .top-presence-actions > button:hover { border-color: var(--ink); background: var(--soft); }
+.unified-app.dark .top-presence-actions > button { border-color: #657084; background: #1b1f27; }
+.unified-app.dark .top-presence-actions > button:hover { border-color: #aab5c6; background: #232833; }
 .home-presence-trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.home-presence-loading { display: grid; place-items: center; width: 46px; height: 46px; color: var(--muted); }
+.home-presence-loading { display: grid; place-items: center; width: 40px; height: 40px; color: var(--ink); }
 .home-presence-dialog { width: min(510px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 18px; color: var(--ink); background: var(--panel); box-shadow: var(--shadow); }
 .home-presence-dialog::backdrop { background: rgba(0,0,0,.3); }
 .home-presence-dialog-content { padding: 22px; }
@@ -280,12 +288,16 @@ html:not([data-larsa-ready]) .unified-app { visibility: hidden; }
 .home-presence-legend > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .home-presence-legend dt { display: flex; align-items: center; gap: 8px; }
 .home-presence-legend dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 700; }
-.home-presence-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #c3c8d2; }
-.home-presence-swatch.is-office { background: var(--mode-office, #159b56); }
-.home-presence-swatch.is-online { background: var(--mode-online, #2563eb); }
+.home-presence-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #687181; }
+.home-presence-swatch.is-office { background: #087d42; }
+.home-presence-swatch.is-online { background: #1d4ed8; }
 .home-presence-swatch.is-site { background: #17181b; }
+.unified-app.dark .home-presence-swatch { background: #94a3b8; }
+.unified-app.dark .home-presence-swatch.is-office { background: #34d399; }
+.unified-app.dark .home-presence-swatch.is-online { background: #60a5fa; }
+.unified-app.dark .home-presence-swatch.is-site { background: #17181b; }
 .unified-app.dark .home-presence-swatch.is-site { box-shadow: 0 0 0 1px #d8dbe1; }
-.home-presence-swatch.is-other { background: transparent; border: 1px solid var(--muted); }
+.home-presence-swatch.is-other, .unified-app.dark .home-presence-swatch.is-other { background: transparent; border: 1px solid var(--muted); }
 .home-presence-footer { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
 .home-presence-footer > span { color: var(--muted); font-size: 11px; }
 .home-presence-footer button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 9px; color: var(--ink); font-size: 12px; font-weight: 650; }
