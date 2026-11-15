@@ -53,7 +53,7 @@
   function reportingWeekStartDay(){try{var raw=W.localStorage.getItem('larsaReportingWeekStartDay');if(raw===null)return 6;var n=Number(raw);return Number.isInteger(n)&&n>=0&&n<=6?n:6}catch(e){return 6}}
   function startOfWeek(key){var d=new Date(key+'T12:00:00Z'),day=d.getUTCDay(),first=reportingWeekStartDay();return shiftKey(key,-((day-first+7)%7))}
   function sourceSessions(){try{return typeof larsaSharedAttendanceSessions==='function'?(larsaSharedAttendanceSessions()||[]):[]}catch(e){return []}}
-  function users(rows){var seen={},out=[];try{((state&&state.users)||[]).filter(function(u){return u.enabled!==false}).forEach(function(u){var n=u.name||u.email||u.id;if(!seen[n]){seen[n]=1;out.push(n)}})}catch(e){};rows.forEach(function(s){var n=name(s);if(!seen[n]){seen[n]=1;out.push(n)}});return out.sort(function(a,b){return a.localeCompare(b)})}
+  function users(rows){var seen={},out=[];try{((state&&state.users)||[]).filter(function(u){return u.enabled!==false&&u.offboarded!==true&&u.recycled!==true&&u.pendingApproval!==true&&u.access!=='Client'}).forEach(function(u){var n=u.name||u.email||u.id;if(!seen[n]){seen[n]=1;out.push(n)}})}catch(e){};rows.forEach(function(s){var n=name(s);if(!seen[n]){seen[n]=1;out.push(n)}});return out.sort(function(a,b){return a.localeCompare(b)})}
   function bounds(st){var p=st.period||'week', t=today(), a=t,b=t;if(p==='today')return {a:t,b:t};if(p==='week'){a=startOfWeek(t);b=shiftKey(a,6)}else if(p==='month'){a=t.slice(0,7)+'-01';var d=new Date(a+'T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);b=shiftKey(d.toISOString().slice(0,10),-1)}else if(p==='custom'){a=st.from||t;b=st.to||a;if(a>b){var q=a;a=b;b=q}}return {a:a,b:b}}
   var periodCache=null;
   function sessionDay(s){return s.Date||dateKey(iso(s))}

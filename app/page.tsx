@@ -8255,7 +8255,7 @@ export default function Home() {
       const store = bridgeUsers ? null : parseStore("larsaStaffV8") as Record<string, unknown> | null;
       const users = bridgeUsers || (Array.isArray(store?.users) ? store.users as StaffUser[] : []);
       const actor = users.find(user => user.id === sessionUserRef.current?.id);
-      if (!actor || actor.enabled === false) return [];
+      if (!actor || actor.enabled === false || actor.offboarded === true || actor.recycled === true) return [];
       const companyScope = isAdmin(actor) || actor.permissionProfile?.scope === "company";
       const bridgeSessions = typeof clockSessionsRef !== "undefined" ? clockSessionsRef.current : null;
       const scopeKey = [
@@ -8274,9 +8274,15 @@ export default function Home() {
         return bridgeCache.rows;
       }
       const allowed = new Set(scopedUsers(actor, users.map(user => ({ ...user, enabled: true }))).map(user => user.id));
+      /* An admin may audit retained punches elsewhere, but the live team
+         timesheet must never invent a current employee from an orphan log. */
+      const currentStaffIds = new Set(users.filter(user => user.enabled !== false
+        && user.offboarded !== true && user.recycled !== true
+        && user.pendingApproval !== true && user.access !== "Client").map(user => user.id));
       const rows = new Map<string, Record<string, unknown>>();
       const sessions = bridgeSessions || buildClockSessions(store, users);
       sessions.forEach(session => {
+        if (!currentStaffIds.has(session.uid)) return;
         if (!companyScope && !allowed.has(session.uid)) return;
         const key = `${session.uid}|${session.clockIn}|${session.mode}`;
         const row = rows.get(key) || {
