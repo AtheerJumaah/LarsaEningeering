@@ -5272,16 +5272,16 @@ export default function Home() {
      when a generated route changed; manual Approval Flow overrides are marked
      in flowConfigMeta and are never replaced. */
   useEffect(() => {
-    if (!hydrated || !accessUsers.length) return;
+    if (!hydrated || !authoritativeStateReady || !accessUsers.length) return;
     const timer = window.setTimeout(() => {
       const store = parseStore("larsaStaffV8") as Record<string, unknown> | null;
       if (!store || !Array.isArray(store.users) || !ensureStoreApprovalFlows(store)) return;
       localStorage.setItem("larsaStaffV8", JSON.stringify(store));
-      pushSyncedKeyNow("larsaStaffV8");
+      void pushSyncedKeyNow("larsaStaffV8");
       setStorageTick((value) => value + 1);
     }, 0);
     return () => clearTimeout(timer);
-  }, [approvalFlowRevision, hydrated]);
+  }, [approvalFlowRevision, authoritativeStateReady, hydrated]);
 
   useEffect(() => {
     if (!hydrated || !accessUsers.length) return;

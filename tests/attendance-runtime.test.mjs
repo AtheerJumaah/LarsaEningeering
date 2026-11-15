@@ -120,6 +120,20 @@ test('shared-state saves serialize per key and preserve edits made during a slow
   assert.equal(JSON.parse(r.data.get('larsaStaffV8')).logs.length,2);cleanup();
 });
 
+test('a save before staff sync reports unconfirmed and leaves the local edit intact', async () => {
+  const s = server();
+  const initial = JSON.stringify({ users: [{ id: 'employee' }], logs: [{ id: 'unsent' }] });
+  const r = runtime('lib/supabase/sync.ts', s.client, { larsaStaffV8: initial });
+  const cleanup = r.api.initLarsaSync();
+  try {
+    await settle();
+    assert.equal(await r.api.pushSyncedKeyNow('larsaStaffV8'), false);
+    assert.equal(r.data.get('larsaStaffV8'), initial);
+  } finally {
+    cleanup();
+  }
+});
+
 test('opening the app does not upload cached historical punches as new live events', async()=>{
   const inserted=[];
   const client={from(){return {upsert:async rows=>{inserted.push(...rows);return {error:null}}}}};

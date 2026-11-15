@@ -897,6 +897,11 @@ export async function refreshCurrentViewNow(keys: readonly SyncedKey[]): Promise
 }
 export async function pushSyncedKeyNow(key: SyncedKey): Promise<boolean> {
   if (!pushNowHook) return false;
-  await pushNowHook(key);
-  return true;
+  try {
+    await pushNowHook(key);
+    return true;
+  } catch {
+    // The local edit remains available to the sync queue for a later retry.
+    return false;
+  }
 }
