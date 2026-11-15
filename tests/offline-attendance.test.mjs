@@ -3,13 +3,15 @@ import fs from "node:fs";
 import test from "node:test";
 
 const page = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+const sync = fs.readFileSync(new URL("../lib/supabase/sync.ts", import.meta.url), "utf8");
 
 test("attendance exposes an explicit connection state and browser online/offline handling", () => {
   assert.match(page, /type AttendanceConnection = "connecting" \| "online" \| "offline" \| "local"/);
   assert.match(page, /setAttendanceConnectionState\("offline"\)/);
   assert.match(page, /setAttendanceConnectionState\("connecting"\)/);
-  assert.match(page, /window\.addEventListener\("offline", onOffline\)/);
-  assert.match(page, /window\.addEventListener\("online", onOnline\)/);
+  assert.match(sync, /window\.addEventListener\("offline", onOffline\)/);
+  assert.match(sync, /window\.addEventListener\("online", onOnline\)/);
+  assert.match(sync, /const onOffline = \(\) => reportStatus\("offline"\)/);
   assert.match(page, /Online · Server synced/);
   assert.match(page, /Offline · View only/);
   assert.match(page, /Your saved attendance is still visible/);

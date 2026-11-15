@@ -468,7 +468,7 @@ test("the installed app replaces itself when a new version ships", () => {
   /* An update never interrupts a clock write or somebody typing. It waits and
      then performs one ordinary reload — no hard refresh and no recurring UI
      delay. */
-  assert.match(page, /if \(punchLock\.current \|\| editing\)/);
+  assert.match(page, /if \(punchLock\.current \|\| editing \|\| loginInFlightRef\.current \|\| verificationFlowRef\.current\)/);
   assert.match(page, /safeReloadTimer = window\.setTimeout\(reloadWhenIdle, 15_000\)/);
   // And every listener it adds is removed again.
   assert.match(page, /navigator\.serviceWorker\?\.removeEventListener\("controllerchange", onControllerChange\);/);

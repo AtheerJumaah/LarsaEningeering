@@ -9,8 +9,8 @@ test("shared company state restores sessions only after the authoritative roster
   assert.match(page, /authoritativeStateReady/);
   assert.match(page, /attendanceConnectionRef.current === "connecting"/);
   assert.match(page, /let users = readStaffUsers\(\)/);
-  assert.match(page, /const deadline = Date\.now\(\) \+ 7000/);
-  assert.match(page, /while \(!users\.length && Date\.now\(\) < deadline\)/);
+  assert.match(page, /window\.addEventListener\("larsa:staff-ready", finish\)/);
+  assert.match(page, /window\.setTimeout\(finish, 18000\)/);
   assert.doesNotMatch(page, /Connecting securely…/);
   assert.doesNotMatch(page, /while \(currentConnection\(\) !== "online"/);
   assert.match(page, /Syncing your workspace…/);
@@ -38,9 +38,8 @@ test("the performance store is included in shared server state", () => {
 });
 
 test("a missing server staff roster never promotes an arbitrary browser cache", () => {
-  assert.match(sync, /authoritative staff roster is missing on the server/);
-  assert.match(sync, /if \(key === "larsaStaffV8"\)/);
-  assert.match(sync, /originalSetItem\(key, "\{\}"\)/);
+  assert.match(sync, /if \(key === "larsaStaffV8" && !Array\.isArray\(remote\?\.users\)\)/);
+  assert.match(sync, /The server did not provide the staff directory/);
 });
 
 test("login is unblocked after the staff roster, without waiting for secondary stores", () => {
@@ -56,7 +55,7 @@ test("startup avoids downloading an unchanged roster blob", () => {
   assert.match(sync, /cachedHash === fingerprint\(baseline\)/);
   assert.match(sync, /select\("updated_at"\)/);
   assert.match(sync, /stamp-only startup check/);
-  assert.match(sync, /const \{ data: row, error: selectError \} = await supabase[\s\S]*select\("data, updated_at"\)/);
+  assert.match(sync, /const \{ data: row, error: selectError \} = await syncDeadline[\s\S]*select\("data, updated_at"\)/);
 });
 
 test("healthy attendance probes do not replay the expensive synced handler", () => {

@@ -404,7 +404,7 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
   const env = readFileSync(new URL("../.env.local.example", import.meta.url), "utf8");
   // With no env vars set, the client factory returns null rather than throwing,
   // so every caller can treat "not configured" as one falsy check.
-  assert.match(client, /cached = url && anonKey \? createClient\(url, anonKey\) : null;/);
+  assert.match(client, /cached = url && anonKey \? createClient\(url, anonKey, \{ global: \{ fetch: fetchWithAuthDeadline \} \}\) : null;/);
   // The guard split into two lines when the unconfigured branch gained a log.
   assert.match(sync, /if \(typeof window === "undefined"\) return \(\) => \{\};/);
   assert.match(sync, /if \(!supabaseConfigured\(\)\) \{/);

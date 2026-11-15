@@ -4,7 +4,7 @@
 // to /engines/timeclock.html kept serving the old broken file to everyone.
 // Bump whenever a calculation engine changes so an already-open browser
 // cannot keep serving an older accounting mirror from its service worker.
-const CACHE_NAME = "larsa-control-v83";
+const CACHE_NAME = "larsa-control-v84";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
@@ -50,6 +50,8 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // An installed app must get the release marker from the network.
+  if (url.pathname === "/larsa-release.json") return;
   // Never serve app code or React Server Component payloads from cache. A
   // cache-first chunk can combine the previous React tree with the current
   // HTML, which is exactly the old-timesheet/old-structure flash users saw
@@ -64,10 +66,12 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: "no-cache" })
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
+          }
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match("/"))),

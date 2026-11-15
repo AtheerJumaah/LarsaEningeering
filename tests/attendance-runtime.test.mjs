@@ -78,7 +78,7 @@ function server() {
     rpc: async()=>({data:new Date().toISOString(),error:null}),
     from() {
       let key;
-      const q = { select(){return q},eq(_field,value){key=value;return q},in(){return q},
+      const q = { select(){return q},eq(_field,value){key=value;return q},in(){return q},abortSignal(){return q},
         maybeSingle: async()=>failing ? {error:new Error('offline')} : {data:{data:rows[key]||{},updated_at:'2026-10-12T00:00:00Z'},error:null},
         then(resolve){return Promise.resolve(failing ? {error:new Error('offline')} : {data:Object.keys(rows).map(store_key=>({store_key,updated_at:'2026-10-12T00:00:00Z',data:rows[store_key]})),error:null}).then(resolve)},
       };return q;

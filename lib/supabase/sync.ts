@@ -141,10 +141,14 @@ function hasContent(value: unknown): boolean {
 /* Mobile Safari can leave a fetch or auth storage lock pending indefinitely
    after the app resumes. A failed startup must settle so the shell can offer
    recovery instead of displaying its syncing screen forever. */
-function startupDeadline<T>(request: PromiseLike<T>, ms = 12000): Promise<T> {
+function syncDeadline<T>(request: (signal: AbortSignal) => PromiseLike<T>, ms = 12000): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Staff sync timed out")), ms);
-    Promise.resolve(request).then(
+    const timer = setTimeout(() => {
+      reject(new Error("Workspace sync timed out"));
+      controller.abort();
+    }, ms);
+    Promise.resolve().then(() => request(controller.signal)).then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error); },
     );
@@ -215,16 +219,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       originalSetItem(hashKey(key), fingerprint(text));
     } catch { /* private mode / storage full */ }
   };
-  const forgetServerCopy = (key: SyncedKey) => {
-    try {
-      window.localStorage.removeItem(stampKey(key));
-      window.localStorage.removeItem(hashKey(key));
-    } catch { /* private mode / storage full */ }
-  };
-
   let ensureSessionInFlight: Promise<void> | null = null;
   async function ensureSessionOnce() {
-    const { data } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getSession();
+    if (error && error.name !== "AuthSessionMissingError") throw error;
     if (data.session?.expires_at && data.session.expires_at * 1000 < Date.now() + 30_000) {
       const { error } = await supabase.auth.refreshSession();
       if (error) throw error;
@@ -239,11 +237,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      callers cannot rotate the same refresh token or spam auth endpoints. */
   function ensureSession() {
     if (!ensureSessionInFlight) {
-      ensureSessionInFlight = startupDeadline(ensureSessionOnce()).finally(() => {
+      ensureSessionInFlight = ensureSessionOnce().finally(() => {
         ensureSessionInFlight = null;
       });
     }
-    return ensureSessionInFlight;
+    const request = ensureSessionInFlight;
+    return syncDeadline(() => request);
   }
 
   /* Publish one key through the app_state_put compare-and-swap RPC. The
@@ -402,7 +401,9 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
      sent. */
   const pushKey = createPushQueue(
     async (key: SyncedKey) => {
-      if (cancelled || syncWritesPaused) throw new Error("Sync is currently unavailable.");
+      if (cancelled || syncWritesPaused || (!bootstrapped && key === "larsaStaffV8")) {
+        throw new Error("Sync is currently unavailable.");
+      }
       await pushKeyOnce(key);
     },
     /* localStorage represents an absent store as null; Map#get uses undefined.
@@ -431,7 +432,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   methodOwner.setItem = patchedSetItem;
 
   async function bootstrap() {
-    reportStatus("connecting");
+    if (lastReportedStatus === null) reportStatus(navigator.onLine ? "connecting" : "offline");
     // Every browser that opens the app after this one already made changes
     // needs to actually see them, not just have them sitting in
     // localStorage unread — the initial render already happened, from
@@ -443,14 +444,13 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     try {
       await ensureSession();
       /* Fire-and-forget: the offset is a refinement, never a gate. */
-      sampleServerClock(supabase, originalSetItem).catch(() => {});
       /* Pull one store at a time through the same guarded merge path. The
          staff roster is the login/identity authority; secondary accounting,
          HR, and growth documents can be much larger and must never strand
          the sign-in form while a phone is on a slow connection. */
       const pullKey = async (key: SyncedKey) => {
         const baseline = localStorage.getItem(key);
-        if (key === "larsaStaffV8" && baseline && hasContent(readLocal(key))) {
+        if (key === "larsaStaffV8" && baseline) {
           let cachedStamp = "";
           let cachedHash = "";
           try {
@@ -461,10 +461,11 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              be skipped. Only a byte-for-byte copy of the last confirmed text
              may take this cheap stamp-only path. */
           if (cachedStamp && cachedHash && cachedHash === fingerprint(baseline)) {
-            const { data: stampRow, error: stampError } = await startupDeadline(supabase
+            const { data: stampRow, error: stampError } = await syncDeadline((signal) => supabase
               .from("app_state")
               .select("updated_at")
               .eq("store_key", key)
+              .abortSignal(signal)
               .maybeSingle());
             const serverStamp = stampRow?.updated_at ? String(stampRow.updated_at) : "";
             if (!stampError && serverStamp && serverStamp === cachedStamp) {
@@ -475,18 +476,21 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
             }
           }
         }
-        const { data: row, error: selectError } = await startupDeadline(supabase
+        const { data: row, error: selectError } = await syncDeadline((signal) => supabase
           .from("app_state")
           .select("data, updated_at")
           .eq("store_key", key)
+          .abortSignal(signal)
           .maybeSingle());
         if (selectError) {
           console.error(`[larsa-sync] select failed for "${key}":`, selectError);
           throw selectError;
         }
         if (cancelled) return;
-        if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));
         const remote = row?.data;
+        if (key === "larsaStaffV8" && !Array.isArray(remote?.users)) {
+          throw new Error("The server did not provide the staff directory");
+        }
         const local = readLocal(key);
         if (hasContent(remote)) {
           /* Keep a locally saved organization chart when the server still has
@@ -499,46 +503,34 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
           const bootstrapRemote = key === "larsaStaffV8"
             ? preserveOrgOnBootstrap(remote, local)
             : remote;
-          const text = JSON.stringify(bootstrapRemote);
+          const text = JSON.stringify(remote);
           const before = localStorage.getItem(key);
-          let nextText = text;
+          let nextText = bootstrapRemote === remote ? text : JSON.stringify(bootstrapRemote);
           if (before !== baseline && before) nextText = JSON.stringify(mergeStoreText(baseline, before, bootstrapRemote));
-          originalSetItem(key, nextText);
+          if (nextText !== before) originalSetItem(key, nextText);
+          if (row?.updated_at) lastSeenAt.set(key, String(row.updated_at));
           /* lastKnown must describe the actual server response, not the
              locally augmented bootstrap value, so the preserved chart is
              pushed back instead of being mistaken for an already-confirmed
              server snapshot. */
-          lastKnown.set(key, JSON.stringify(remote));
-          rememberServerCopy(key, row?.updated_at ? String(row.updated_at) : null, JSON.stringify(remote));
-          if (nextText !== JSON.stringify(remote)) schedulePush(key);
+          lastKnown.set(key, text);
+          rememberServerCopy(key, row?.updated_at ? String(row.updated_at) : null, text);
+          if (nextText !== text) schedulePush(key);
           if (nextText !== before) caughtUpKeys.push(key);
           console.log(`[larsa-sync] "${key}" pulled from Supabase (${text !== before ? "changed" : "unchanged"})`);
         } else if (hasContent(local)) {
-          /* The staff roster is the identity and attendance authority. Never
-             let an arbitrary browser recreate it when the server row is
-             missing: that is exactly how two devices can show different
-             employees, colours, and organisation details. A missing staff
-             row is a server/configuration fault, not permission to promote a
-             stale cache. Other first-run stores may still be seeded once. */
-          if (key === "larsaStaffV8") {
-            console.error("[larsa-sync] authoritative staff roster is missing on the server; refusing to promote browser cache");
-            originalSetItem(key, "{}");
-            lastKnown.set(key, "{}");
-            forgetServerCopy(key);
-            caughtUpKeys.push(key);
-          } else {
-            console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
-            await pushKey(key);
-          }
+          console.log(`[larsa-sync] "${key}" empty remotely — seeding from local data`);
+          await pushKey(key);
         } else {
           console.log(`[larsa-sync] "${key}" empty both locally and remotely — nothing to do`);
         }
       };
       await pullKey("larsaStaffV8");
-      if (cancelled) return;
+      if (cancelled) return false;
       bootstrapped = true;
       window.dispatchEvent(new Event("larsa:staff-ready"));
       reportStatus("synced");
+      sampleServerClock(supabase, originalSetItem).catch(() => {});
       const criticalCaughtUp = caughtUpKeys.splice(0, caughtUpKeys.length);
       console.log("[larsa-sync] staff roster catch-up complete; login is unblocked", criticalCaughtUp);
       criticalCaughtUp.forEach((key) => options.onRemoteChange?.(key));
@@ -578,10 +570,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     } catch (err) {
       console.error("[larsa-sync] bootstrap failed — retrying on focus, reconnect, or polling:", err);
       reportStatus("offline");
-      return;
+      return false;
     }
 
-    if (cleanupChannel) return;
+    if (cleanupChannel) return true;
     const channel = supabase
       .channel("larsa-app-state")
       .on(
@@ -599,11 +591,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
              had no staff at all. Content-free data therefore means
              "something changed, contents unknown": re-fetch the
              authoritative row instead of applying the nothing we were sent. */
-          if (!hasContent(row.data)) {
+          if (!hasContent(row.data)
+            || (row.store_key === "larsaStaffV8" && !Array.isArray((row.data as { users?: unknown })?.users))) {
             refreshFromServer("realtime payload had no data", [row.store_key as SyncedKey]);
             return;
           }
-          applyRemote(row.store_key as SyncedKey, row.data, row.updated_at ? String(row.updated_at) : null);
+          try {
+            applyRemote(row.store_key as SyncedKey, row.data, row.updated_at ? String(row.updated_at) : null);
+          } catch (error) {
+            console.warn("[larsa-sync] could not apply realtime update:", error);
+          }
         },
       )
       .subscribe((status, err) => {
@@ -622,6 +619,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
       });
 
     cleanupChannel = () => { supabase.removeChannel(channel); };
+    return true;
   }
 
   /* Apply a copy of the shared row that arrived from the server — via
@@ -667,12 +665,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
        the base for the next merge and the echo check. Setting it to the
        merged text instead would make the push below look like a no-op and
        the merge would never leave this device. */
+    if (nextText !== localText) originalSetItem(key, nextText);
     lastKnown.set(key, text);
     if (remoteUpdatedAt) {
       lastSeenAt.set(key, remoteUpdatedAt);
       rememberServerCopy(key, remoteUpdatedAt, text);
     }
-    originalSetItem(key, nextText);
     console.log(`[larsa-sync] remote state applied for "${key}"`);
     options.onRemoteChange?.(key);
     /* If the merge produced something the server has not got, publish it so
@@ -698,6 +696,12 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   async function refreshFromServer(reason: string, requestedKeys: readonly SyncedKey[] = SYNCED_KEYS) {
     if (!syncSessionActive && (reason === "periodic revalidate" || reason === "attendance periodic revalidate")) return false;
     if (cancelled) return false;
+    if (!bootstrapped) {
+      if (!bootstrapInFlight) {
+        bootstrapInFlight = bootstrap().finally(() => { bootstrapInFlight = null; });
+      }
+      return bootstrapInFlight;
+    }
     const keys = requestedKeys.filter((key): key is SyncedKey =>
       (SYNCED_KEYS as readonly string[]).includes(key),
     );
@@ -705,13 +709,16 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     if (keys.some((key) => refreshingKeys.has(key))) return false;
     keys.forEach((key) => refreshingKeys.add(key));
     try {
-      if (!bootstrapped) { await bootstrap(); return true; }
       await ensureSession();
-      const { data: stamps, error: stampError } = await supabase
+      const { data: stamps, error: stampError } = await syncDeadline((signal) => supabase
         .from("app_state")
         .select("store_key, updated_at")
-        .in("store_key", keys as readonly string[]);
+        .in("store_key", keys as readonly string[])
+        .abortSignal(signal));
       if (stampError || !Array.isArray(stamps)) throw stampError || new Error("Invalid sync response");
+      if (keys.includes("larsaStaffV8") && !stamps.some((row) => row.store_key === "larsaStaffV8" && row.updated_at)) {
+        throw new Error("The server did not provide the staff directory");
+      }
       const stale = stamps
         .map((row) => ({
           key: String(row.store_key || "") as SyncedKey,
@@ -732,12 +739,17 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
         }
         return true;
       }
-      const { data: rows, error } = await supabase
+      const { data: rows, error } = await syncDeadline((signal) => supabase
         .from("app_state")
         .select("store_key, data, updated_at")
-        .in("store_key", stale.map(({ key }) => key));
+        .in("store_key", stale.map(({ key }) => key))
+        .abortSignal(signal));
       if (error || !Array.isArray(rows)) throw error || new Error("Invalid sync response");
       if (cancelled) return false;
+      if (stale.some(({ key }) => key === "larsaStaffV8")
+        && !rows.some((row) => row.store_key === "larsaStaffV8" && Array.isArray(row.data?.users))) {
+        throw new Error("The server did not provide the staff directory");
+      }
       let appliedRows = 0;
       rows.forEach((row) => {
         const key = String(row.store_key || "") as SyncedKey;
@@ -772,6 +784,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
   let cleanupChannel: (() => void) | null = null;
   let hadChannelDrop = false;
   let bootstrapped = false;
+  let bootstrapInFlight: Promise<boolean> | null = null;
   void refreshFromServer("startup");
   /* Clock skew drifts (and phones change it); re-measure every ten minutes. */
   const clockTimer = setInterval(() => { sampleServerClock(supabase, originalSetItem).catch(() => {}); }, 10 * 60 * 1000);
@@ -794,7 +807,9 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     if (!document.hidden) refreshFromServer("periodic revalidate", NON_ATTENDANCE_KEYS);
   }, 15_000);
   const attendanceRevalidateTimer = setInterval(() => {
-    if (!document.hidden) refreshFromServer("attendance periodic revalidate", ["larsaStaffV8"]);
+    if (!document.hidden) {
+      void refreshFromServer(bootstrapped ? "attendance periodic revalidate" : "startup retry", ["larsaStaffV8"]);
+    }
   }, 5_000);
 
   /* The app must revalidate its real state the moment it is looked at again
@@ -809,8 +824,10 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     void refreshFromServer("network back", ["larsaStaffV8"])
       .then(() => refreshFromServer("network back (other stores)", NON_ATTENDANCE_KEYS));
   };
+  const onOffline = () => reportStatus("offline");
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
   window.addEventListener("focus", onVisible);
   /* Writes made by the engine iframes land in the same localStorage but do
      NOT pass through this window's patched setItem — same origin, different
@@ -858,6 +875,7 @@ export function initLarsaSync(options: SyncOptions = {}): () => void {
     clearInterval(attendanceRevalidateTimer);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
+    window.removeEventListener("offline", onOffline);
     window.removeEventListener("focus", onVisible);
     window.removeEventListener("storage", onStorageWrite);
     pushNowHook = null;

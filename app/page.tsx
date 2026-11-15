@@ -4761,20 +4761,6 @@ export default function Home() {
     attendanceConnectionRef.current = next;
     setAttendanceConnection(next);
   }, []);
-  useEffect(() => {
-    if (!supabaseConfigured()) {
-      setAttendanceConnectionState("local");
-      return;
-    }
-    const onOffline = () => setAttendanceConnectionState("offline");
-    const onOnline = () => setAttendanceConnectionState("connecting");
-    window.addEventListener("offline", onOffline);
-    window.addEventListener("online", onOnline);
-    return () => {
-      window.removeEventListener("offline", onOffline);
-      window.removeEventListener("online", onOnline);
-    };
-  }, [setAttendanceConnectionState]);
   /* When each person was last told "that press contradicts the record", per
      direction. A second press of the same direction inside two minutes is
      honoured against the staff document instead — see punchClock. Kept in a
@@ -5123,6 +5109,7 @@ export default function Home() {
         const alreadyHealthy = attendanceConnectionRef.current === "online"
           && authoritativeStateReadyRef.current;
         setAttendanceConnectionState("online");
+        if (!authoritativeStateReadyRef.current) setStorageTick((value) => value + 1);
         setAuthoritativeState(true);
         if (alreadyHealthy) return;
         /* The sync bootstrap has just established/reused the Supabase session.
@@ -7065,13 +7052,13 @@ export default function Home() {
      restored session. Do not let an offboarded/disabled employee remain
      active just because an old browser session was cached overnight. */
   useEffect(() => {
-    if (!hydrated || !sessionUser?.id || previewOwner || !accessUsers.length) return;
-    const current = accessUsers.find((row) => row.id === sessionUser.id);
+    if (!hydrated || !authoritativeStateReady || !sessionUser?.id || previewOwner) return;
+    const current = readStaffUsers().find((row) => row.id === sessionUser.id);
     if (!current || current.enabled === false || current.offboarded) {
       signOut();
       setLoginError("This account is no longer active. Please contact an administrator.");
     }
-  }, [hydrated, accessUsers, sessionUser?.id, previewOwner, signOut]);
+  }, [hydrated, authoritativeStateReady, accessUsers, readStaffUsers, sessionUser?.id, previewOwner, signOut]);
 
   /* A kept browser session ends with the same verification window as a fresh
      sign-in. When it expires, the next screen is the normal email + code flow.
@@ -7400,7 +7387,7 @@ export default function Home() {
       reloading = true;
       const reloadWhenIdle = () => {
         const editing = document.activeElement?.matches("input, textarea, [contenteditable=true]");
-        if (punchLock.current || editing) {
+        if (punchLock.current || editing || loginInFlightRef.current || verificationFlowRef.current) {
           safeReloadTimer = window.setTimeout(reloadWhenIdle, 15_000); return;
         }
         window.location.reload();
@@ -11372,10 +11359,7 @@ export default function Home() {
                 : "Loading your current account and attendance from the server."}</p>
               {syncUnavailable && (
                 <div className="auth-actions">
-                  <button type="button" className="primary" onClick={() => {
-                    setAttendanceConnectionState("connecting");
-                    refreshSharedStateNow();
-                  }}>Try again</button>
+                  <button type="button" className="primary" onClick={refreshSharedStateNow}>Try again</button>
                   <button type="button" className="btn" onClick={signOut}>Sign out</button>
                 </div>
               )}
