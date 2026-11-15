@@ -11600,7 +11600,7 @@ export default function Home() {
               >
                 {refreshStatus === "done" ? <CheckCircle2 size={17} /> : refreshStatus === "error" ? <AlertTriangle size={17} /> : <RotateCcw size={17} />}
               </button>
-              {active.id === "overview" && canOpenInSession(sessionUser, PRESENCE_ITEM, sessionMethod) && (
+              {canOpenInSession(sessionUser, PRESENCE_ITEM, sessionMethod) && (
                 <HomePresenceIndicator people={presenceRows} ready={staffStore !== null}
                   onViewEmployees={() => choose(PRESENCE_ITEM, channelForItem(PRESENCE_ITEM))} />
               )}

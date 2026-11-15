@@ -2765,6 +2765,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .page-heading p { display: -webkit-box; }
 }
 
+@media (max-width: 382px) {
+  .top-left:has(:is(.top-back, .top-home)):has(.home-presence-trigger) { flex-wrap: wrap; }
+  .top-left:has(:is(.top-back, .top-home)):has(.home-presence-trigger) > .page-heading { flex-basis: 100%; }
+}
+
 /* landscape phones and short windows */
 @media (max-height: 520px) and (orientation: landscape) {
   .clock-face { padding: 14px; gap: 10px; }
