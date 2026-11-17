@@ -4748,6 +4748,19 @@ export default function Home() {
      revalidate in the background. */
   const [authoritativeStateReady, setAuthoritativeStateReady] = useState(!supabaseConfigured());
   const authoritativeStateReadyRef = useRef(!supabaseConfigured());
+  const [workspaceSyncExpired, setWorkspaceSyncExpired] = useState(false);
+  const [workspaceSyncAttempt, setWorkspaceSyncAttempt] = useState(0);
+  useEffect(() => {
+    if (!hydrated || !sessionUser?.id || authoritativeStateReady || !supabaseConfigured()) {
+      setWorkspaceSyncExpired(false);
+      return;
+    }
+    // The sync transport has its own deadline, but a startup exception or a
+    // suspended mobile request can prevent its status callback altogether.
+    // Keep the signed-in screen recoverable independently of that callback.
+    const timer = window.setTimeout(() => setWorkspaceSyncExpired(true), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, sessionUser?.id, authoritativeStateReady, workspaceSyncAttempt]);
   const setAuthoritativeState = useCallback((ready: boolean) => {
     authoritativeStateReadyRef.current = ready;
     setAuthoritativeStateReady(ready);
@@ -4994,7 +5007,8 @@ export default function Home() {
         return nextText;
       }
     };
-    const cleanup = initLarsaSync({
+    let cleanup = () => {};
+    try { cleanup = initLarsaSync({
       onRemoteChange: (key) => {
         /* Refresh the affected engine IN PLACE instead of reloading its
            iframe. The old blanket iframe reload blanked all three
@@ -5174,7 +5188,10 @@ export default function Home() {
         if (idle) idle(() => window.setTimeout(startRecoveryWhenQuiet, 1500), { timeout: 10_000 });
         else window.setTimeout(startRecoveryWhenQuiet, 1500);
       },
-    });
+    }); } catch (error) {
+      console.error("[larsa-sync] startup failed:", error);
+      setAttendanceConnectionState("offline");
+    }
     /* Every staff-blob write also appends new clock events to the durable
        attendance ledger, and every account in it to the durable account
        ledger — both append-only and database-enforced. Installed AFTER
@@ -5207,7 +5224,7 @@ export default function Home() {
       storageRefreshTimer.current = null;
       delete (window as Window & { __larsaEngineRebase?: unknown }).__larsaEngineRebase;
     };
-  }, [hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState]);
+  }, [hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState, workspaceSyncAttempt]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -11367,7 +11384,7 @@ export default function Home() {
   // Supabase rather than from the shared, everyone-signed-in-can-read
   // localStorage sync used by the rest of the app.
   if (!viewerSession && sessionUser && supabaseConfigured() && !authoritativeStateReady) {
-    const syncUnavailable = attendanceConnection === "offline"
+    const syncUnavailable = workspaceSyncExpired || attendanceConnection === "offline"
       || (typeof navigator !== "undefined" && !navigator.onLine);
     return (
       <div className={dark ? "unified-app dark" : "unified-app"}>
@@ -11385,7 +11402,11 @@ export default function Home() {
                 : "Loading your current account and attendance from the server."}</p>
               {syncUnavailable && (
                 <div className="auth-actions">
-                  <button type="button" className="primary" onClick={refreshSharedStateNow}>Try again</button>
+                  <button type="button" className="primary" onClick={() => {
+                    setWorkspaceSyncExpired(false);
+                    setAttendanceConnectionState("connecting");
+                    setWorkspaceSyncAttempt((attempt) => attempt + 1);
+                  }}>Try again</button>
                   <button type="button" className="btn" onClick={signOut}>Sign out</button>
                 </div>
               )}
