@@ -128,5 +128,5 @@ test("native correction and attendance status display stay on the canonical poli
   assert.match(page, /attendanceWallTimeUtc\(draft\.date, draft\.from, ATTENDANCE_TIME_ZONE\)/);
   assert.match(page, /timeZone: ATTENDANCE_TIME_ZONE/);
   assert.match(page, /function attendanceTime\(instant: string \| Date\)/);
-  assert.match(page, /attendanceTime\(openClock\.clockIn\)/);
+  assert.match(page, /attendanceTime\(startedAt\)/);
 });

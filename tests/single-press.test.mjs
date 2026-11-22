@@ -23,7 +23,7 @@ test("a retry reuses the pending event and does not lose the employee's note", (
   assert.match(punch, /if \(!quiet && queue\[queue\.length - 1\]\?\.status !== decided\)/);
   assert.match(punch, /client_event_id: `p\$\{user\.id\}\$\{Date\.now\(\)\}/);
   assert.match(punch, /note: note\.trim\(\) \|\| null,/);
-  assert.match(punch, /Clock action recorded; confirming with the server\./);
+  assert.match(punch, /Saved on this device\. Waiting for server confirmation\./);
 });
 
 test("the clock button explains a slow confirmation instead of showing a frozen Saving label", () => {
@@ -31,8 +31,8 @@ test("the clock button explains a slow confirmation instead of showing a frozen 
   // immediately; server confirmation continues in the background and never
   // blocks the renderer behind a slow RPC/auth refresh.
   assert.match(page, /punching \? "Saving locally…"/);
-  assert.match(page, /Clock action saved locally; confirming in the background/);
-  assert.match(page, /saved locally and will retry automatically/);
+  assert.match(page, /Action saved on this device/);
+  assert.match(page, /saved locally; retrying automatically/);
   assert.doesNotMatch(page, /Confirming Clock (?:In|Out)…/);
 });
 

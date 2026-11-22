@@ -69,7 +69,8 @@ test("clock-in/out is gated until sync is confirmed, and the iframe uses the sam
 
 test("an open shift highlights the authoritative work mode on every device", () => {
   assert.match(page, /import \{ resolveClockDisplay \} from "\.\.\/lib\/attendance-display\.mjs";/);
-  assert.match(page, /const displayClock = resolveClockDisplay\(\{ open, latest: latestPunch, pending: pendingPunch \}\);/);
+  assert.match(page, /const latest = serverClock \? serverClock\.punch : latestPunch;/);
+  assert.match(page, /resolveClockDisplay\(\{ open: serverClock \? null : summary\.openClock, latest, pending: pendingPunch \}\)/);
   assert.match(page, /const actionMode = displayClock\.mode \|\| mode;/);
   assert.match(page, /const displayMode = clockedIn \? actionMode : mode;/);
   const modes = page.slice(page.indexOf('<div className="clock-modes"'), page.indexOf('</div>', page.indexOf('<div className="clock-modes"')));

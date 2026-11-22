@@ -9,6 +9,7 @@ import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, to
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS, pairPunchSessions, preservesPunchPairing, attendanceBreakSpans } from "../lib/attendance.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
+import { useClockRecord, type ClockRecord } from "../lib/use-clock-record";
 import { buildPresenceRoster, scheduledPresenceUsers, type PresenceEntry, type PresenceTone } from "../lib/presence.mjs";
 import { HomePresenceIndicator } from "./HomePresenceIndicator";
 import { ATTENDANCE_TIME_ZONE, attendanceDateKey, attendanceDateOffset, attendanceDateTimeInput, attendanceWallDateTimeUtc, attendanceWallTimeUtc, attendanceWeekKey, attendanceWeekdayIndex, attendanceReportingWeekStart, attendanceReportingWeekSessions, splitAttendanceInterval } from "../lib/attendance-timezone.mjs";
@@ -2607,6 +2608,7 @@ function buildHomeSummary(
   users: StaffUser[],
   projectCount = 0,
   reportingWeekStartDay = 6,
+  clockRecord?: ClockRecord | null,
 ): HomeSummary {
   const empty: HomeSummary = {
     reminders: [], openClock: null, weekApproved: 0, weekSubmitted: 0,
@@ -2623,23 +2625,33 @@ function buildHomeSummary(
   const schedule = (store?.schedule as Record<string, Record<string, { start?: string; end?: string; name?: string }[]>> | undefined)?.[viewer.id];
   const todayEntries = Array.isArray(schedule?.[todayName]) ? schedule![todayName] : [];
   const shiftToday = shiftLabel(todayEntries);
-  if (todayEntries.length) {
+  const serverPunch = clockRecord?.punch;
+  const startedAt = clockRecord ? (serverPunch?.status === "In" ? serverPunch.time : null) : openClock?.clockIn;
+  const missingClockOut = clockRecord ? Boolean(startedAt && serverNowMs() - Date.parse(startedAt) >= OPEN_SESSION_STALE_HOURS * 3_600_000)
+    : sessions.some(session => session.uid === viewer.id && session.open && session.stale);
+  if (clockRecord && clockRecord.state !== "confirmed") {
+    reminders.push({ id: "shift-status", group: "Today", title: "Clock status unconfirmed",
+      detail: "Open Clock In / Out to check your attendance.", meta: todayName, tone: "open", itemId: "quick-clock" });
+  } else if (missingClockOut) {
+    reminders.push({ id: "shift-missing-out", group: "Today", title: "Missing clock-out",
+      detail: "Your last clock-in has no matching clock-out.", meta: todayName, tone: "due", itemId: "quick-clock" });
+  } else if (todayEntries.length) {
     reminders.push({
       id: "shift-today",
       group: "Today",
       title: `${todayName} shift`,
       detail: shiftToday,
-      meta: openClock ? "You are clocked in" : "Not clocked in yet",
-      tone: openClock ? "done" : "due",
+      meta: startedAt ? "You are clocked in" : "Not clocked in yet",
+      tone: startedAt ? "done" : "due",
       itemId: "quick-clock",
     });
-  } else if (openClock) {
+  } else if (startedAt) {
     reminders.push({
       id: "shift-open",
       group: "Today",
       title: "Clocked in",
-      detail: `${openClock.mode} · started ${attendanceTime(openClock.clockIn)}`,
-      meta: `${formatHours(openClock.hours)} so far`,
+      detail: `${serverPunch?.type || openClock?.mode || "Office"} · started ${attendanceTime(startedAt)}`,
+      meta: openClock && Date.parse(openClock.clockIn) === Date.parse(startedAt) ? `${formatHours(openClock.hours)} so far` : todayName,
       tone: "done",
       itemId: "quick-clock",
     });
@@ -4765,6 +4777,10 @@ export default function Home() {
     authoritativeStateReadyRef.current = ready;
     setAuthoritativeStateReady(ready);
   }, []);
+  const showOwnClock = active.native === "quickClock" || active.native === "overview";
+  const { record: clockRecord, refresh: refreshClockRecord } = useClockRecord(
+    hydrated && showOwnClock ? sessionUser?.id : undefined, attendanceConnection === "online",
+  );
   const setAttendanceConnectionState = useCallback((next: AttendanceConnection) => {
     attendanceConnectionRef.current = next;
     setAttendanceConnection(next);
@@ -7807,7 +7823,12 @@ export default function Home() {
         keys.push("larsaStaffGrowthV1");
       }
       if (current.native === "data") keys.push(...SYNCED_KEYS.filter((key) => !keys.includes(key)));
-      const updated = await refreshCurrentViewNow(keys);
+      const verifyClock = (current.native === "quickClock" || current.native === "overview")
+        && attendanceConnectionRef.current === "online";
+      const [updated, clockUpdated] = await Promise.all([
+        refreshCurrentViewNow(keys), verifyClock ? refreshClockRecord() : Promise.resolve(true),
+      ]);
+      if (!clockUpdated) throw new Error("Clock refresh unavailable");
       if (!updated) throw new Error("Refresh unavailable");
       if (current.engine === "accounting") {
         const frame = accountingRef.current?.contentWindow;
@@ -7835,7 +7856,7 @@ export default function Home() {
         setRefreshStatus("idle");
       }, 1800);
     }
-  }, [notify, queueStorageRefresh, refreshStaffEngine]);
+  }, [notify, queueStorageRefresh, refreshStaffEngine, refreshClockRecord]);
 
   useEffect(() => () => {
     if (refreshFeedbackTimer.current !== null) window.clearTimeout(refreshFeedbackTimer.current);
@@ -8164,7 +8185,7 @@ export default function Home() {
       }
       if (result.outcome === "unavailable" || !result.status || !result.at) {
         repaintAttendance();
-        if (!quiet) notify("Clock action recorded; confirming with the server. No extra click is needed.");
+        if (!quiet) notify("Saved on this device. Waiting for server confirmation.");
         return false;
       }
       lastOutcome = result.outcome;
@@ -8210,6 +8231,9 @@ export default function Home() {
         /* The database commit must not be reported as a failed punch because
            this browser could not update its small paint-ahead overlay. */
         localRefreshFailed = true;
+      }
+      if ((result.status === "In" || result.status === "Out") && typeof window !== "undefined" && typeof CustomEvent === "function") {
+        window.dispatchEvent(new CustomEvent("larsa:attendance-realtime", { detail: { events: [{ uid: user.id }] } }));
       }
       try { refreshStaffEngine(); }
       catch { localRefreshFailed = true; }
@@ -8348,12 +8372,17 @@ export default function Home() {
         break;
       }
     };
+    const onVisible = () => { if (!document.hidden) retryPending(); };
     retryPending();
     const timer = window.setInterval(retryPending, 15_000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
     window.addEventListener("online", retryPending);
     window.addEventListener("focus", retryPending);
     return () => {
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
       window.removeEventListener("online", retryPending);
       window.removeEventListener("focus", retryPending);
     };
@@ -11237,9 +11266,10 @@ export default function Home() {
     () => buildHomeSummary(
       sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers,
       visibleProjectIds(sessionUser, accountingSnapshot.projects).size,
-      reportingWeekStartDay,
+      reportingWeekStartDay, clockRecord ?? (showOwnClock && sessionUser && attendanceConnection !== "local"
+        ? { uid: sessionUser.id, state: "checking", punch: null } : null),
     ),
-    [sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers, accountingSnapshot, reportingWeekStartDay],
+    [sessionUser, staffStore, growthStore, pointsRows, clockSessions, accessUsers, accountingSnapshot, reportingWeekStartDay, clockRecord, showOwnClock, attendanceConnection],
   );
   const homeGroup = GROUPS.find((group) => group.label === "Home")!;
   /* The same question the Engineering Management screen asks itself before it
@@ -11781,6 +11811,7 @@ export default function Home() {
               summary={homeSummary}
               punch={punchClockGuarded}
               clockReady={clockConfirmed}
+              clockRecord={clockRecord}
               connection={attendanceConnection}
               punchBreak={punchBreakGuarded}
               submitCorrection={submitCorrection}
@@ -19894,9 +19925,10 @@ function WeekSchedule({
 
 function QuickClock({
   user, sessions, summary, punch, go, method, week, development, store,
-  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, confirmLongSession, resetSession, clockReady, connection, notify,
+  punchBreak: punchBreakGuarded, submitCorrection, users, trimSession, confirmLongSession, resetSession, clockReady, connection, notify, clockRecord,
 }: {
   clockReady: boolean;
+  clockRecord: ClockRecord | null;
   connection: AttendanceConnection;
   user: StaffUser | null;
   sessions: ClockSession[];
@@ -20156,15 +20188,22 @@ function QuickClock({
   const monthStart = `${todayKeyForSummary.slice(0, 7)}-01`;
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(todayKeyForSummary);
-  const open = summary.openClock;
   const pendingActions: AttendancePunchInput[] = user ? ((readAttendanceQueue(attendancePunchQueueKey(user.id)) as AttendancePunchInput[] | null) || []) : [];
   const pending = Array.isArray(pendingActions) ? pendingActions.filter(event => event.uid === user?.id) : [];
   const pendingPunch = [...pending].reverse().find(event => event.status === "In" || event.status === "Out");
   const latestPunch = logs.filter(log => log.uid === user?.id && (log.status === "In" || log.status === "Out") && Number.isFinite(Date.parse(log.time || "")))
     .sort((a, b) => Date.parse(b.time || "") - Date.parse(a.time || "") || Number(b.status === "In") - Number(a.status === "In"))[0];
-  const displayClock = resolveClockDisplay({ open, latest: latestPunch, pending: pendingPunch });
+  const serverClock = clockRecord?.state === "confirmed" ? clockRecord : null;
+  const checkingClock = connection !== "local" && !serverClock;
+  const latest = serverClock ? serverClock.punch : latestPunch;
+  const displayClock = resolveClockDisplay({ open: serverClock ? null : summary.openClock, latest, pending: pendingPunch });
   const clockedIn = displayClock.status === "In";
   const pendingStatus = displayClock.pendingIsNewer ? pendingPunch?.status : undefined;
+  const clockIn = latest?.time || (!serverClock ? summary.openClock?.clockIn : undefined);
+  const open = clockedIn && !checkingClock && !pendingStatus && clockIn
+    && serverNowMs() - Date.parse(clockIn) < OPEN_SESSION_STALE_HOURS * 3_600_000
+    ? { clockIn, mode: displayClock.mode || "Office" } : null;
+  const missingOut = clockedIn && !pendingStatus && !open && !checkingClock;
   useEffect(() => {
     const pad = (value: number) => String(Math.floor(value)).padStart(2, "0");
     const paint = () => {
@@ -20198,9 +20237,11 @@ function QuickClock({
     ? Math.max(0, Math.floor((Date.now() - Date.parse(pendingPunch.occurred_at)) / 1000))
     : 0;
   const pendingNeedsRetry = pendingAgeSeconds >= 8;
-  const punchAvailable = connection === "online" || connection === "local";
+  const punchAvailable = (connection === "online" || connection === "local") && !checkingClock;
   const connectionLabel = connection === "online"
-    ? "Online · Server synced"
+    ? pending.length ? "Online · Waiting for confirmation"
+      : clockRecord?.state === "unavailable" ? "Clock status unavailable"
+      : checkingClock ? "Checking clock status…" : "Online · Server synced"
     : connection === "offline"
     ? "Offline · View only"
     : connection === "local"
@@ -20256,6 +20297,8 @@ function QuickClock({
           <h2>{user?.name?.split(/\s+/)[0] || "Welcome"}</h2>
           <p>{pendingStatus
             ? `Clock ${pendingStatus === "In" ? "in" : "out"} pending synchronization`
+            : checkingClock ? "Your current clock status has not been confirmed."
+            : missingOut ? "Your last clock-in has no matching clock-out. Check the time before closing this shift."
             : open
             ? `Clocked in since ${attendanceTime(open.clockIn)} · ${open.mode}`
             : "You are not clocked in. Choose where you are working, then tap the button."}</p>
@@ -20263,6 +20306,7 @@ function QuickClock({
         <span className={pendingStatus ? "access-pill" : open ? `access-pill live tone-${modeTone(open.mode)}` : "access-pill"}>
           <Radio size={16} /> {pendingStatus
             ? `${pendingNeedsRetry ? "Saved locally · retrying" : "Pending"} · Clock ${pendingStatus === "In" ? "in" : "out"}`
+            : checkingClock ? "Unconfirmed" : missingOut ? "Missing clock-out"
             : open ? `On the clock · ${open.mode}` : "Off the clock"}
         </span>
       </section>
@@ -20273,9 +20317,9 @@ function QuickClock({
           <span>{connectionLabel}</span>
           <small>{punchAvailable ? "Clock actions enabled" : "Your saved attendance is still visible"}</small>
         </div>
-        {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action recorded" : `${pending.length} actions recorded`}</b> · {pendingNeedsRetry ? "saved locally; retrying automatically. Your original time is protected." : "confirming with the server. Your original time is protected; no extra click is needed."}</p>}
+        {pending.length > 0 && <p className="clock-pending" role="status"><span className="clock-pending-orb" aria-hidden="true" /> <b>{pending.length === 1 ? "Action saved on this device" : `${pending.length} actions saved on this device`}</b> · {pendingNeedsRetry ? "saved locally; retrying automatically. Your original time is protected." : "confirming with the server. Your original time is protected; no extra click is needed."}</p>}
         {Array.isArray(reviewActions) && reviewActions.length > 0 && <p role="alert">{reviewActions.length} delayed action{reviewActions.length === 1 ? " needs" : "s need"} an attendance correction. Original times are retained on this device for review.</p>}
-        {clockedIn && !open && !pendingPunch && <p role="status">Your last recorded action is Clock In, but the shift is too old to count automatically. Clock Out or request a correction; no automatic punch has been created.</p>}
+        {missingOut && <p role="status">Last clock-in{clockIn ? ` · ${attendanceDateLabel(attendanceDateKey(clockIn))} · ${attendanceTime(clockIn)}` : ""}. If you finished earlier, use “Add hours or fix a missed clock” to enter the time you left.</p>}
         <div className="clock-readout compact">
           <small>{open && !pendingStatus ? "Time on shift" : "Current time"}</small>
            <b data-attendance-readout>{open && !pendingStatus ? timer : attendanceTime(now)}</b>
@@ -20327,18 +20371,15 @@ function QuickClock({
                make a clock action look frozen. */
             const operation = punch(clockedIn ? actionMode : mode, note, clockedIn ? "Out" : "In");
             setPunching(false);
-            if (pendingStatus === undefined) {
-              notify("Clock action saved locally; confirming in the background. No extra click is needed.");
-            }
             void operation.then((result) => {
               if (result) setNote("");
             }).catch(() => {
-              notify("Clock action is saved locally and will retry automatically. No extra click is needed.");
+              notify("Could not confirm this clock action. Check its status before trying again.");
             });
           }}
         >
           <Timer size={22} />
-          {punching ? "Saving locally…" : clockedIn ? "Clock Out" : "Clock In"}
+          {checkingClock ? "Awaiting clock status" : punching ? "Saving locally…" : clockedIn ? "Clock Out" : "Clock In"}
         </button>
         <div className="clock-totals">
           <div><small>Today worked</small><b>{formatHours(todayHours)}</b></div>
@@ -20423,7 +20464,7 @@ function QuickClock({
       {/* Breaks belong inside a shift, so the option only appears once the
           person is actually clocked in. An open break still shows its End
           button even if the shift somehow closed, so nobody gets stuck. */}
-      {onBreak ? (
+      {open && !checkingClock && onBreak && Date.parse(onBreak.time || "") >= Date.parse(open.clockIn) ? (
         <section className="break-banner on">
           <span>
             <Coffee size={16} /> On break since{" "}
@@ -20439,7 +20480,7 @@ function QuickClock({
               finally { setBreaking(false); }
             }}>{!punchAvailable ? (connection === "offline" ? "Offline" : "Checking…") : !clockReady ? "Checking…" : breaking ? "Confirming…" : "End Break"}</button>
         </section>
-      ) : open ? (
+      ) : open && !checkingClock ? (
         <section className="break-banner">
           <span><Coffee size={16} /> Taking lunch or a coffee break?</span>
           <button type="button"

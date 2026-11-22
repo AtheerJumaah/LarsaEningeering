@@ -410,12 +410,12 @@ test("Supabase sync is wired in but stays a no-op until it's configured", () => 
   assert.match(sync, /if \(typeof window === "undefined"\) return \(\) => \{\};/);
   assert.match(sync, /if \(!supabaseConfigured\(\)\) \{/);
   // The parent app only calls in after hydration, and always keeps the cleanup.
-  assert.match(page, /const cleanup = initLarsaSync\(\{/);
+  assert.match(page, /cleanup = initLarsaSync\(\{/);
   /* Every installed teardown is returned, in reverse order of installation:
      the account ledger and the attendance ledger both wrap
      localStorage.setItem on top of the sync layer's wrapper, so they have to
      come off before it does. */
-  assert.match(page, /window\.clearTimeout\(clockGateCeiling\);\s*\n\s*cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);[\s\S]{0,500}?\}, \[hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState\]\);/);
+  assert.match(page, /window\.clearTimeout\(clockGateCeiling\);\s*\n\s*cleanupAccounts\(\);\s*\n\s*cleanupLedger\(\);\s*\n\s*cleanup\(\);[\s\S]{0,500}?\}, \[hydrated, refs, markClockConfirmed, queueStorageRefresh, setAttendanceConnectionState, workspaceSyncAttempt\]\);/);
   // A remote change bumps the same storageTick the rest of the app already
   // reacts to, and refreshes the affected engine IN PLACE (state re-read +
   // render) instead of reloading its iframe — the blanket reload blanked
