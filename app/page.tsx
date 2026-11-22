@@ -4685,7 +4685,6 @@ export default function Home() {
   /* The Timesheet iframe is intentionally kept invisible until its new v33
      shell is ready. This state gives the user a small, honest wait cue while
      the legacy document remains completely out of view. */
-  const [timesheetLoading, setTimesheetLoading] = useState(false);
   const activeRef = useRef(active);
   const [sessionUser, setSessionUser] = useState<StaffUser | null>(null);
   const sessionUserRef = useRef<StaffUser | null>(null);
@@ -4915,6 +4914,7 @@ export default function Home() {
     return `${users}::${org}`;
   }, [accessUsers, staffStore]);
   const frameBootTimers = useRef<Partial<Record<Engine, number>>>({});
+  const staffNavigationRef = useRef<symbol | null>(null);
   /* A punch can settle several queued events in one pass. Keep the embedded
      engine repaint single-flight so four quick In/Out actions cannot enqueue
      four full iframe renders on the browser's main thread. */
@@ -7041,7 +7041,6 @@ export default function Home() {
     if (storageRefreshTimer.current !== null) window.clearTimeout(storageRefreshTimer.current);
     storageRefreshTimer.current = null;
     setLoadedEngines(new Set<Engine>());
-    setTimesheetLoading(false);
     setNavChannel("home");
     setLoginEmail("");
     setLoginPass("");
@@ -7176,45 +7175,40 @@ export default function Home() {
       try {
         ensureEmbeddedStyle(doc, item.engine);
         if (item.engine === "staff") {
+          // The packed module replaces its initial document. Only its load
+          // handler can finish initializing the current document and session.
+          if (frame.dataset.staffBooted !== "true") return;
           const openingTimesheet = item.section === "timesheet";
-          if (openingTimesheet) {
-            /* The staff engine remains mounted while the parent changes tabs.
-               Keep its previous page out of the first paint until the v33
-               Timesheet shell is actually present. This closes the gap where
-               the legacy page could flash before the iframe nav click ran. */
-            frame.dataset.timesheetRoute = item.id;
-            frame.dataset.timesheetReady = "false";
-            frame.style.visibility = "hidden";
-            setTimesheetLoading(true);
-            let revealAttempts = 0;
-            const revealTimesheet = () => {
-              if (activeRef.current.id !== item.id || frame.dataset.timesheetRoute !== item.id) return;
-              if (doc.querySelector("#content .v33-shell")) {
-                frame.dataset.timesheetReady = "true";
-                frame.style.visibility = "";
-                setTimesheetLoading(false);
-                return;
-              }
-              revealAttempts += 1;
-              if (revealAttempts < 240) window.setTimeout(revealTimesheet, 50);
-            };
-            revealTimesheet();
-          } else {
-            setTimesheetLoading(false);
-            frame.dataset.timesheetReady = "true";
-            delete frame.dataset.timesheetRoute;
-            frame.style.visibility = "";
-          }
-          const login = doc.getElementById("login");
-          if (login && !login.classList.contains("hidden")) {
+          if (!doc.querySelector("#app:not(.hidden)")) {
             applySessionToFrame("staff", user, method || "email");
           }
-          // The staff engine paints its nav (and the data-page hooks) shortly after
-          // load, so poll briefly instead of assuming the button already exists.
-          clickWhenReady(
-            () => doc.querySelector<HTMLButtonElement>(`.nav button[data-page="${item.section}"]`),
-            "This page is not available for your Timeclock account.",
-          );
+          const navigation = Symbol();
+          staffNavigationRef.current = navigation;
+          const target = `#app:not(.hidden) .nav button[data-page="${item.section}"]`;
+          let attempts = 0;
+          let clicked = false;
+          const openStaffPage = () => {
+            if (
+              staffNavigationRef.current !== navigation || activeRef.current.id !== item.id
+              || sessionUserRef.current?.id !== user.id || staffRef.current !== frame
+              || frame.contentDocument !== doc
+            ) return;
+            const button = doc.querySelector<HTMLButtonElement>(target);
+            if (button && !clicked) {
+              clicked = true;
+              if (!button.classList.contains("active")) button.click();
+            }
+            const content = doc.getElementById("content");
+            const ready = openingTimesheet ? content?.querySelector(".v33-shell") : content?.firstElementChild;
+            if (ready && doc.querySelector(`${target}.active`)) {
+              frame.dataset.staffStatus = "ready";
+            } else if (++attempts < 240) {
+              window.setTimeout(openStaffPage, 50);
+            } else {
+              frame.dataset.staffStatus = "failed";
+            }
+          };
+          openStaffPage();
           return;
         }
         if (item.engine === "hr") {
@@ -7242,24 +7236,39 @@ export default function Home() {
     (engine: Engine) => {
       const frame = refs[engine].current;
       if (!frame) return;
+      if (engine === "staff") {
+        delete frame.dataset.staffBooted;
+        delete frame.dataset.staffStatus;
+      }
       const previousTimer = frameBootTimers.current[engine];
       if (previousTimer !== undefined) {
         window.clearInterval(previousTimer);
         delete frameBootTimers.current[engine];
       }
       let tries = 0;
+      const stopBoot = () => {
+        clearInterval(timer);
+        delete frameBootTimers.current[engine];
+      };
       const timer = window.setInterval(() => {
+        // A rapid switch can replace the iframe while its module is loading.
+        if (refs[engine].current !== frame) {
+          stopBoot();
+          return;
+        }
         tries += 1;
         try {
           const doc = frame.contentDocument;
-          const ready =
-            engine === "accounting"
-              ? doc?.getElementById("view")
-              : doc?.getElementById("content");
+          // V31 is installed by the packed staff module's final script.
+          // The content element already exists while its scripts are loading.
+          const staffRuntime = frame.contentWindow as (Window & { V31?: { open?: () => void } }) | null;
+          const ready = engine === "accounting"
+            ? doc?.getElementById("view")
+            : doc?.getElementById("content") && (engine !== "staff" || typeof staffRuntime?.V31?.open === "function");
           if (!doc?.head || !doc.body || !ready) {
             if (tries > 160) {
-              clearInterval(timer);
-              delete frameBootTimers.current[engine];
+              if (engine === "staff") frame.dataset.staffStatus = "failed";
+              stopBoot();
             }
             return;
           }
@@ -7275,14 +7284,14 @@ export default function Home() {
           const signedInUser = sessionUserRef.current;
           const signedInMethod = sessionMethodRef.current;
           if (signedInUser) applySessionToFrame(engine, signedInUser, signedInMethod || "email");
+          if (engine === "staff") frame.dataset.staffBooted = "true";
           if (signedInUser && activeRef.current.engine === engine) navigateInner(activeRef.current);
           setStorageTick((value) => value + 1);
-          clearInterval(timer);
-          delete frameBootTimers.current[engine];
+          stopBoot();
         } catch {
           if (tries > 160) {
-            clearInterval(timer);
-            delete frameBootTimers.current[engine];
+            if (engine === "staff") frame.dataset.staffStatus = "failed";
+            stopBoot();
           }
         }
       }, 200);
@@ -7314,14 +7323,6 @@ export default function Home() {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin === window.location.origin && event.data?.type === "larsa-signout") signOut();
-      if (event.origin === window.location.origin && event.data?.type === "larsa-timesheet-ready") {
-        const frame = staffRef.current;
-        if (frame && activeRef.current.id === "staff-timesheet") {
-          frame.dataset.timesheetReady = "true";
-          frame.style.visibility = "";
-          setTimesheetLoading(false);
-        }
-      }
     };
     addEventListener("message", onMessage);
     return () => removeEventListener("message", onMessage);
@@ -7511,22 +7512,10 @@ export default function Home() {
       const from = activeRef.current;
       setNavHistory((stack) => [...stack, from].slice(-30));
     }
-    if (item.engine === "staff" && item.section === "timesheet") {
+    if (item.engine === "staff" && item.id !== activeRef.current.id) {
+      staffNavigationRef.current = null;
       const frame = staffRef.current;
-      setTimesheetLoading(true);
-      if (frame) {
-        frame.dataset.timesheetRoute = item.id;
-        frame.dataset.timesheetReady = "false";
-        frame.style.visibility = "hidden";
-      }
-    } else if (item.engine === "staff") {
-      setTimesheetLoading(false);
-      const frame = staffRef.current;
-      if (frame) {
-        frame.dataset.timesheetReady = "true";
-        delete frame.dataset.timesheetRoute;
-        frame.style.visibility = "";
-      }
+      if (frame?.dataset.staffBooted === "true") delete frame.dataset.staffStatus;
     }
     if (item.engine !== "staff" && staffStoreDirtyRef.current) {
       staffStoreDirtyRef.current = false;
@@ -11968,7 +11957,7 @@ export default function Home() {
             <iframe
               key={engine}
               ref={refs[engine]}
-              className={`engine${active.engine === engine ? " active" : ""}${active.id === "staff-timesheet" && engine === "staff" ? " timesheet-route-pending" : ""}`}
+              className={`engine${active.engine === engine ? " active" : ""}${engine === "staff" ? " staff-engine" : ""}`}
               /* Normally the engine is fetched from /engines. The offline
                  single-file preview has no server to fetch from, so it supplies
                  the markup on window.__LARSA_ENGINE_HTML and the frame is fed
@@ -11983,14 +11972,19 @@ export default function Home() {
               allow="clipboard-read; clipboard-write; notifications"
             />
           ) : null)}
-          {active.id === "staff-timesheet" && timesheetLoading ? (
-            <div className="timesheet-loading" role="status" aria-live="polite">
-              <span className="timesheet-loading-mark" aria-hidden="true">
-                <span />
-                <span />
-                <span />
+          {active.engine === "staff" ? (
+            <div className="staff-engine-status" role="status">
+              <span className="staff-engine-opening">
+                <span className="staff-engine-loading-mark" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                Opening {active.label}
               </span>
-              <span>Opening Timesheet</span>
+              <span className="staff-engine-error">
+                Couldn’t open {active.label}. Return to Home and try again.
+              </span>
             </div>
           ) : null}
         </section>

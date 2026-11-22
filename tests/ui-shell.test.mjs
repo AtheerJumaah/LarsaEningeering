@@ -8,6 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import ts from "typescript";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const page = read("app/page.tsx");
@@ -376,15 +378,84 @@ test("legacy engines are mounted exclusively for the active route", () => {
   assert.doesNotMatch(page, /Prewarm the staff engine after the signed-in workspace has painted/);
 });
 
-test("Timesheet keeps the legacy iframe hidden and shows only a compact wait cue", () => {
-  assert.match(page, /const \[timesheetLoading, setTimesheetLoading\] = useState\(false\)/);
-  assert.match(page, /setTimesheetLoading\(true\)/);
-  assert.match(page, /setTimesheetLoading\(false\)/);
-  assert.match(page, /className="timesheet-loading"/);
-  assert.match(page, />Opening Timesheet<\/span>/);
-  assert.match(globals, /\.timesheet-loading \{/);
-  assert.match(globals, /@keyframes timesheet-wait/);
-  assert.match(globals, /\.engine\.timesheet-route-pending:not\(\[data-timesheet-ready="true"\]\) \{ visibility: hidden; \}/);
+test("staff pages start hidden and show a wait cue until their signed-in view is ready", () => {
+  assert.match(page, /className="staff-engine-status" role="status"/);
+  assert.match(page, /Opening \{active\.label\}/);
+  assert.match(page, /openingTimesheet \? content\?\.querySelector\("\.v33-shell"\)/);
+  assert.match(globals, /\.engine\.staff-engine:not\(\[data-staff-status="ready"\]\) \{ visibility: hidden; \}/);
+  assert.match(globals, /\.staff-engine\.active\[data-staff-status="ready"\] ~ \.staff-engine-status/);
+});
+
+test("the staff iframe reveals only the current signed-in page after a slow startup", () => {
+  const start = page.indexOf("  const navigateInner = useCallback(");
+  const end = page.indexOf("  const prepareFrame = useCallback(", start);
+  const timers = [];
+  const user = { id: "test-user" };
+  const requests = { id: "staff-approvals", engine: "staff", section: "approvals" };
+  const performance = { id: "staff-performance", engine: "staff", section: "performance" };
+  const timesheet = { id: "staff-timesheet", engine: "staff", section: "timesheet" };
+  const activeRef = { current: requests };
+  let signedIn = false;
+  let selected = "";
+  let hasContent = false;
+  let timesheetReady = false;
+  const clicks = [];
+  const doc = {
+    querySelector(selector) {
+      if (!signedIn) return null;
+      if (selector === "#app:not(.hidden)") return {};
+      const section = selector.match(/data-page="([^"]+)"/)[1];
+      if (selector.endsWith(".active")) return selected === section ? {} : null;
+      return {
+        classList: { contains: () => selected === section },
+        click() { clicks.push(section); selected = section; },
+      };
+    },
+    getElementById: () => ({
+      firstElementChild: hasContent ? {} : null,
+      querySelector: () => timesheetReady ? {} : null,
+    }),
+  };
+  const frame = { dataset: {}, contentDocument: doc, contentWindow: {} };
+  const staffRef = { current: frame };
+  const context = vm.createContext({
+    activeRef, staffRef, refs: { staff: staffRef }, staffNavigationRef: { current: null },
+    sessionUserRef: { current: user }, sessionMethodRef: { current: "email" },
+    useCallback: (callback) => callback, canOpenInSession: () => true, ensureEmbeddedStyle() {},
+    applySessionToFrame() {}, clickWhenReady() {}, notify() {},
+    window: { setTimeout: (callback) => timers.push(callback) },
+  });
+  const code = ts.transpileModule(page.slice(start, end) + "\nnavigateInner;", {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const navigate = vm.runInContext(code, context);
+
+  navigate(requests);
+  assert.equal(frame.dataset.staffStatus, undefined);
+  assert.equal(timers.length, 0);
+  frame.dataset.staffBooted = "true";
+  navigate(requests);
+  assert.equal(frame.dataset.staffStatus, undefined);
+  assert.deepEqual(clicks, []);
+
+  activeRef.current = performance;
+  signedIn = true;
+  navigate(performance);
+  assert.equal(frame.dataset.staffStatus, undefined);
+  hasContent = true;
+  timers.shift()();
+  assert.equal(frame.dataset.staffStatus, undefined, "the abandoned Requests callback cannot reveal the iframe");
+  timers.shift()();
+  assert.equal(frame.dataset.staffStatus, "ready");
+  assert.deepEqual(clicks, ["performance"]);
+
+  delete frame.dataset.staffStatus;
+  activeRef.current = timesheet;
+  navigate(timesheet);
+  assert.equal(frame.dataset.staffStatus, undefined, "legacy content cannot reveal Timesheet");
+  timesheetReady = true;
+  timers.shift()();
+  assert.equal(frame.dataset.staffStatus, "ready");
 });
 
 test("Rules & Constraints uses the refined editor layout", () => {
