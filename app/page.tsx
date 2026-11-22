@@ -8,6 +8,7 @@ import { initAttendanceLedger, reconcileStoreFromLedger, markLogsRemoved, confir
 import { initAccountLedger, reconcileAccountsFromLedger, markAccountsRemoved, tombstoneAccount } from "../lib/accounts-ledger";
 import { formatHours, formatMinutes } from "../lib/duration.mjs";
 import { findPunchSession, planTrim, isSuspiciousClosedSession, needsLongHoursConfirmation, isActiveClockSession, OPEN_SESSION_STALE_HOURS, pairPunchSessions, preservesPunchPairing, attendanceBreakSpans } from "../lib/attendance.mjs";
+import { openTimesheetReport } from "../public/engines/timesheet-report.mjs";
 import { resolveClockDisplay } from "../lib/attendance-display.mjs";
 import { useClockRecord, type ClockRecord } from "../lib/use-clock-record";
 import { buildPresenceRoster, scheduledPresenceUsers, type PresenceEntry, type PresenceTone } from "../lib/presence.mjs";
@@ -12292,7 +12293,19 @@ function EngineeringManagementPortal({
           <label><span>To</span><input type="date" value={to} min={from} onChange={(event) => { reportPeriodRef.current = "custom"; setTo(event.target.value); }} /></label>
           <span className="filter-summary">{visibleUsers.length} people</span>
         </section>
-        <TeamCharts summaries={summaries} mode={tab} />
+        <TeamCharts summaries={summaries} mode={tab} onPreview={() => {
+          const employees = summaries.map(({ user }) => ({ uid: user.id, name: user.name, department: user.department }));
+          const allowed = new Set(employees.map(person => person.uid));
+          const modes = { office: "Office", online: "Online", site: "Site", other: "Other" };
+          openTimesheetReport({ from, to, summaryOnly: true, people: employees,
+            entries: filteredSessions.filter(session => allowed.has(session.uid)).map(session => ({
+              uid: session.uid, name: session.employee, day: session.date, mode: modes[modeTone(session.mode)],
+              start: session.clockIn, end: session.ongoing || session.unclosed || session.open ? null : session.clockOut,
+              hours: session.hours, status: session.stale || session.unclosed || session.long ? "Needs review"
+                : session.ongoing || session.open ? "Open" : "Closed",
+            })),
+          });
+        }} />
         <section className="report-panel">
           <div className="section-head"><div><span className="eyebrow">{tab === "time" ? "Team time" : "Team performance"}</span><h3>{from} to {to}</h3></div></div>
           <div className="data-table-wrap"><table className="data-table"><thead>{tab === "time"

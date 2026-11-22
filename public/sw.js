@@ -4,11 +4,13 @@
 // to /engines/timeclock.html kept serving the old broken file to everyone.
 // Bump whenever a calculation engine changes so an already-open browser
 // cannot keep serving an older accounting mirror from its service worker.
-const CACHE_NAME = "larsa-control-v85";
+const CACHE_NAME = "larsa-control-v86";
 const CORE_FILES = [
   "/",
   "/manifest.webmanifest",
   "/engines/timeclock.html",
+  "/engines/timesheet-report.mjs?v=1",
+  "/engines/timesheet-report.css?v=1",
   "/engines/hr.html",
   "/engines/accounting.html",
   "/engines/accounting-core.js",

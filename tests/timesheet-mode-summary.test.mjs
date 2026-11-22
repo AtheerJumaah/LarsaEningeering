@@ -21,8 +21,8 @@ test("Engineering Management timesheets split each employee total by work mode",
   assert.match(chart, /chart-mode-online[\s\S]*Online \{hoursLabel\(row\.online\)\}/);
   assert.match(chart, /chart-mode-site[\s\S]*Site \{hoursLabel\(row\.site\)\}/);
   assert.doesNotMatch(chart, /chart-mode-values/);
-  assert.match(chart, /Print \/ Save PDF/);
-  assert.match(chart, /window\.print\(\)/);
+  assert.match(chart, /Preview report/);
+  assert.match(chart, /onClick=\{onPreview\}/);
   assert.match(visualCss, /\.chart-mode-office \{ background: #22a06b; \}/);
   assert.match(visualCss, /\.chart-mode-online \{ background: #3674e8; \}/);
   assert.match(visualCss, /\.chart-mode-site \{ background: #17181b; \}/);
@@ -44,7 +44,7 @@ test("Time and Attendance timesheet adds the same summary for the selected perio
   assert.match(embedded, /var periodButton=e\.target\.closest\('\[data-v33-period\]'\)/);
   assert.doesNotMatch(embedded, /querySelectorAll\('\[data-v33-period\]'\)\.forEach/);
   assert.ok(embedded.includes('data-v33-print'));
-  assert.match(embedded, /W\.print\(\)/);
+  assert.match(embedded, /previewTimesheet\(W\.__v33State\)/);
   assert.ok(embedded.includes("Office '+fmt(row.sums.Office)+'h"));
   assert.ok(embedded.includes("Online '+fmt(row.sums.Online)+'h"));
   assert.ok(embedded.includes("Site '+fmt(row.sums.Site)+'h"));

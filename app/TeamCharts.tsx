@@ -30,8 +30,8 @@ function tone(done: number): string {
   return "low";
 }
 
-export function TeamCharts({ summaries, mode }: { summaries: Summary[]; mode: "time" | "performance" }) {
-  if (!summaries.length) return null;
+export function TeamCharts({ summaries, mode, onPreview }: { summaries: Summary[]; mode: "time" | "performance"; onPreview: () => void }) {
+  if (!summaries.length && mode !== "time") return null;
 
   const people = summaries.length;
 
@@ -53,7 +53,7 @@ export function TeamCharts({ summaries, mode }: { summaries: Summary[]; mode: "t
             <span className="hier-stat"><small>Total</small><b>{hoursLabel(total)}</b></span>
             <span className="hier-stat"><small>Average</small><b>{hoursLabel(average)}</b></span>
             <span className="hier-stat"><small>Worked</small><b>{worked} / {people}</b></span>
-            <button type="button" className="chart-print" onClick={() => window.print()}>Print / Save PDF</button>
+            <button type="button" className="chart-print" onClick={onPreview}>Preview report</button>
           </div>
         </div>
         <div className="chart-mode-legend" aria-label="Work mode colors">
