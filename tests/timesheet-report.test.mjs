@@ -36,3 +36,37 @@ test("filtered report escapes employee text, includes all sessions beyond the 12
   assert.match(reportDocument({ ...period, entries: [] }), /No attendance entries match/);
   assert.match(reportDocument({ ...period, entries: [base], summaryOnly: true }), /id="detail" hidden/);
 });
+
+test("appearance and charts render independently with totals from the same filtered attendance", () => {
+  const entries = [
+    { ...base, name: "Example A", hours: 6 },
+    { ...base, uid: "p2", name: "Example B", mode: "Online", hours: 2 },
+    { ...base, uid: "p3", name: "Example C", mode: "Site", hours: 0 },
+  ];
+  const report = { ...period, entries, summaryOnly: true };
+  const plain = reportDocument(report);
+  assert.match(plain, /class="charts" hidden/);
+  const barsOnly = reportDocument(report, undefined, { palette: "monochrome", bar: true });
+  assert.match(barsOnly, /data-palette="monochrome"/);
+  assert.match(barsOnly, /id="bar-chart">/);
+  assert.match(barsOnly, /id="pie-chart" hidden/);
+  assert.match(barsOnly, /bar-value">6\.00 h/);
+  assert.match(barsOnly, /id="detail" hidden/);
+  const pieOnly = reportDocument(report, undefined, { pie: true });
+  assert.match(pieOnly, /id="bar-chart" hidden/);
+  assert.match(pieOnly, /id="pie-chart">/);
+  assert.match(pieOnly, /Office<small>6\.00 h<\/small><\/span>\s*<b>75%/);
+  assert.match(pieOnly, /Online<small>2\.00 h<\/small><\/span>\s*<b>25%/);
+  assert.doesNotMatch(pieOnly, /data-mode="site"/);
+});
+
+test("the bar chart fits a large team while the summary retains every employee", () => {
+  const entries = Array.from({ length: 10 }, (_, i) => ({ ...base, uid: "employee-" + i, name: "Person " + i, hours: i + 1 }));
+  const html = reportDocument({ ...period, entries }, undefined, { bar: true });
+  assert.match(html, /Top 8 of 10 employees/);
+  assert.equal((html.match(/class="bar-name"/g) || []).length, 8);
+  assert.match(html, /<th scope="row">Person 0<\/th>/);
+  const empty = reportDocument({ ...period, entries: [] }, undefined, { pie: true });
+  assert.match(empty, /id="pie-chart"><figcaption>Net hours by work mode<\/figcaption><p class="chart-empty">/);
+  assert.doesNotMatch(empty, /conic-gradient/);
+});

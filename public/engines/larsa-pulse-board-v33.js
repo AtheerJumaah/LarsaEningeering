@@ -83,7 +83,7 @@
             hours: num(row.Hours), status: row.Review ? 'Needs review' : row.Open || !row.Out || row.MissingOut ? 'Open' : 'Closed'};
         })
       };
-      var module = await import('/engines/timesheet-report.mjs?v=1');
+      var module = await import('/engines/timesheet-report.mjs?v=2');
       module.openTimesheetReport(report, preview);
     } catch (error) {
       if (preview) preview.close();
